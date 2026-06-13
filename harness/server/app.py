@@ -19,6 +19,16 @@ async def lifespan(app: FastAPI):
     # Ensure data dirs exist
     settings.session_dir.mkdir(parents=True, exist_ok=True)
     settings.db_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Init DB; rebuild from JSONL if DB is empty but JSONL has data
+    from harness.server.db.sqlite import init_db, list_sessions, rebuild_from_jsonl
+
+    await init_db()
+    sessions = await list_sessions()
+    if not sessions and any(settings.session_dir.glob("*.jsonl")):
+        rebuilt = await rebuild_from_jsonl()
+        print(f"[harness] rebuilt {rebuilt} sessions from JSONL")
+
     print(f"[harness] session_dir: {settings.session_dir}")
     print(f"[harness] db_path: {settings.db_path}")
     print(f"[harness] project_root: {settings.project_root}")
