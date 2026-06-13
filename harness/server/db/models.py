@@ -5,7 +5,7 @@ SQLite is the index for fast queries.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, Literal
 from uuid import uuid4
 
@@ -14,7 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 def _now() -> datetime:
     """UTC now (no timezone for SQLite compat)."""
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 def _uuid() -> str:
@@ -94,6 +94,6 @@ class Message(BaseModel):
         return self.model_dump_json()
 
     @classmethod
-    def from_jsonl(cls, line: str) -> "Message":
+    def from_jsonl(cls, line: str) -> Message:
         """Deserialize from single-line JSON."""
         return cls.model_validate_json(line)

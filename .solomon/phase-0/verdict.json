@@ -10,7 +10,7 @@
     {"ac": "AC5", "result": "PASS", "notes": "Pydantic v2 roundtrip via JSONL"},
     {"ac": "AC6", "result": "PASS", "notes": "Lifespan hook: init_db + rebuild"},
     {"ac": "AC7", "result": "PASS", "notes": "5/5 tests, 0.29s, 0 warnings"},
-    {"ac": "AC8", "result": "PENDING", "notes": "Шаг 3 — следующий"},
+    {"ac": "AC8", "result": "PASS", "notes": "12/12 REST tests + real-server e2e (POST/GET/LIST/DELETE/messages), JSONL mirror verified"},
     {"ac": "AC9", "result": "PENDING", "notes": "Шаг 4"},
     {"ac": "AC10", "result": "PENDING", "notes": "Шаг 5"},
     {"ac": "AC11", "result": "PENDING", "notes": "Шаг 6"},
@@ -20,14 +20,15 @@
     {"ac": "AC15", "result": "PENDING", "notes": "Шаг 11"}
   ],
   "summary": {
-    "pass": 7,
-    "pending": 8,
+    "pass": 8,
+    "pending": 7,
     "fail": 0,
     "total": 15
   },
   "git": {
     "step1_commit": "ed1a44f",
     "step2_commit": "f1359f1",
+    "step3_commit": "pending",
     "repo": "https://github.com/mbakholdin-byte/HarnessSolomon.git"
   }
 }

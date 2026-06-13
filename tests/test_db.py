@@ -4,17 +4,13 @@ Run: pytest tests/test_db.py -v
 """
 from __future__ import annotations
 
-import json
-import os
-import shutil
-import tempfile
 from pathlib import Path
 
 import pytest
 
 from harness.config import settings
 from harness.server.db import sqlite as db_sqlite
-from harness.server.db.models import Message, MessageUsage, Session, ToolCall, ToolResult
+from harness.server.db.models import Message, MessageUsage, ToolCall, ToolResult
 
 
 @pytest.fixture

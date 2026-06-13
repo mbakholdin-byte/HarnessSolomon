@@ -6,7 +6,7 @@ SQLite is the index for fast listing/lookup; rebuildable from JSONL.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -18,7 +18,7 @@ from harness.server.db.models import Message, Session
 
 def _utcnow() -> datetime:
     """UTC now without timezone (SQLite stores naive ISO)."""
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 SCHEMA = """

@@ -65,20 +65,32 @@ tests/test_db.py::test_delete_session_cascades_messages PASSED   [100%]
 ======================= 5 passed, 0 warnings in 0.29s =======================
 ```
 
-## Sol-Verify (Level 1 + 2) на Шаги 1+2
+## AC8: Sessions REST API (Шаг 3)
 
-**Статус**: PASS (8/8)
-- ✓ 12 файлов существуют, не пустые
-- ✓ Нет TODO/FIXME/TBD/XXX/placeholder
-- ✓ Нет null/undefined в коде
-- ✓ pyproject.toml парсится (TOML)
-- ✓ 5/5 тестов passed
-- ✓ JSONL файлы создаются в data/sessions/
-- ✓ harness.db создаётся в data/
+**Статус**: PASS
+**Доказательство**:
+- TDD цикл: RED (9 failed) → GREEN (12 passed) → REFACTOR (ruff auto-fix, 17/17 still pass)
+- 12 unit-тестов в test_sessions_api.py покрывают:
+  - list_sessions: empty + returns_created
+  - create_session: minimal + missing_fields (422)
+  - get_session: ok + not_found (404)
+  - delete_session: ok (204) + not_found (404)
+  - messages: add_and_list + unknown_session (404) + invalid_role (422) + count_increments
+- Real-server e2e (curl на :8770):
+  - GET /api/health → 200
+  - POST /api/sessions → 201
+  - GET /api/sessions → list
+  - POST /api/sessions/{id}/messages → 201, message_count++
+  - GET /api/sessions/{id}/messages → list
+  - DELETE /api/sessions/{id} → 204
+  - GET nonexistent → 404
+  - JSONL mirror создан: data/sessions/<id>.jsonl (230 bytes)
+- Sol-verify: 3 новых файла, нет TODO, lint warnings fixed (14 ruff fixes)
+- Файлы: harness/server/routes/sessions.py (4.4K), tests/test_sessions_api.py (6.4K)
+- pyproject.toml: +httpx в dev-deps
 
-## Pending (AC8–AC15) — 9 шагов
+## Pending (AC9–AC15) — 7 шагов
 
-- AC8: Sessions REST API (Шаг 3)
 - AC9: Tool runtime + safety (Шаг 4)
 - AC10: LiteLLM router (Шаг 5)
 - AC11: Agent loop (Шаг 6)

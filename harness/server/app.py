@@ -5,7 +5,6 @@ Phase 0: Web MVP. Cloud-only LLM providers, 6 tools, WebSocket chat.
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -56,8 +55,10 @@ def create_app() -> FastAPI:
 
     # Routers
     from harness.server.routes.health import router as health_router
+    from harness.server.routes.sessions import router as sessions_router
 
     app.include_router(health_router, prefix="/api", tags=["health"])
+    app.include_router(sessions_router, prefix="/api", tags=["sessions"])
 
     return app
 
