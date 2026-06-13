@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+ENV/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+.eggs/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Harness
+data/
+sessions/
+*.session.jsonl
+memory/cache/
+.harness/local/
+logs/
+*.log
+harness/web/node_modules/
+harness/web/dist/
+harness/.venv/
+.harness/working/
+
+# Secrets
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+
+# Test artifacts
+tests/fixtures/tmp/
+tests/integration/.cache/
