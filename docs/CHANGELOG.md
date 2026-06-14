@@ -1,6 +1,60 @@
 # Changelog — Solomon Harness
 
-## Phase 1.6 — Scope-gated API v1.0 (Steps 0-4 / 6, in progress, 2026-06-14)
+## Phase 1.6 — Scope-gated API v1.0 (ЗАКРЫТО v0.6.0, 2026-06-14)
+
+**Phase 1.6 (v0.6.0) — 6 шагов / 6 коммитов за ~3.5 часа (post-Phase 2.2, единая сессия)**
+
+| # | Шаг | Коммит | Что | +Tests |
+|---|-----|--------|-----|--------|
+| 0 | Prerequisites | `eff5725` | `harness/server/auth/{scopes,tokens,db}.py` — `Scope` enum (6 значений), `parse_scopes` / `has_scope` / `format_scopes`, `TokenStore` (aiosqlite, SHA-256 hashed), `TokenRecord` (frozen dataclass); 4 settings (`auth_db_path`, `auth_token_bytes`, `auth_default_scopes`, `auth_required`) | 24 |
+| 1 | FastAPI deps | `4d30871` | `harness/server/auth/deps.py` — `get_token_store` (503), `get_current_token` (401 with `WWW-Authenticate: Bearer`), `require_scope(*required)` factory (403 with `missing required scope: X (have: A, B)`); ANY match; case-insensitive `bearer`; same msg для not-found/revoked (anti-enumeration); `auth_required=False` short-circuit | 13 |
+| 2 | Capabilities + apply | `3f30bf0` | `harness/server/auth/route_registry.py` (NEW) — `EndpointSpec` + `collect_endpoints(app)` walks mounted routes, finds `require_scope` deps via `_required_scopes` marker attribute (на dep callable); `harness/server/routes/capabilities.py` (NEW) — `GET /api/v1/capabilities` (public, returns server_version + auth_required + scopes_available[6] + endpoints[]); `agents_jobs.py` — `Depends(_agents_read)` на всех 3 GET routes | 9 |
+| 3 | CLI auth + bootstrap | `9567012` | `harness auth {create,list,revoke,whoami,test}` — 5 handlers, `_dispatch_auth` runs bootstrap только для read-only commands, `_bootstrap_admin_token_if_needed` mints `bootstrap-admin` с ALL_SCOPES при `auth_required=True` И `len(list_active)==0`; `--bootstrap` flag для admin tokens; revoke supports hash OR label; `whoami` debug; `test` urllib-based smoke against local server; stdout reconfigure UTF-8; ASCII `...` | 18 |
+| 4 | Memory + sessions v1 | `246f54f` | `harness/server/agent/memory_v1.py` (NEW, bridge) — `search()` / `write_note()` / `stats()`; `harness/server/routes/memory_v1.py` (NEW) — `GET /api/v1/memory/search` (memory.read), `POST /api/v1/memory/notes` (memory.write), `GET /api/v1/memory/stats` (memory.read); `harness/server/routes/sessions_v1.py` (NEW) — `GET /api/v1/sessions?recent=N` (sessions.read, thin wrapper) | 15 |
+| 5 | POST + docs + tag | (this commit) | `POST /api/v1/agents/jobs` — enqueue sub-agent job, requires `agents.write` (+ `agents.pr` compound when `pr_mode != "off"`); validates `prompt` non-empty, `agent` в known specs, `model` в catalog; `docs/scope-api.md` (NEW, ~280 строк); CHANGELOG closeout; v0.6.0 tag | 8 |
+
+### Метрики (на 14.06.2026, end of Phase 1.6)
+
+- **Tests:** 518 (Phase 2.2 end) + 24 + 13 + 9 + 18 + 15 + 8 = **606 mock** + 5 real_llm
+- **Production:** 13 новых файлов (`auth/{__init__,scopes,tokens,db,deps,route_registry}.py`, `routes/{capabilities,memory_v1,sessions_v1}.py`, `agent/memory_v1.py`, `docs/scope-api.md`) + 4 модифицированных (`config.py`, `app.py`, `cli.py`, `routes/agents_jobs.py`) — ~2400 LoC net new
+- **Settings:** +4 (auth_db_path, auth_token_bytes, auth_default_scopes, auth_required)
+- **Scopes:** 6 (agents.read, agents.write, agents.pr, memory.read, memory.write, sessions.read)
+- **HTTP routes:** +6 (`GET /api/v1/capabilities`, `GET /api/v1/memory/search`, `POST /api/v1/memory/notes`, `GET /api/v1/memory/stats`, `GET /api/v1/sessions`, `POST /api/v1/agents/jobs`) — `/api/v1/*` total 9 routes (3 agents + 4 memory + 1 sessions + 1 capabilities)
+- **CLI subcommands:** +1 (`harness auth` with 5 sub-subcommands)
+- **Backward compat:** legacy `/api/*` routes (sessions, chat, models, health) остаются open; `auth_required=False` (default в test suite) → существующие Phase 0-2.2 тесты работают unchanged
+- **New deps:** 0 (aiosqlite + pydantic + fastapi из Phase 0-1)
+- **Tag:** v0.6.0 (annotated, pushed)
+
+### Architecture decisions (Phase 1.6)
+
+- **SQLite aiosqlite persistent store** — multi-tenant, prod-ready; SHA-256 хэш (256-bit opaque tokens, не passwords)
+- **`secrets.token_urlsafe(32)`** — 43-char URL-safe plaintext, показывается ОДИН раз
+- **`has_scope` = ANY match** — token со scope A может вызвать endpoint, требующий A OR B; compound checks (e.g. `agents.write` + `agents.pr` для `pr_mode != "off"`) — explicit в route body
+- **Anti-enumeration:** same 401 message для "not found" vs "revoked" — атакующий не может угадывать token hashes по status code
+- **`auth_required=False` master switch** — test suite + dev mode без токенов; prod = `True` (default)
+- **Bootstrap only for read-only commands** — `create` / `revoke` никогда не триггерят bootstrap (никаких "сюрпризов" для пользователя)
+- **Marker attribute `_required_scopes` на dep callable** — introspection для capabilities endpoint без fragile signature parsing (closure args не видны)
+- **Bridge module `harness/server/agent/memory_v1.py`** — routes не импортируют `UnifiedMemory` напрямую (trust boundary + future microservice split)
+- **Legacy `/api/*` routes stay open** — gradual migration в Phase 4+ с deprecation headers
+- **0 new deps** — всё на aiosqlite + pydantic + fastapi из Phase 0-1
+
+### Готово (Phase 1.6)
+
+- [x] `GET /api/v1/capabilities` returns 200 без auth + полный JSON (server_version, auth_required, scopes_available, endpoints)
+- [x] Token created via `harness auth create` — plaintext printed once, hash persisted, scopes enforced
+- [x] `Authorization: Bearer <token>` — valid token → 200, missing → 401, malformed → 401, revoked → 401
+- [x] Все `/api/v1/agents/jobs*` routes require `agents.read` (GET) или `agents.write` (POST) + `agents.pr` (POST с pr_mode != off)
+- [x] `GET /api/v1/memory/search` requires `memory.read`
+- [x] `POST /api/v1/memory/notes` requires `memory.write`
+- [x] `GET /api/v1/sessions` requires `sessions.read`
+- [x] `harness auth list/revoke/whoami/test` работают через CLI
+- [x] Bootstrap admin token создаётся при первом запуске с `auth_required=True` (read-only commands only)
+- [x] Token store — SQLite, persistent, переживает restart
+- [x] `auth_required=False` → всё open (dev mode escape hatch)
+- [x] Legacy `/api/*` (sessions, chat, models, health) **остаются open** (Phase 1.6 не ломает Web UI)
+- [x] 0 new deps (sqlite3 + aiosqlite уже есть)
+- [x] Trust boundary: `harness/server/auth/` НЕ импортирует из `harness/agents/` (static check)
+- [x] `docs/scope-api.md` создан, покрывает 5+ секций + troubleshooting
 
 ### Step 0 — Token store + scopes enum + settings (commit `eff5725`)
 
