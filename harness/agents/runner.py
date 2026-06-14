@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Callable
 
 from harness.agents.spec import AgentSpec
 from harness.agents.worktree import WorktreeInfo, WorktreeSession
@@ -145,11 +145,42 @@ class AgentRunner:
                 all sub-agents hit the same model catalog).
         repo:   The main git repo dir. Sub-agents branch off this and run
                 in a worktree under ``.harness/worktrees/<id>/``.
+        unified_memory_factory: Phase 2.1 — optional callable that,
+                given an :class:`AgentSpec`, returns a
+                :class:`~harness.memory.unified.UnifiedMemory` for
+                the agent. When ``None`` (default), sub-agents don't
+                have a memory handle and any in-process write would
+                be a no-op. The factory is called once per spec per
+                process; we cache by spec.name to avoid re-creating
+                the same UnifiedMemory on every run.
     """
 
-    def __init__(self, router: LLMRouter, repo: Path) -> None:
+    def __init__(
+        self,
+        router: LLMRouter,
+        repo: Path,
+        *,
+        unified_memory_factory: "Callable[[AgentSpec], Any] | None" = None,
+    ) -> None:
         self.router = router
         self.repo = Path(repo).resolve(strict=False)
+        self._unified_memory_factory = unified_memory_factory
+        # Cache of spec.name -> UnifiedMemory. Reused across runs of
+        # the same spec; cleared only when the runner is replaced.
+        self._unified_memories: dict[str, Any] = {}
+
+    def get_unified_memory(self, spec: AgentSpec) -> Any:
+        """Return the cached :class:`UnifiedMemory` for ``spec``.
+
+        Falls back to ``None`` when no factory was provided. The
+        caller decides whether to write — a ``None`` return is a
+        no-op for memory writes.
+        """
+        if self._unified_memory_factory is None:
+            return None
+        if spec.name not in self._unified_memories:
+            self._unified_memories[spec.name] = self._unified_memory_factory(spec)
+        return self._unified_memories[spec.name]
 
     # --- public API ---
 

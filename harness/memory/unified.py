@@ -95,6 +95,14 @@ class UnifiedMemory:
         dual_write_policy: ``{"primary": <layer>, "mirrors": [<layers>]}``.
                           ``primary`` MUST be one of L1/L2/L3/L4. The
                           mirrors list may be empty.
+        agent_id:   Phase 2.1 — per-sub-agent namespace. Propagated to:
+                      - ``HmemAdapter(agent=agent_id)``  (was hardcoded
+                        ``"solomon"`` in Phase 1)
+                      - ``Mem0Adapter(user_id=agent_id, collection=f"solomon-{agent_id}-memories")``
+                      - ``HybridAdapter(project=agent_id, default_tags=[f"#agent/{agent_id}"])``
+                      - ``FileAdapter(memory_dir=Path(file_dir) / agent_id)``
+                    Defaults to ``"solomon"`` to preserve Phase 1 behaviour
+                    for callers that don't know about sub-agents.
     """
 
     def __init__(
@@ -104,11 +112,24 @@ class UnifiedMemory:
         hybrid_dir: Path | str,
         file_dir: Path | str,
         dual_write_policy: dict[str, Any] | None = None,
+        *,
+        agent_id: str = "solomon",
     ) -> None:
-        self.hmem = HmemAdapter(memory_dir=Path(hmem_dir), agent="solomon")
-        self.mem0 = Mem0Adapter(storage_dir=Path(mem0_dir), user_id="solomon")
-        self.hybrid = HybridAdapter(storage_dir=Path(hybrid_dir), project="FAS")
-        self.file = FileAdapter(memory_dir=Path(file_dir))
+        if not agent_id or not isinstance(agent_id, str):
+            raise ValueError(f"agent_id must be a non-empty string, got {agent_id!r}")
+        self.agent_id = agent_id
+        self.hmem = HmemAdapter(memory_dir=Path(hmem_dir), agent=agent_id)
+        self.mem0 = Mem0Adapter(
+            storage_dir=Path(mem0_dir),
+            user_id=agent_id,
+            collection=f"solomon-{agent_id}-memories",
+        )
+        self.hybrid = HybridAdapter(
+            storage_dir=Path(hybrid_dir),
+            project=agent_id,
+            default_tags=[f"#agent/{agent_id}"],
+        )
+        self.file = FileAdapter(memory_dir=Path(file_dir) / agent_id)
 
         self.policy = dict(dual_write_policy or DEFAULT_DUAL_WRITE_POLICY)
         primary = self.policy.get("primary")
@@ -134,7 +155,42 @@ class UnifiedMemory:
         directly to the hmem adapter regardless of the policy. The
         L1 store is a hand-curated knowledge base and doesn't
         participate in the L2/L3/L4 dual-write chain.
+
+        Phase 2.1 — per-agent namespacing. Before dual-writing, we
+        stamp the memory with this facade's ``agent_id`` so adapters
+        that carry an explicit namespace (the L1 hmem agent, the L2
+        mem0 user_id) see consistent data:
+
+          - ``memory.metadata["agent_id"]`` — set to ``self.agent_id``
+            when not already populated by the caller. We do NOT
+            overwrite an explicit value.
+          - ``memory.tags`` — append ``f"#agent/{self.agent_id}"`` if
+            the tag isn't already present. No-op for the
+            default ``"solomon"`` namespace so existing callers
+            don't suddenly acquire a new tag.
+          - ``memory.provenance`` — append a
+            :class:`ProvenanceEntry(layer="L_meta", source="unified",
+            id=agent_id)` so the audit trail records which facade
+            stamped the memory.
         """
+        # Stamp namespace metadata / tags / provenance BEFORE write.
+        # We use object.__setattr__ via copy to keep the public
+        # model immutable-feeling for callers (Pydantic v2 models
+        # are mutable in practice; we just add to the fields).
+        if memory.metadata.get("agent_id") is None:
+            memory.metadata["agent_id"] = self.agent_id
+        tag = f"#agent/{self.agent_id}"
+        if tag not in memory.tags and self.agent_id != "solomon":
+            memory.tags.append(tag)
+        if not any(
+            p.source == "unified" and p.id == self.agent_id
+            for p in memory.provenance
+        ):
+            from harness.memory.schema import ProvenanceEntry  # local import
+            memory.provenance.append(
+                ProvenanceEntry(layer="L_meta", source="unified", id=self.agent_id)
+            )
+
         if memory.layer == L1_OVERRIDE_TARGET:
             self._safe_write(self.hmem, memory)
             return

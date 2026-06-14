@@ -83,6 +83,13 @@ class AgentSpec(BaseModel):
     max_iterations: int = Field(default=5, ge=1, le=20)
     worktree_required: bool = True
     allowed_paths: list[str] = Field(default_factory=list)
+    #: Phase 2.1 — per-agent memory namespace. When ``None`` (the
+    #: default), the sub-agent shares the parent memory
+    #: (``UnifiedMemory(agent_id="solomon")``). When set, the runner
+    #: constructs / reuses a per-spec :class:`UnifiedMemory` with
+    #: that namespace, giving the agent an isolated store.
+    #: Built-ins keep this ``None`` so they share solomon by default.
+    memory_namespace: str | None = None
 
     @field_validator("name")
     @classmethod
@@ -90,6 +97,27 @@ class AgentSpec(BaseModel):
         if not _KEBAB_CASE_RE.match(v):
             raise ValueError(
                 f"agent name must be kebab-case (lowercase letters, digits, hyphens), got {v!r}"
+            )
+        return v
+
+    @field_validator("memory_namespace")
+    @classmethod
+    def _validate_memory_namespace(cls, v: str | None) -> str | None:
+        """Reuse the kebab-case rule for the namespace identifier.
+
+        We accept the same shape as agent names (lowercase + digits +
+        hyphens) so a sub-agent's ``memory_namespace`` can be derived
+        from its own name without a separate registry. ``None`` means
+        "share the parent solomon memory" (default).
+        """
+        if v is None:
+            return v
+        if not v:
+            raise ValueError("memory_namespace must be a non-empty string or None")
+        if not _KEBAB_CASE_RE.match(v):
+            raise ValueError(
+                f"memory_namespace must be kebab-case (lowercase letters, "
+                f"digits, hyphens), got {v!r}"
             )
         return v
 
