@@ -94,3 +94,6 @@ disallow_untyped_defs = true
 asyncio_mode = "auto"
 testpaths = ["tests"]
 addopts = "-v --strict-markers"
+markers = [
+    "real_llm: requires a real LLM API key in env (MINIMAX_API_KEY / ZHIPUAI_API_KEY / MOONSHOT_API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY). Skipped automatically when none is set.",
+]
