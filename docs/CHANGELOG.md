@@ -7,13 +7,13 @@
 | # | Шаг | Коммит | Что |
 |---|-----|--------|-----|
 | 0 | Prerequisites | `fcff4d9` | `harness/cli.py` (заполняет dead `harness = "harness.cli:main"` скрипт), `__main__.py` shim, `.harness/agents/` scaffold, Phase 1 retrospective в CHANGELOG, Settings.subagent_* поля |
-| 1 | AgentSpec + frontmatter | `?` | `harness/agents/spec.py` — Pydantic schema + hand-rolled YAML reader, `extra="forbid"`, no PyYAML dep — 46 tests |
-| 2 | Built-in agents + registry | `?` | `harness/agents/builtin/{explore,plan,code,review}.md` + `registry.py` с importlib.resources + override-логика — 25 tests |
-| 3 | WorktreeSession | `?` | `harness/agents/worktree.py` — async ctx mgr, crash-safe, idempotency, branch orphan recovery + delete_branch() — 17 tests + 2 conftest fixtures |
-| 4 | AgentRunner | `?` | `harness/agents/runner.py` — composition point, TOOL_SCHEMAS filter, perms denylist proxy, `external_worktree=` для merge queue — 28 tests |
+| 1 | AgentSpec + frontmatter | `c443403` | `harness/agents/spec.py` — Pydantic schema + hand-rolled YAML reader, `extra="forbid"`, no PyYAML dep — 46 tests |
+| 2 | Built-in agents + registry | `3af1de8` | `harness/agents/builtin/{explore,plan,code,review}.md` + `registry.py` с importlib.resources + override-логика — 25 tests |
+| 3 | WorktreeSession | `64fb24a` | `harness/agents/worktree.py` — async ctx mgr, crash-safe, idempotency, branch orphan recovery + delete_branch() — 17 tests + 2 conftest fixtures |
+| 4 | AgentRunner | `4c73aa1` | `harness/agents/runner.py` — composition point, TOOL_SCHEMAS filter, perms denylist proxy, `external_worktree=` для merge queue — 28 tests |
 | 5 | conftest fixtures | (в Step 3) | `git_repo`, `agents_dir` |
-| 6 | Router + adversarial verify | `?` | `harness/agents/router.py` (LLM-as-router, fallback chain) + `verify.py` (N-judge majority, 2-judge unanimous) — 19 + 26 = 45 tests |
-| 7 | Merge queue + docs | `?` | `harness/agents/merge_queue.py` (code → review → verify → ff-merge, asyncio.Lock, timeout), `docs/subagents.md` — 9 tests |
+| 6 | Router + adversarial verify | `42a17bb` | `harness/agents/router.py` (LLM-as-router, fallback chain) + `verify.py` (N-judge majority, 2-judge unanimous) — 19 + 26 = 45 tests |
+| 7 | Merge queue + docs | `7d4d655` | `harness/agents/merge_queue.py` (code → review → verify → ff-merge, asyncio.Lock, timeout), `docs/subagents.md` — 9 tests |
 
 ### Метрики (на 14.06.2026, end of Phase 2.0)
 
