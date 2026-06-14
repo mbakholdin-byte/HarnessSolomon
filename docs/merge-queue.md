@@ -338,17 +338,20 @@ Fallback: если `gh pr merge --auto` fails (branch protection не
 Используйте `ngrok` или `smee.io` для туннелирования GitHub → local:
 
 ```bash
-# Terminal 1: harness server
-HARNESS_WEBHOOK_SECRET="test-secret-32-chars-long" harness serve
+# Terminal 1: harness server. Set MY_HMAC_KEY in the GitHub
+# repo's webhook configuration first; pass the same value
+# here.
+export MY_HMAC_KEY=...   # replace ... with the real key
+harness serve
 
 # Terminal 2: tunnel
 ngrok http 8765
 # → https://abc123.ngrok.io
 
-# Terminal 3: simulate webhook
-SECRET="test-secret-32-chars-long"
+# Terminal 3: simulate the webhook delivery (same key).
+export MY_HMAC_KEY=...   # replace ... with the real key
 BODY='{"action":"closed","number":42,"pull_request":{"html_url":"https://x","head":{"sha":"h"},"state":"closed","merged":true}}'
-SIG=$(echo -n "$BODY" | openssl dgst -sha256 -hmac "$SECRET" | sed 's/^.*= //')
+SIG=$(echo -n "$BODY" | openssl dgst -sha256 -hmac "$MY_HMAC_KEY" | sed 's/^.*= //')
 curl -X POST "https://abc123.ngrok.io/api/v1/agents/webhooks/github" \
   -H "X-Hub-Signature-256: sha256=$SIG" \
   -H "X-GitHub-Event: pull_request" \
@@ -486,3 +489,305 @@ Phase 2.3 had an explicit no-op for `pull_request_review.approved`
   `gh pr edit --add-label harness-auto-merge`. Operators
   configure branch protection to require the label and
   pre-apply it (or do it via a separate workflow).
+
+---
+
+## Outbound webhooks (Phase 2.5 v0.9.0)
+
+The merge queue can optionally POST to one or more HTTP(S)
+URLs when a job hits a high-signal lifecycle event. This is
+the lightweight "ping my dashboard / Slack / Telegram"
+layer that sits between the in-process `_emit()` bus
+(Phase 2.1) and the full Phase 4 hook layer with plugin
+discovery.
+
+### Зачем
+
+Without outbound webhooks, the only way to know that a
+stack of PRs has finished merging is to poll `GET
+/stacks/{id}` (or `GET /jobs/{id}` for a single PR). With
+them, the receiver gets a fire-and-forget POST as soon as
+the state transition happens — useful for:
+
+- A Slack channel that needs to know "the v2.4 stack landed"
+  without polling.
+- An internal dashboard that updates its "open PRs" tile.
+- A monitoring system that alerts on `failed` events.
+
+### Settings
+
+```ini
+# .env
+HARNESS_OUTBOUND_WEBHOOK_URLS=https://hooks.slack.com/x/y/z,https://my-dash/notify
+HARNESS_OUTBOUND_WEBHOOK_TOKEN=...   # replace ... with the bearer
+HARNESS_OUTBOUND_WEBHOOK_TIMEOUT_S=5.0
+HARNESS_OUTBOUND_WEBHOOK_MAX_RETRIES=3
+```
+
+All four are opt-in — empty `URLS` (the default) disables
+outbound entirely. No outbound = no HTTP traffic, no
+overhead. Existing Phase 2.4 deployments keep working
+unchanged.
+
+### 4 forwarded event kinds
+
+The dispatcher is intentionally narrow — it forwards only
+the events that are worth a notification:
+
+| `kind` | When | Where it fires from |
+|--------|------|---------------------|
+| `merged` | A single PR is merged (auto-merge or webhook). | `merge_queue._emit("merged", ...)` |
+| `failed` | Any job failed (single or stack child). | `merge_queue._emit("failed", ...)` |
+| `stack_merged` | The parent orchestrator row of a stack was promoted. | `webhook_handler.dispatch_event` after `_maybe_promote_stack_parent` |
+| `pr_waiting_review` | A PR is green but a human review is required. | `merge_queue._run_pr_phase` after `wait_for_checks` returns `review_required` |
+
+Other events (`pr_creating`, `running_code`, `pr_open`,
+`code_done`, `running_review`, etc.) are deliberately
+ignored by the dispatcher. If you want those too, wait
+for Phase 4's full hook layer (12 hook points + plugin
+discovery).
+
+### Payload shape
+
+Every POST body is JSON, mirroring the in-process
+`JobEvent` shape:
+
+```json
+{
+  "event": "job_event",
+  "job_id": "abc123def456",
+  "kind": "merged",
+  "pr_url": "https://github.com/o/r/pull/42",
+  "pr_number": 42
+}
+```
+
+`stack_merged` events use a slightly different shape
+(it's a stack-level event, not a job-level one):
+
+```json
+{
+  "event": "stack_merged",
+  "job_id": "<parent orchestrator id>",
+  "kind": "stack_merged",
+  "stack_id": "abc123",
+  "children_count": 2
+}
+```
+
+The receiver should treat unknown fields as forward-compat
+noise and rely on `kind` + `event` to dispatch.
+
+### Auth
+
+Every POST includes `Authorization: Bearer <token>` if
+`outbound_webhook_token` is set (the recommended config).
+Empty token = no `Authorization` header (NOT recommended
+in production — anyone who can reach the URL can read the
+events). Phase 4 will replace this with HMAC signing.
+
+### Retry semantics
+
+- 2xx → success, no retry.
+- 4xx → no retry (client error, the receiver is misconfigured).
+  We log a warning so the operator notices.
+- 5xx / timeout / connection error → retry with
+  exponential backoff: `min(initial * 2^attempt, max) +
+  random.uniform(0, jitter)` seconds. Up to
+  `max_retries` attempts total. After exhaustion, log a
+  warning and drop the event (the job's lifecycle is
+  NOT affected — outbound is best-effort).
+- Multiple URLs are dispatched **concurrently** (one slow
+  receiver doesn't starve the others).
+
+### Manual test with a local sink
+
+```bash
+# Terminal 1: a 1-line HTTP sink that prints every POST.
+python -c "
+import http.server, json
+class H(http.server.BaseHTTPRequestHandler):
+    def do_POST(self):
+        n = int(self.headers.get('content-length', 0))
+        body = self.rfile.read(n)
+        print('OUTBOUND:', self.path, json.loads(body))
+        self.send_response(200); self.end_headers()
+http.server.HTTPServer(('127.0.0.1', 9999), H).serve_forever()
+"
+
+# Terminal 2: enqueue a job with outbound.
+HARNESS_OUTBOUND_WEBHOOK_URLS=http://127.0.0.1:9999/hook \
+HARNESS_OUTBOUND_WEBHOOK_TOKEN=test-tok \
+harness agents run code "refactor X" --pr --background
+
+# Terminal 1 shows: OUTBOUND: /hook {"event": "job_event", ...}
+```
+
+### Out of scope (Phase 2.5)
+
+- **HMAC signing.** Plain bearer token. Phase 4 will add a
+  signature header + replay protection.
+- **Per-URL routing.** All events go to all configured URLs.
+- **Persistent retry queue.** A delivery that fails on every
+  attempt is dropped. Phase 4 will add a durable queue.
+- **More than 4 event kinds.** Other lifecycle events stay
+  internal until the Phase 4 hook layer.
+
+### CLI override
+
+For one-off runs (e.g. testing in dev), the CLI accepts
+the same env vars directly; there is no `--outbound-urls`
+flag because the env-var-only path keeps the CLI surface
+small. Set `HARNESS_OUTBOUND_WEBHOOK_URLS=...` and the
+CLI process picks it up at startup.
+
+---
+
+## Cross-repo stacks (Phase 2.5 v0.9.0)
+
+A single task can now open PRs in **N different git repos**
+(one PR per repo). Use case: a refactor that touches
+several sibling services in a poly-repo.
+
+### Setup
+
+```bash
+harness agents run code "refactor cross-service" \
+  --split-into 2 \
+  --stack-repos /path/to/repo-a,/path/to/repo-b \
+  --pr --background
+```
+
+- `--stack-repos` is a comma-separated list of absolute paths.
+- `len(stack_repos)` MUST equal `--split-into`. The CLI
+  validates this and exits 2 on mismatch.
+- Each path must exist on disk (validated).
+
+### How it differs from a same-repo stack
+
+- Phase 2.4 stacks: 1 worktree, N branches (`git checkout
+  -B harness/<id>/step-N`). Per-repo lock serialised.
+- Phase 2.5 cross-repo: N worktrees (1 per repo), 1
+  branch per worktree. The orchestrator's per-repo
+  `RepoLockRegistry` lock chain ensures two slices in the
+  same repo never run concurrently.
+- Each slice's `create_pr`, `add_pr_label`, and `merge_pr`
+  calls use the per-slice repo as the `cwd`.
+
+### Recovery & failure modes
+
+- A slice's `_commit_slice` / `_push_branch` failure →
+  cascade-cancel previously-opened siblings (same as
+  Phase 2.4).
+- A `create_pr` failure for a slice → same cascade.
+- The orchestrator row stores `stack_repos` as a JSON
+  list in the `merge_jobs.stack_repos` column (Phase 2.5
+  schema migration). The column is NULL for single-repo
+  jobs, populated for cross-repo.
+
+### API
+
+`POST /api/v1/agents/jobs` accepts `stack_repos`:
+
+```json
+{
+  "prompt": "refactor cross-service",
+  "split_into": 2,
+  "pr_mode": "draft",
+  "stack_repos": ["/path/to/repo-a", "/path/to/repo-b"]
+}
+```
+
+`GET /jobs/{id}` returns the same field in the response
+for observability. `GET /stacks/{stack_id}` shows each
+child's `repo` (so an operator can verify the per-slice
+target).
+
+---
+
+## Rate-limit handling (Phase 2.5 v0.9.0)
+
+Every `gh` call in `harness/agents/pr_integration.py`
+goes through `_gh_with_retry`, a thin wrapper that
+retries 403 / 429 responses with exponential backoff
+and (when present) honours `Retry-After: N` from the
+`gh` stderr.
+
+### Settings
+
+```ini
+HARNESS_PR_RATE_LIMIT_MAX_RETRIES=5           # default 5
+HARNESS_PR_RATE_LIMIT_INITIAL_BACKOFF_S=2.0    # default 2s
+HARNESS_PR_RATE_LIMIT_MAX_BACKOFF_S=60.0       # default 60s
+HARNESS_PR_RATE_LIMIT_JITTER_S=0.5             # default 0.5s
+```
+
+`max_retries=0` disables retry entirely (Phase 2.4
+behaviour: first 429 → `GHUnavailable` raised).
+
+### What counts as "rate limit"
+
+`_gh_with_retry` triggers on stderr that contains any
+of:
+
+- `API rate limit exceeded`
+- `rate limit`
+- `secondary rate limit`
+- `abuse detection`
+- `HTTP 429`
+- `HTTP 403`
+
+The exact set is in `_RATE_LIMIT_PATTERNS` in
+`pr_integration.py`. The patterns are conservative
+(false positives are worse than misses — a non-rate-limit
+error is best surfaced immediately so the caller can
+diagnose it).
+
+### What doesn't retry
+
+Non-`gh` failures (network, auth, repo state) are NOT
+retried. They surface to the caller immediately as
+`GHUnavailable` (or the caller's specific error). The
+intent: rate-limit retry is the only thing we
+heuristically detect; everything else is the user's
+problem.
+
+### Per-`_gh` retries
+
+The wrapper delegates to the module-level `_gh` (which
+tests monkeypatch). Existing Phase 2.2/2.3/2.4 tests
+that swap `_gh` for a fake transport continue to work
+unchanged — they don't simulate 403/429, so no retry
+kicks in.
+
+---
+
+## Auto-add label (Phase 2.5 v0.9.0)
+
+When `job.auto_merge=True` and `settings.auto_add_label=True`
+(the default), the queue automatically calls
+`gh pr edit <N> --add-label harness-auto-merge`
+immediately after `gh pr create` succeeds. The label
+is the configured `auto_merge_label` (default
+`harness-auto-merge`).
+
+### Failure handling
+
+If the label call fails (e.g. the label doesn't exist
+in the repo, or the token lacks `repo` scope), we log
+a warning and **continue**. The auto-merge step will
+surface the real branch-protection error if the missing
+label was the only blocker.
+
+Disable per-job (rare): set `HARNESS_AUTO_ADD_LABEL=false`
+in the env, or pass `--no-auto-add-label` (not yet
+implemented; the env-var path is the recommended one).
+
+### Stack parity
+
+For stacked PRs, the same auto-label runs per slice —
+each slice's PR gets the label after `create_pr`
+succeeds. Stacks that mix `--auto-merge` and
+`--no-auto-merge` (rare; mostly a config-drift issue)
+get labels only for the slices whose `auto_merge=True`.
+

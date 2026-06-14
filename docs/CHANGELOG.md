@@ -1,5 +1,53 @@
 # Changelog — Solomon Harness
 
+## Phase 2.5 — Cross-Repo Stacks + Outbound Webhooks + Auto-Label + Rate Limit (ЗАКРЫТО v0.9.0, 2026-06-14)
+
+**Phase 2.5 (v0.9.0) — 4 шага / 4 коммита / +58 net new тестов (759 → 817) / 0 new deps**
+
+### Шаги
+
+- **Step 0 (commit `phase-2.5-step-0-outbound`)** — 9 новых settings (`auto_add_label`, `pr_rate_limit_*`, `outbound_webhook_*`); `harness/agents/outbound.py` (NEW, `OutboundWebhookDispatcher`: httpx + fire-and-forget + 4 event kinds + bounded retries); `pr_templating.py:parse_codeowners_for_diff` (pure, fnmatch-based, closes Phase 2.4 TODO at `merge_queue.py:820`). **+35 tests.**
+- **Step 1 (commit `phase-2.5-step-1-rate-limit-label`)** — `_gh_with_retry` wrapper (403/429 + `Retry-After` + exponential backoff + jitter) оборачивает все `gh` calls в `pr_integration.py`; `add_pr_label` через `gh pr edit --add-label`; auto-label wired в `_run_pr_phase` + per-slice в `_run_stack_phase` (best-effort, log + continue). `gh_subprocess_stub` defaults to success for `auth status` + `pr edit` (backward compat для pre-2.5 тестов). **+9 tests.**
+- **Step 2 (commit `phase-2.5-step-2-cross-repo`)** — `merge_jobs.stack_repos` TEXT (JSON list, NULL для non-cross-repo); 4 SELECT queries + `_parse_stack_repos`; `MergeJob.stack_repos: list[Path] | None` с validation `len == split_into`; `_run_stack_phase` per-slice `WorktreeSession` через `repo_slice` (1 worktree per repo); CLI `--stack-repos`; API `_EnqueueRequest` + `_JobRecordSchema`. **+3 tests.**
+- **Step 3 (commit `phase-2.5-step-3-outbound-wiring`)** — `MergeQueue` DI `outbound: OutboundWebhookDispatcher | None`; `_emit()` fires outbound (fire-and-forget); `_run_pr_phase` emits `pr_waiting_review` после `wait_for_checks` если `review_required`; `WebhookHandler` DI `outbound=`; `dispatch_event` fires `stack_merged` after parent promotion; `server/app.py` lifespan wires `OutboundWebhookDispatcher` + `aclose()` on shutdown. **+11 tests.**
+
+### Final metrics
+
+- **Commits:** 4 (Step 0..3)
+- **Tests:** 817 mock + 5 real_llm = 822 total (was 759 pre-Phase-2.5, +58 net new)
+- **Commits в `06_Harness/`:** 63 (59 → 63, +4 Phase 2.5)
+- **New files:** 4 (`outbound.py`, `test_outbound.py`, `test_codeowners_parser.py`, `test_merge_queue_outbound.py`)
+- **New LoC:** ~1500 production + ~700 tests
+- **New deps:** 0 (httpx уже в Phase 0; stdlib `asyncio`, `random`, `fnmatch`, `re`, `json`)
+
+### Архитектурные решения (Phase 2.5)
+
+- **`OutboundWebhookDispatcher` как singleton в `app.state`** — конструктивно в `server/app.py` lifespan, инжектится в `MergeQueue` + `WebhookHandler` через DI. `webhook_handler.py` НЕ импортирует `pr_integration` / `outbound` at module top — trust boundary preserved.
+- **N WorktreeSession-ов для cross-repo stacks** — Phase 2.4 reuse 1 worktree для N branches; Phase 2.5: 1 worktree per repo (cross-repo не может шарить worktree — разные `.git`). Per-repo `RepoLockRegistry` lock acquired sequentially. Trade-off: медленнее, но семантически правильно.
+- **`_gh_with_retry` оборачивает public API, не `_gh`** — `merge_queue` импортирует `create_pr`, `merge_pr` (public), `merge_queue.py` не видит `_gh` напрямую. Tests monkeypatch `_gh` (Phase 2.2 pattern) — unchanged.
+- **Auto-add label = best-effort** — failure не блокирует `enable_auto_merge`. Real branch-protection error будет виден в `enable_auto_merge` если label был единственным blocker.
+- **Per-`_emit` outbound fire-and-forget** — `_emit` НЕ `await` outbound delivery. Slow receiver не блокирует job lifecycle. `OutboundWebhookDispatcher.fire()` creates asyncio task.
+- **`stack_repos` JSON serialised in TEXT column** — `json.dumps(list)` on write, `json.loads` on read with defensive defaults (NULL/empty/invalid → `None`). Backward compat: NULL = single-repo job.
+- **CODEOWNERS → reviewers** — `parse_codeowners_for_diff` closes Phase 2.4 TODO. Pure function, no network. O(files × patterns) типично <1ms.
+
+### Ограничения (явно OUT OF SCOPE, Phase 2.6+)
+
+- Cross-repo stacks с разными PR strategies per repo.
+- Outbound webhook HMAC signing (Phase 4).
+- Auto-add multiple labels.
+- Stacked stack (3+ уровня вложенности).
+- Outbound persistent retry queue (Phase 4).
+
+### Backward compat
+
+Все 759 Phase 1.6+2.2+2.3+2.4 теста + 35+9+3+11 Phase 2.5 = 817 passed без изменений в production code Phase 2.5. Default path (`pr_mode="off"`, no stack, no outbound) = unchanged. Single-repo stacks (Phase 2.4 default) = unchanged. CLI `--split-into` без `--stack-repos` = Phase 2.2/2.4 behaviour.
+
+### Tag
+
+`v0.9.0` annotated + push
+
+---
+
 ## Phase 2.4 — Stacked PRs + Review Templating + Approved Short-Circuit (ЗАКРЫТО v0.8.0, 2026-06-14)
 
 **Phase 2.4 (v0.8.0) — 4 шага / 4 коммита / 86 net new тестов (673 → 759) / 0 new deps**
