@@ -225,11 +225,133 @@ gracefully falls back to a local `git merge --ff-only` and emits a
 The following are deliberately not in Phase 2.2:
 
 - **Webhook receiver** for inbound `pull_request` / `check_run` events.
-  Phase 2.2 polls only.
+  Phase 2.2 polls only. → **ЗАКРЫТО Phase 2.3 v0.7.0**
 - **Auto-merge labels** (branch protection + `gh pr merge --auto`).
+  → **ЗАКРЫТО Phase 2.3 v0.7.0**
 - **PR review templating** (CODEOWNERS-aware reviewers, issue-link
   auto-resolution).
 - **Multi-PR-per-job / stacked PRs**.
 - **Multi-tenant** `gh` config (single global `$GITHUB_TOKEN`).
 - **Rich PR UI** in the Web frontend (clickable `pr_url`, status
   badges).
+
+## Webhooks (Phase 2.3 v0.7.0)
+
+Inbound GitHub webhook receiver (`POST /api/v1/agents/webhooks/github`)
+для real-time обновлений статуса job'а вместо polling + branch-protection-
+aware auto-merge.
+
+### Зачем
+
+Phase 2.2 polls `gh pr view` каждые 15с, максимум 5 минут
+(`pr_wait_timeout_s`). При медленном CI (5-20 мин) → таймаут. При
+долгом review (часы-дни) → polling бессмысленен. Webhook решает обе
+проблемы:
+
+- **Real-time updates** — GitHub шлёт нам `check_run` сразу после CI
+  completion; мы обновляем `JobStore` мгновенно (без polling).
+- **Auto-merge** — Phase 2.2 вызывает `gh pr merge` сразу после
+  green CI. Если branch protection требует approval, merge не
+  происходит. `gh pr merge --auto` (Phase 2.3) включает auto-merge
+  и ждёт branch protection conditions.
+
+### Setup
+
+1. **Сгенерируйте shared secret** (32+ символов):
+   ```bash
+   openssl rand -hex 32
+   # → например: 5a4f...  (64 hex chars)
+   ```
+
+2. **Установите в env**:
+   ```bash
+   export HARNESS_WEBHOOK_SECRET="5a4f..."
+   # и опционально:
+   export AUTO_MERGE_METHOD="squash"  # squash | merge | rebase
+   export AUTO_MERGE_LABEL="harness-auto-merge"
+   ```
+
+3. **Настройте GitHub webhook** (Settings → Webhooks → Add webhook):
+   - **Payload URL:** `https://your-host/api/v1/agents/webhooks/github`
+   - **Content type:** `application/json`
+   - **Secret:** тот же `HARNESS_WEBHOOK_SECRET`
+   - **Events:** "Let me select individual events" → отметьте
+     `Pull requests`, `Check runs`, `Pull request reviews`
+   - **Active:** ✓
+
+4. **Restart harness server** (для подхвата нового secret).
+
+### Event → status mapping
+
+| Event | Action / State | Effect |
+|-------|----------------|--------|
+| `pull_request` | `closed` + `merged=true` | Job (matched by `pr_number`) → `merged` |
+| `check_run` | `conclusion="success"` | No-op (polling loop подхватит на следующей итерации) |
+| `check_run` | `conclusion="failure"` | Job → `failed` ("PR CI failed") |
+| `pull_request_review` | `state="changes_requested"` | Job → `failed` ("PR review requested changes") |
+| `pull_request_review` | `state="approved"` | No-op (Phase 2.4 review flow) |
+| (любой другой) | — | 200 + logged + ignored |
+
+### Безопасность (HMAC)
+
+- GitHub шлёт `X-Hub-Signature-256: sha256=<hmac>` в каждом webhook.
+- Harness проверяет HMAC-SHA256 с shared secret
+  (`settings.webhook_secret`) используя `hmac.compare_digest`
+  (timing-safe).
+- Bad signature → 401. Missing signature → 401. Empty secret (webhooks
+  disabled) → 503.
+
+### Idempotency
+
+GitHub может redeliverить webhook (e.g. server was down 5 min). Harness
+гарантирует идемпотентность через `UNIQUE(delivery_id)` constraint в
+`webhook_events` таблице. Redelivery → 200 + `{"processed": false,
+"detail": "duplicate delivery_id (already processed)"}`.
+
+### CLI: --pr-auto-merge
+
+```bash
+# Open draft PR + enable auto-merge (ждёт branch protection).
+harness agents run code "fix typo" --pr-auto-merge --background
+
+# Open ready-for-review PR + auto-merge с rebase method.
+harness agents run code "fix typo" --pr-ready --auto-merge \
+  --auto-merge-method rebase --background
+```
+
+Job status flow с `--pr-auto-merge`:
+```
+verifying → pr_creating → pr_open → pr_waiting_checks
+          → pr_auto_merge_enabled (ждём webhook)
+          → merged (через inbound pull_request webhook)
+```
+
+Fallback: если `gh pr merge --auto` fails (branch protection не
+настроена для этой ветки) → очередь сразу вызывает `gh pr merge`
+(Phase 2.2 behaviour). Job заканчивается как `merged` без
+`pr_auto_merge_enabled`.
+
+### Тестирование webhooks локально
+
+Используйте `ngrok` или `smee.io` для туннелирования GitHub → local:
+
+```bash
+# Terminal 1: harness server
+HARNESS_WEBHOOK_SECRET="test-secret-32-chars-long" harness serve
+
+# Terminal 2: tunnel
+ngrok http 8765
+# → https://abc123.ngrok.io
+
+# Terminal 3: simulate webhook
+SECRET="test-secret-32-chars-long"
+BODY='{"action":"closed","number":42,"pull_request":{"html_url":"https://x","head":{"sha":"h"},"state":"closed","merged":true}}'
+SIG=$(echo -n "$BODY" | openssl dgst -sha256 -hmac "$SECRET" | sed 's/^.*= //')
+curl -X POST "https://abc123.ngrok.io/api/v1/agents/webhooks/github" \
+  -H "X-Hub-Signature-256: sha256=$SIG" \
+  -H "X-GitHub-Event: pull_request" \
+  -H "X-GitHub-Delivery: test-1" \
+  -H "Content-Type: application/json" \
+  --data "$BODY"
+# → 200 {"delivery_id": "test-1", "event_type": "pull_request", "processed": true}
+```

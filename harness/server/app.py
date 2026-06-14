@@ -91,6 +91,46 @@ async def lifespan(app: FastAPI):
         f"(auth_required={settings.auth_required})"
     )
 
+    # Phase 2.3: inbound GitHub webhook receiver. The
+    # ``WebhookEventStore`` lives in the same DB file as the
+    # ``JobStore`` (``agent-jobs.db``) but in a different table
+    # (``webhook_events``). The ``WebhookHandler`` wraps the store
+    # + the HMAC secret and is what the route calls. If
+    # ``webhook_secret`` is empty, the route returns 503 — but the
+    # rest of the server (sessions, chat, agents/jobs) is
+    # unaffected. Setting the secret to a non-empty value at
+    # runtime requires a server restart.
+    from harness.agents.webhook_handler import WebhookHandler
+    from harness.agents.webhook_store import WebhookEventStore
+    try:
+        webhook_event_store = WebhookEventStore(
+            settings.db_path.parent / "agent-jobs.db",
+        )
+        await webhook_event_store.init()
+        app.state.webhook_event_store = webhook_event_store
+        app.state.webhook_handler = WebhookHandler(
+            store=webhook_event_store,
+            secret=settings.webhook_secret,
+        )
+        # Log whether webhooks are enabled or not (without
+        # leaking the secret itself).
+        secret_configured = bool(
+            settings.webhook_secret and settings.webhook_secret.strip()
+        )
+        print(
+            f"[harness] webhook_event_store: {webhook_event_store.db_path} "
+            f"(webhooks={'enabled' if secret_configured else 'disabled'})"
+        )
+    except Exception as e:
+        # Webhook store init failure is non-fatal — the rest of
+        # the server continues to work, and the route returns 503.
+        print(
+            f"[harness] webhook handler disabled (init failed: "
+            f"{type(e).__name__}: {e})"
+        )
+        app.state.webhook_event_store = None
+        app.state.webhook_handler = None
+
     print(f"[harness] session_dir: {settings.session_dir}")
     print(f"[harness] db_path: {settings.db_path}")
     print(f"[harness] project_root: {settings.project_root}")
@@ -129,6 +169,7 @@ def create_app() -> FastAPI:
     from harness.server.routes.capabilities import router as capabilities_router
     from harness.server.routes.memory_v1 import router as memory_v1_router
     from harness.server.routes.sessions_v1 import router as sessions_v1_router
+    from harness.server.routes.agents_webhooks import router as agents_webhooks_router
 
     app.include_router(health_router, prefix="/api", tags=["health"])
     app.include_router(sessions_router, prefix="/api", tags=["sessions"])
@@ -148,6 +189,29 @@ def create_app() -> FastAPI:
     )
     app.include_router(
         sessions_v1_router, prefix="/api/v1/sessions", tags=["sessions-v1"],
+    )
+    # Phase 2.3: inbound GitHub webhook receiver. Mounted at the
+    # operator-configurable path (``settings.webhook_path``). Default
+    # is ``/api/v1/agents/webhooks/github``. The router itself
+    # exposes ``/webhooks/github``; we prefix it with the part of
+    # the path BEFORE ``/webhooks/github`` so the final URL is
+    # exactly ``settings.webhook_path``. (FastAPI's ``include_router``
+    # with a dynamic ``prefix`` would need a workaround; here we
+    # use the default prefix and assume the operator doesn't
+    # override the path — we log a warning if they do.)
+    configured_path = settings.webhook_path
+    expected_prefix = configured_path.rsplit("/webhooks/", 1)[0]
+    if expected_prefix == configured_path:
+        # No ``/webhooks/`` suffix → fall back to the default
+        # prefix. This is the rare case where the operator
+        # changed the path; we log and use the default.
+        print(
+            f"[harness] webhook_path={configured_path!r} does not end "
+            f"with /webhooks/...; mounting at default /api/v1/agents"
+        )
+        expected_prefix = "/api/v1/agents"
+    app.include_router(
+        agents_webhooks_router, prefix=expected_prefix, tags=["webhooks"],
     )
 
     return app
