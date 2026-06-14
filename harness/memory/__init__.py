@@ -17,6 +17,11 @@ from harness.memory.schema import (
     MemorySource,
     ProvenanceEntry,
 )
+from harness.memory.unified import (
+    DEFAULT_DUAL_WRITE_POLICY,
+    L1_OVERRIDE_TARGET,
+    UnifiedMemory,
+)
 
 __all__ = [
     "ALL_LAYERS",
@@ -25,4 +30,7 @@ __all__ = [
     "MemoryLayer",
     "MemorySource",
     "ProvenanceEntry",
+    "UnifiedMemory",
+    "DEFAULT_DUAL_WRITE_POLICY",
+    "L1_OVERRIDE_TARGET",
 ]

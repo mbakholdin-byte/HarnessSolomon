@@ -346,6 +346,15 @@ class FileAdapter:
             entries = [e for e in entries if tag in (e.tags or [])]
         return entries
 
+    def delete(self, memory_id: str) -> bool:
+        """Delete an entry by id (removes the .md file). Returns True/False."""
+        path = self._path_for(memory_id)
+        if not path.exists():
+            return False
+        path.unlink()
+        self._rebuild_index()
+        return True
+
 
 __all__ = [
     "FileAdapter",

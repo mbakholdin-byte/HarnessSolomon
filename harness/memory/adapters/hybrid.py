@@ -263,6 +263,19 @@ class HybridAdapter:
         all_entries = self.read()
         return all_entries[-n:]
 
+    def delete(self, memory_id: str) -> bool:
+        """Delete an entry by id. Returns True if removed, False if absent.
+
+        Idempotent: deleting a non-existent id returns False.
+        """
+        with self._connect() as conn:
+            cur = conn.execute(
+                "DELETE FROM episodes WHERE id = ? AND project = ?",
+                (memory_id, self.project),
+            )
+            conn.commit()
+        return cur.rowcount > 0
+
 
 __all__ = [
     "HybridAdapter",
