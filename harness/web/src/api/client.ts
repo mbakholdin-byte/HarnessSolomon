@@ -32,6 +32,34 @@ export interface Session {
   total_cost: number;
 }
 
+export type MessageRole = "user" | "assistant" | "tool";
+
+export interface Message {
+  id: string;
+  session_id: string;
+  role: MessageRole;
+  content: string;
+  tool_call_id?: string | null;
+  tool_calls?: ToolCallRecord[] | null;
+  usage?: TokenUsage | null;
+  cost?: number | null;
+  created_at: string;
+}
+
+export interface ToolCallRecord {
+  id: string;
+  name: string;
+  args: Record<string, unknown>;
+  result?: unknown;
+  status?: "running" | "ok" | "error";
+}
+
+export interface TokenUsage {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+}
+
 // === Low-level helper ===
 
 async function request<T>(
@@ -87,4 +115,10 @@ export async function deleteSession(id: string): Promise<void> {
   await request<void>(`/sessions/${encodeURIComponent(id)}`, {
     method: "DELETE",
   });
+}
+
+export async function getMessages(sessionId: string): Promise<Message[]> {
+  return request<Message[]>(
+    `/sessions/${encodeURIComponent(sessionId)}/messages`,
+  );
 }
