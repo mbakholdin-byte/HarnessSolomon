@@ -141,6 +141,24 @@ class JobRecord:
     #: local ff-merge only), ``"draft"`` (open draft PR), or
     #: ``"ready"`` (open ready-for-review PR).
     pr_mode: str = "off"
+    # === Phase 2.4: stacked / multi-PR fields ===
+    #: Stack identifier (``None`` for non-stacked jobs). All jobs
+    #: belonging to the same stack share this value (typically a
+    #: random hex). The parent orchestrator row uses
+    #: ``stack_position=0``; children use ``stack_position >= 1``.
+    pr_stack_id: str | None = None
+    #: 0-based position within the stack. Position 0 is the
+    #: orchestrator row (no ``pr_number``). Positions >= 1 are
+    #: individual slice PRs.
+    stack_position: int = 0
+    #: Total number of slices in the stack (1 for non-stacked jobs).
+    #: Only meaningful when ``pr_stack_id`` is set.
+    stack_size: int = 1
+    #: For stacked jobs: the ``pr_number`` of the previous slice
+    #: (``None`` for the first slice; ``None`` for the orchestrator
+    #: row). The first slice's PR becomes the base branch for the
+    #: second slice's PR, etc.
+    depends_on_pr_number: int | None = None
 
 
 @dataclass(frozen=True)
@@ -192,7 +210,11 @@ CREATE TABLE IF NOT EXISTS merge_jobs (
     pr_url        TEXT,
     pr_number     INTEGER,
     target_branch TEXT,
-    pr_mode       TEXT NOT NULL DEFAULT 'off'
+    pr_mode       TEXT NOT NULL DEFAULT 'off',
+    pr_stack_id   TEXT,
+    stack_position INTEGER NOT NULL DEFAULT 0,
+    stack_size    INTEGER NOT NULL DEFAULT 1,
+    depends_on_pr_number INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_merge_jobs_status ON merge_jobs(status);
 CREATE INDEX IF NOT EXISTS idx_merge_jobs_started ON merge_jobs(started_at DESC);
@@ -221,13 +243,18 @@ CREATE INDEX IF NOT EXISTS idx_webhook_events_processed ON webhook_events(proces
 """
 
 #: ALTER TABLE statements applied on existing DBs that pre-date
-#: Phase 2.2. Each is idempotent (we check ``PRAGMA table_info``
+#: Phase 2.2 / 2.4. Each is idempotent (we check ``PRAGMA table_info``
 #: before issuing). Order matters: ``ALTER TABLE`` is more lenient
 #: in older SQLite versions when columns are added one at a time.
-#: (All 5 columns have no default except ``pr_mode`` which gets
-#: ``DEFAULT 'off'``; we back-fill any pre-existing rows with
-#: ``"off"`` via a separate ``UPDATE``.)
-_PR22_ALTER_COLUMNS: tuple[tuple[str, str], ...] = (
+#:
+#: Phase 2.2 added 5 columns: ``repo``, ``pr_url``, ``pr_number``,
+#: ``target_branch``, ``pr_mode``.
+#: Phase 2.4 added 4 columns: ``pr_stack_id``, ``stack_position``,
+#: ``stack_size``, ``depends_on_pr_number``.
+#: (All 9 columns have safe defaults; legacy rows read back with
+#: ``pr_mode='off'``, ``stack_position=0``, ``stack_size=1``.)
+_PR24_ALTER_COLUMNS: tuple[tuple[str, str], ...] = (
+    # Phase 2.2
     ("repo", "TEXT"),
     ("pr_url", "TEXT"),
     ("pr_number", "INTEGER"),
@@ -236,6 +263,11 @@ _PR22_ALTER_COLUMNS: tuple[tuple[str, str], ...] = (
     # ALTER-added columns SQLite applies the DEFAULT to existing
     # rows, so legacy Phase 2.1 rows read back as "off" (back-compat).
     ("pr_mode", "TEXT NOT NULL DEFAULT 'off'"),
+    # Phase 2.4
+    ("pr_stack_id", "TEXT"),
+    ("stack_position", "INTEGER NOT NULL DEFAULT 0"),
+    ("stack_size", "INTEGER NOT NULL DEFAULT 1"),
+    ("depends_on_pr_number", "INTEGER"),
 )
 
 
@@ -249,6 +281,45 @@ def _utcnow() -> datetime:
 def _new_job_id() -> str:
     """Random short id — used as the primary key."""
     return uuid4().hex[:16]
+
+
+def _row_to_record(row: aiosqlite.Row) -> JobRecord:
+    """Map a SELECT row to a :class:`JobRecord`.
+
+    Used by ``load``, ``find_job_by_pr_number``, ``find_jobs_by_stack_id``,
+    and ``list_recent`` so the column list and field mapping are defined
+    once. Defensive defaults: ``pr_mode`` falls back to ``"off"``,
+    ``stack_position`` to ``0``, ``stack_size`` to ``1`` (legacy rows
+    from pre-Phase-2.4 DBs that pre-date the stack columns read back
+    with these safe defaults).
+    """
+    return JobRecord(
+        id=row["id"],
+        worktree_id=row["worktree_id"],
+        status=row["status"],
+        started_at=row["started_at"],
+        finished_at=row["finished_at"],
+        cost=row["cost"],
+        error=row["error"],
+        model=row["model"],
+        prompt=row["prompt"],
+        repo=row["repo"],
+        pr_url=row["pr_url"],
+        pr_number=row["pr_number"],
+        target_branch=row["target_branch"],
+        pr_mode=row["pr_mode"] or "off",
+        pr_stack_id=row["pr_stack_id"] if "pr_stack_id" in row.keys() else None,
+        stack_position=(
+            row["stack_position"] if "stack_position" in row.keys() else 0
+        ) or 0,
+        stack_size=(
+            row["stack_size"] if "stack_size" in row.keys() else 1
+        ) or 1,
+        depends_on_pr_number=(
+            row["depends_on_pr_number"]
+            if "depends_on_pr_number" in row.keys() else None
+        ),
+    )
 
 
 # === Store ===
@@ -290,10 +361,10 @@ class JobStore:
         self._initialized = True
 
     async def _apply_phase22_migrations(self, db: aiosqlite.Connection) -> None:
-        """Add Phase 2.2 columns + Phase 2.3 index to a pre-existing
+        """Add Phase 2.2+ columns + Phase 2.3/2.4 indexes to a pre-existing
         ``merge_jobs`` table.
 
-        For each column in :data:`_PR22_ALTER_COLUMNS`, check
+        For each column in :data:`_PR24_ALTER_COLUMNS`, check
         ``PRAGMA table_info(merge_jobs)`` and issue an ``ALTER TABLE``
         only if the column isn't already present. This is the
         standard SQLite pattern (the ``ADD COLUMN`` itself is not
@@ -306,10 +377,14 @@ class JobStore:
         doesn't exist yet and the index creation would fail. The
         index is for the Phase 2.3 webhook handler's
         ``find_job_by_pr_number`` lookup.
+
+        Phase 2.4: also creates ``idx_merge_jobs_stack_id`` AFTER
+        the stack columns are added. Same rationale — the index
+        must follow the column additions.
         """
         async with db.execute("PRAGMA table_info(merge_jobs)") as cur:
             existing = {row[1] async for row in cur}
-        for col_name, col_type in _PR22_ALTER_COLUMNS:
+        for col_name, col_type in _PR24_ALTER_COLUMNS:
             if col_name in existing:
                 continue
             # SQLite's ALTER TABLE ADD COLUMN with NOT NULL requires
@@ -325,6 +400,12 @@ class JobStore:
             "CREATE INDEX IF NOT EXISTS idx_merge_jobs_pr_number "
             "ON merge_jobs(pr_number)"
         )
+        # Phase 2.4: index on pr_stack_id for the stack orchestrator's
+        # ``find_jobs_by_stack_id`` lookup. Idempotent.
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_merge_jobs_stack_id "
+            "ON merge_jobs(pr_stack_id)"
+        )
 
     # --- create / update ---
 
@@ -338,6 +419,10 @@ class JobStore:
         repo: str | None = None,
         pr_mode: str = "off",
         target_branch: str | None = None,
+        pr_stack_id: str | None = None,
+        stack_position: int = 0,
+        stack_size: int = 1,
+        depends_on_pr_number: int | None = None,
     ) -> str:
         """Insert a new job row and return its id.
 
@@ -346,6 +431,11 @@ class JobStore:
         Phase 2.2: accepts ``repo``, ``pr_mode``, ``target_branch`` for
         jobs that opt into GitHub PR integration. All three default to
         ``None`` / ``"off"`` for backward compat with Phase 2.1 callers.
+
+        Phase 2.4: accepts ``pr_stack_id``, ``stack_position``,
+        ``stack_size``, ``depends_on_pr_number`` for stacked / multi-PR
+        jobs. All default to ``None``/``0``/``1`` for backward compat
+        with Phase 2.1/2.2/2.3 callers.
         """
         await self._ensure_schema()
         job_id = _new_job_id()
@@ -355,11 +445,16 @@ class JobStore:
                 """
                 INSERT INTO merge_jobs
                     (id, worktree_id, status, started_at, cost, model,
-                     prompt, repo, pr_mode, target_branch)
-                VALUES (?, ?, ?, ?, 0.0, ?, ?, ?, ?, ?)
+                     prompt, repo, pr_mode, target_branch,
+                     pr_stack_id, stack_position, stack_size,
+                     depends_on_pr_number)
+                VALUES (?, ?, ?, ?, 0.0, ?, ?, ?, ?, ?,
+                        ?, ?, ?, ?)
                 """,
                 (job_id, worktree_id, status, now, model, prompt,
-                 repo, pr_mode, target_branch),
+                 repo, pr_mode, target_branch,
+                 pr_stack_id, stack_position, stack_size,
+                 depends_on_pr_number),
             )
             await db.commit()
         return job_id
@@ -460,7 +555,9 @@ class JobStore:
                 """
                 SELECT id, worktree_id, status, started_at, finished_at,
                        cost, error, model, prompt,
-                       repo, pr_url, pr_number, target_branch, pr_mode
+                       repo, pr_url, pr_number, target_branch, pr_mode,
+                       pr_stack_id, stack_position, stack_size,
+                       depends_on_pr_number
                 FROM merge_jobs WHERE id = ?
                 """,
                 (job_id,),
@@ -468,15 +565,7 @@ class JobStore:
                 row = await cur.fetchone()
         if row is None:
             return None
-        return JobRecord(
-            id=row["id"], worktree_id=row["worktree_id"],
-            status=row["status"], started_at=row["started_at"],
-            finished_at=row["finished_at"], cost=row["cost"],
-            error=row["error"], model=row["model"], prompt=row["prompt"],
-            repo=row["repo"], pr_url=row["pr_url"],
-            pr_number=row["pr_number"], target_branch=row["target_branch"],
-            pr_mode=row["pr_mode"] or "off",
-        )
+        return _row_to_record(row)
 
     async def find_job_by_pr_number(self, pr_number: int) -> JobRecord | None:
         """Look up a job by its ``pr_number`` column.
@@ -489,6 +578,11 @@ class JobStore:
         match. Returns ``None`` if no job has this ``pr_number`` —
         webhooks can fire for PRs that the queue did not create (e.g.
         a human-opened PR), and the handler should ignore those.
+
+        Phase 2.4: only returns jobs with ``pr_number IS NOT NULL``
+        (the stack orchestrator row at ``stack_position=0`` has
+        ``pr_number=NULL`` and is intentionally excluded — it's
+        a coordinator, not a real PR).
         """
         await self._ensure_schema()
         async with aiosqlite.connect(self.db_path) as db:
@@ -497,7 +591,9 @@ class JobStore:
                 """
                 SELECT id, worktree_id, status, started_at, finished_at,
                        cost, error, model, prompt,
-                       repo, pr_url, pr_number, target_branch, pr_mode
+                       repo, pr_url, pr_number, target_branch, pr_mode,
+                       pr_stack_id, stack_position, stack_size,
+                       depends_on_pr_number
                 FROM merge_jobs
                 WHERE pr_number = ?
                 ORDER BY started_at DESC
@@ -508,14 +604,93 @@ class JobStore:
                 row = await cur.fetchone()
         if row is None:
             return None
-        return JobRecord(
-            id=row["id"], worktree_id=row["worktree_id"],
-            status=row["status"], started_at=row["started_at"],
-            finished_at=row["finished_at"], cost=row["cost"],
-            error=row["error"], model=row["model"], prompt=row["prompt"],
-            repo=row["repo"], pr_url=row["pr_url"],
-            pr_number=row["pr_number"], target_branch=row["target_branch"],
-            pr_mode=row["pr_mode"] or "off",
+        return _row_to_record(row)
+
+    async def find_jobs_by_stack_id(
+        self, stack_id: str,
+    ) -> list[JobRecord]:
+        """Return all jobs belonging to a stack, ordered by position.
+
+        Phase 2.4: returns rows with ``pr_stack_id = stack_id``,
+        ordered by ``stack_position ASC``. The first row
+        (``position=0``) is the orchestrator row (no ``pr_number``);
+        the rest are child PRs. Returns ``[]`` if the stack_id
+        doesn't exist (e.g. a typo, or the stack was deleted).
+
+        This is the inverse of :meth:`find_job_by_pr_number`: instead
+        of "PR → job", it answers "stack → all jobs". Used by:
+          - ``_run_stack_phase`` to list children
+          - ``GET /stacks/{stack_id}`` API endpoint
+          - webhook dispatcher to fan-out child-PR events to siblings
+        """
+        await self._ensure_schema()
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                """
+                SELECT id, worktree_id, status, started_at, finished_at,
+                       cost, error, model, prompt,
+                       repo, pr_url, pr_number, target_branch, pr_mode,
+                       pr_stack_id, stack_position, stack_size,
+                       depends_on_pr_number
+                FROM merge_jobs
+                WHERE pr_stack_id = ?
+                ORDER BY stack_position ASC, started_at ASC
+                """,
+                (stack_id,),
+            ) as cur:
+                rows = await cur.fetchall()
+        return [_row_to_record(r) for r in rows]
+
+    async def all_stack_children_merged(self, stack_id: str) -> bool:
+        """Check if every child PR in a stack is ``merged``.
+
+        Phase 2.4: used by the webhook dispatcher to promote the
+        parent orchestrator row to ``merged`` after the last child
+        PR is closed+merged. Returns ``True`` only when ALL of:
+
+          - At least one row exists for ``stack_id``
+          - The orchestrator row (``stack_position=0``) exists
+          - At least one child (``stack_position>=1``) exists
+          - Every child row (``stack_position>=1``) has
+            ``status='merged'``
+
+        The orchestrator row's status is NOT counted — it has no
+        PR and waits for its children to drive the merge state.
+        Returns ``False`` otherwise (including: stack doesn't exist,
+        no children yet, any child is non-merged, any child is
+        in-flight like ``pr_waiting_checks``).
+        """
+        await self._ensure_schema()
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                """
+                SELECT
+                    SUM(CASE WHEN stack_position = 0 THEN 1 ELSE 0 END)
+                        AS orch_count,
+                    SUM(CASE WHEN stack_position >= 1 THEN 1 ELSE 0 END)
+                        AS child_count,
+                    SUM(CASE WHEN stack_position >= 1
+                             AND status = 'merged' THEN 1 ELSE 0 END)
+                        AS child_merged
+                FROM merge_jobs
+                WHERE pr_stack_id = ?
+                """,
+                (stack_id,),
+            ) as cur:
+                row = await cur.fetchone()
+        if row is None:
+            return False
+        orch_count = row["orch_count"] or 0
+        child_count = row["child_count"] or 0
+        child_merged = row["child_merged"] or 0
+        # Need: orchestrator exists, at least one child, ALL children
+        # are merged (orchestrator status doesn't matter).
+        return (
+            orch_count >= 1
+            and child_count >= 1
+            and child_merged == child_count
         )
 
     async def list_events(self, job_id: str) -> list[JobEvent]:
@@ -554,24 +729,15 @@ class JobStore:
                 """
                 SELECT id, worktree_id, status, started_at, finished_at,
                        cost, error, model, prompt,
-                       repo, pr_url, pr_number, target_branch, pr_mode
+                       repo, pr_url, pr_number, target_branch, pr_mode,
+                       pr_stack_id, stack_position, stack_size,
+                       depends_on_pr_number
                 FROM merge_jobs ORDER BY started_at DESC LIMIT ?
                 """,
                 (int(n),),
             ) as cur:
                 rows = await cur.fetchall()
-        return [
-            JobRecord(
-                id=r["id"], worktree_id=r["worktree_id"],
-                status=r["status"], started_at=r["started_at"],
-                finished_at=r["finished_at"], cost=r["cost"],
-                error=r["error"], model=r["model"], prompt=r["prompt"],
-                repo=r["repo"], pr_url=r["pr_url"],
-                pr_number=r["pr_number"], target_branch=r["target_branch"],
-                pr_mode=r["pr_mode"] or "off",
-            )
-            for r in rows
-        ]
+        return [_row_to_record(r) for r in rows]
 
     # --- recovery ---
 

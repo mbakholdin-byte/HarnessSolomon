@@ -367,3 +367,211 @@ class TestPR22Schema:
         # 14 statuses as of Phase 2.3 (was 13 in Phase 2.2; we added
         # PR_AUTO_MERGE_ENABLED for the ``gh pr merge --auto`` flow).
         assert len(JOB_STATUSES) == 14
+
+
+class TestPR24StackSchema:
+    """Phase 2.4: stacked / multi-PR fields + ``pr_stack_id`` schema."""
+
+    async def test_create_accepts_stack_fields(self, tmp_path: Path) -> None:
+        """create() persists the 4 new stack fields (pr_stack_id,
+        stack_position, stack_size, depends_on_pr_number)."""
+        store = JobStore(tmp_path / "jobs.db")
+        jid = await store.create(
+            worktree_id="wt-1", model="m", prompt="p",
+            pr_stack_id="stack-abc", stack_position=2, stack_size=3,
+            depends_on_pr_number=42,
+        )
+        rec = await store.load(jid)
+        assert rec is not None
+        assert rec.pr_stack_id == "stack-abc"
+        assert rec.stack_position == 2
+        assert rec.stack_size == 3
+        assert rec.depends_on_pr_number == 42
+
+    async def test_create_defaults_stack_fields(self, tmp_path: Path) -> None:
+        """Phase 2.1/2.2/2.3 callers get safe defaults: stack_id=None,
+        position=0, size=1, depends_on=None."""
+        store = JobStore(tmp_path / "jobs.db")
+        jid = await store.create(worktree_id="wt", model="m", prompt="p")
+        rec = await store.load(jid)
+        assert rec.pr_stack_id is None
+        assert rec.stack_position == 0
+        assert rec.stack_size == 1
+        assert rec.depends_on_pr_number is None
+
+    async def test_legacy_db_gets_stack_columns_added(
+        self, tmp_path: Path,
+    ) -> None:
+        """A DB that pre-dates Phase 2.4 (Phase 2.3 schema, with the
+        PR fields but no stack fields) is migrated in place: the
+        stack columns are added via ``ALTER TABLE`` on first read."""
+        import sqlite3
+
+        legacy_db = tmp_path / "legacy24.db"
+        conn = sqlite3.connect(legacy_db)
+        # Phase 2.3 schema: 14 columns, NO stack fields.
+        conn.executescript("""
+            CREATE TABLE merge_jobs (
+                id            TEXT PRIMARY KEY,
+                worktree_id   TEXT NOT NULL,
+                status        TEXT NOT NULL,
+                started_at    TEXT NOT NULL,
+                finished_at   TEXT,
+                cost          REAL NOT NULL DEFAULT 0.0,
+                error         TEXT,
+                model         TEXT NOT NULL,
+                prompt        TEXT NOT NULL,
+                repo          TEXT,
+                pr_url        TEXT,
+                pr_number     INTEGER,
+                target_branch TEXT,
+                pr_mode       TEXT NOT NULL DEFAULT 'off'
+            );
+            INSERT INTO merge_jobs
+                (id, worktree_id, status, started_at, cost, model, prompt,
+                 pr_mode, pr_number)
+                VALUES ('legacy-24', 'wt-24', 'merged',
+                        '2026-06-14T12:00:00', 0.5, 'm', 'old',
+                        'ready', 100);
+        """)
+        conn.commit()
+        conn.close()
+
+        store = JobStore(legacy_db)
+        # Migration should add pr_stack_id, stack_position, stack_size,
+        # depends_on_pr_number columns.
+        rec = await store.load("legacy-24")
+        assert rec is not None
+        # Phase 2.3 fields still readable
+        assert rec.pr_mode == "ready"
+        assert rec.pr_number == 100
+        # Phase 2.4 stack fields present with safe defaults
+        assert rec.pr_stack_id is None
+        assert rec.stack_position == 0
+        assert rec.stack_size == 1
+        assert rec.depends_on_pr_number is None
+
+    async def test_find_jobs_by_stack_id_returns_all_positions(
+        self, tmp_path: Path,
+    ) -> None:
+        """find_jobs_by_stack_id lists all rows for a stack, ordered
+        by stack_position ASC."""
+        store = JobStore(tmp_path / "jobs.db")
+        # Orchestrator row (position=0)
+        await store.create(
+            worktree_id="wt", model="m", prompt="p",
+            pr_stack_id="stack-xyz", stack_position=0, stack_size=3,
+        )
+        # Child 1
+        await store.create(
+            worktree_id="wt", model="m", prompt="p",
+            pr_stack_id="stack-xyz", stack_position=1, stack_size=3,
+        )
+        # Child 2 (depends on PR #1)
+        await store.create(
+            worktree_id="wt", model="m", prompt="p",
+            pr_stack_id="stack-xyz", stack_position=2, stack_size=3,
+            depends_on_pr_number=1,
+        )
+        # Unrelated job (different stack)
+        await store.create(
+            worktree_id="wt2", model="m", prompt="p",
+            pr_stack_id="stack-other", stack_position=0, stack_size=1,
+        )
+
+        rows = await store.find_jobs_by_stack_id("stack-xyz")
+        assert len(rows) == 3
+        assert [r.stack_position for r in rows] == [0, 1, 2]
+        assert rows[0].pr_stack_id == "stack-xyz"
+        # Last child has depends_on_pr_number
+        assert rows[2].depends_on_pr_number == 1
+        # Unrelated stack not included
+        assert "stack-other" not in [r.pr_stack_id for r in rows]
+
+    async def test_find_jobs_by_stack_id_empty_for_unknown(
+        self, tmp_path: Path,
+    ) -> None:
+        store = JobStore(tmp_path / "jobs.db")
+        rows = await store.find_jobs_by_stack_id("nope")
+        assert rows == []
+
+    async def test_all_stack_children_merged_true(self, tmp_path: Path) -> None:
+        """all_stack_children_merged returns True only when orchestrator
+        row exists AND all children have status='merged'."""
+        store = JobStore(tmp_path / "jobs.db")
+        # Orchestrator
+        await store.create(
+            worktree_id="wt", model="m", prompt="p",
+            pr_stack_id="s1", stack_position=0, stack_size=2,
+        )
+        # Child 1 merged
+        c1 = await store.create(
+            worktree_id="wt", model="m", prompt="p",
+            pr_stack_id="s1", stack_position=1, stack_size=2,
+        )
+        await store.update_status(c1, "merged", finished=True)
+        # Child 2 merged
+        c2 = await store.create(
+            worktree_id="wt", model="m", prompt="p",
+            pr_stack_id="s1", stack_position=2, stack_size=2,
+        )
+        await store.update_status(c2, "merged", finished=True)
+        assert await store.all_stack_children_merged("s1") is True
+
+    async def test_all_stack_children_merged_false_if_any_in_flight(
+        self, tmp_path: Path,
+    ) -> None:
+        store = JobStore(tmp_path / "jobs.db")
+        await store.create(
+            worktree_id="wt", model="m", prompt="p",
+            pr_stack_id="s2", stack_position=0, stack_size=2,
+        )
+        c1 = await store.create(
+            worktree_id="wt", model="m", prompt="p",
+            pr_stack_id="s2", stack_position=1, stack_size=2,
+        )
+        await store.update_status(c1, "merged", finished=True)
+        c2 = await store.create(
+            worktree_id="wt", model="m", prompt="p",
+            pr_stack_id="s2", stack_position=2, stack_size=2,
+        )
+        # Child 2 is in flight, not merged
+        await store.update_status(c2, "pr_waiting_checks")
+        assert await store.all_stack_children_merged("s2") is False
+
+    async def test_all_stack_children_merged_false_if_no_orchestrator(
+        self, tmp_path: Path,
+    ) -> None:
+        """Edge case: only children exist (orchestrator row missing).
+        We don't promote a parent that doesn't exist."""
+        store = JobStore(tmp_path / "jobs.db")
+        c1 = await store.create(
+            worktree_id="wt", model="m", prompt="p",
+            pr_stack_id="s3", stack_position=1, stack_size=2,
+        )
+        await store.update_status(c1, "merged", finished=True)
+        assert await store.all_stack_children_merged("s3") is False
+
+    async def test_recover_running_cancels_stack_children(
+        self, tmp_path: Path,
+    ) -> None:
+        """Stack children in any in-flight status get cancelled on
+        restart, same as non-stacked jobs."""
+        store = JobStore(tmp_path / "jobs.db")
+        # Orchestrator
+        orch = await store.create(
+            worktree_id="wt", model="m", prompt="p",
+            pr_stack_id="sx", stack_position=0, stack_size=2,
+        )
+        # Child in pr_open
+        child = await store.create(
+            worktree_id="wt", model="m", prompt="p",
+            pr_stack_id="sx", stack_position=1, stack_size=2,
+        )
+        await store.update_status(child, "pr_open")
+        cancelled = await store.recover_running()
+        # Both rows in flight (orchestrator is queued, child is pr_open)
+        assert sorted(cancelled) == sorted([orch, child])
+        for jid in (orch, child):
+            rec = await store.load(jid)
+            assert rec.status == "cancelled"

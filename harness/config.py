@@ -280,14 +280,116 @@ class Settings(BaseSettings):
         ),
     )
 
+    # === Phase 2.4: stacked / multi-PR + review flow ===
+    pr_split_strategy: str = Field(
+        default="auto",
+        description=(
+            "Strategy used by :class:`~harness.agents.pr_split.SplitPlanner` "
+            "to split a job's diff into N PR slices. One of:\n"
+            "  - ``auto`` (default): if diff <= max_files_per_slice, return "
+            "one slice (single-PR path); else fall back to ``directory``.\n"
+            "  - ``files``: round-robin slices of at most ``max_files_per_slice`` "
+            "files each.\n"
+            "  - ``directory``: group by top-level directory prefix "
+            "(e.g. ``src/*`` in one slice, ``tests/*`` in another).\n"
+            "  - ``size``: balance by LOC (uses ``git diff --shortstat`` per file). "
+            "Most expensive but most even.\n"
+            "Override per-job via the CLI ``--split-strategy`` flag."
+        ),
+    )
+    pr_split_max_files_per_slice: int = Field(
+        default=10,
+        ge=1,
+        le=1000,
+        description=(
+            "Maximum number of files per slice for the ``files`` and "
+            "``auto`` strategies. The default of 10 keeps each PR "
+            "small and reviewable. Ignored by the ``directory`` strategy "
+            "(which uses directory boundaries, not file counts)."
+        ),
+    )
+    pr_split_min_slices: int = Field(
+        default=1,
+        ge=1,
+        description=(
+            "If the diff is smaller than ``min_slices * max_files_per_slice``, "
+            "the planner collapses to a single slice (the legacy single-PR "
+            "path). Default 1 — never split a small diff."
+        ),
+    )
+    pr_split_max_slices: int = Field(
+        default=8,
+        ge=1,
+        le=64,
+        description=(
+            "Hard cap on the number of slices in a stack. Prevents a "
+            "user from requesting ``--split-into 100`` and overwhelming "
+            "the GitHub API. Default 8 — the largest reasonable stacked PR."
+        ),
+    )
+    pr_template_path: str = Field(
+        default="",
+        description=(
+            "Optional path to a custom PR body template. The file "
+            "should contain a Markdown template with ``{task}``, "
+            "``{head_branch}``, ``{base_branch}``, ``{slice_index}``, "
+            "``{slice_total}``, ``{stack_id}``, ``{issue_numbers}``, "
+            "``{codeowners_reviewers}`` placeholders. Empty string = "
+            "use the built-in default template "
+            "(see ``harness/agents/templates/pr_body.md``)."
+        ),
+    )
+    pr_issue_link_re: str = Field(
+        default=r"#(\d+)",
+        description=(
+            "Regular expression (single capturing group) used to "
+            "extract issue numbers from the job's task text. Default "
+            "``#(\\d+)`` matches bare ``#123`` references. Operators "
+            "can supply a more restrictive pattern (e.g. ``(?:Closes|"
+            "Refs|Fixes) #(\\d+)``) to limit auto-linking to explicit "
+            "phrases only."
+        ),
+    )
+    pr_review_timeout_s: int = Field(
+        default=86400,
+        ge=60,
+        description=(
+            "Phase 2.4: how long the queue will wait for a PR review "
+            "decision (``approved`` or ``changes_requested``) after "
+            "the CI checks pass. Default 86400 (24 hours). After the "
+            "timeout, the job is marked ``failed`` with "
+            "``error='PR review timeout'``."
+        ),
+    )
+    pr_review_poll_interval_s: int = Field(
+        default=30,
+        ge=5,
+        le=600,
+        description=(
+            "Phase 2.4: polling interval for the review-state check "
+            "(complement to the webhook-based short-circuit). Default "
+            "30s. Webhooks short-circuit this loop when they arrive, "
+            "so the interval only matters when webhooks are disabled "
+            "or GitHub is slow to deliver them."
+        ),
+    )
+
     @model_validator(mode="after")
     def _cascade_thresholds_ordered(self) -> "Settings":
-        """Guard against a misconfigured cascade: low must be strictly below high.
+        """Guard against a misconfigured cascade + Phase 2.4 split strategy.
 
-        When the operator sets ``subagent_confidence_low >= subagent_confidence_high``,
-        no confidence value would fall in the [low, high) T2 band and the cascade
-        would degenerate to a binary T1/T3. We reject the configuration at
-        load time so the user notices immediately, not on the first router call.
+        Validates:
+
+          - ``subagent_confidence_low < subagent_confidence_high`` (Phase 2.1)
+            No confidence value would fall in the [low, high) T2 band and the
+            cascade would degenerate to a binary T1/T3.
+          - ``pr_strategy ∈ {auto, strict, off}`` (Phase 2.2)
+          - ``auto_merge_method ∈ {squash, merge, rebase}`` (Phase 2.3)
+          - ``pr_split_strategy ∈ {auto, files, directory, size}`` (Phase 2.4)
+          - ``pr_split_min_slices <= pr_split_max_slices`` (Phase 2.4)
+
+        We reject the configuration at load time so the user notices
+        immediately, not on the first router call.
         """
         if self.subagent_confidence_low >= self.subagent_confidence_high:
             raise ValueError(
@@ -303,6 +405,16 @@ class Settings(BaseSettings):
             raise ValueError(
                 f"auto_merge_method must be one of 'squash' / 'merge' / 'rebase', "
                 f"got {self.auto_merge_method!r}"
+            )
+        if self.pr_split_strategy not in ("auto", "files", "directory", "size"):
+            raise ValueError(
+                f"pr_split_strategy must be one of 'auto' / 'files' / "
+                f"'directory' / 'size', got {self.pr_split_strategy!r}"
+            )
+        if self.pr_split_min_slices > self.pr_split_max_slices:
+            raise ValueError(
+                f"pr_split_min_slices ({self.pr_split_min_slices}) must be "
+                f"<= pr_split_max_slices ({self.pr_split_max_slices})"
             )
         return self
 
