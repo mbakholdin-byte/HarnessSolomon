@@ -25,7 +25,13 @@ class Settings(BaseSettings):
 
     # === Server ===
     host: str = Field(default="0.0.0.0", description="Bind host")
-    port: int = Field(default=8000, description="Bind port")
+    port: int = Field(
+        default=8765,
+        description=(
+            "Bind port. Default 8765 because Windows 11 + Docker Desktop reserves "
+            "8000/8001 via hns (WSAEACCES). See _output/2026-06/14.06/ports-map.md"
+        ),
+    )
     log_level: str = Field(default="INFO", description="Logging level")
 
     # === Storage ===
