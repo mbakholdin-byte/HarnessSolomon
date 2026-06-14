@@ -52,12 +52,35 @@ async def lifespan(app: FastAPI):
         from harness.agents.runner import AgentRunner
         from harness.agents.merge_queue import MergeQueue
         from harness.agents.verify import AdversarialVerify
+        from harness.agents.outbound import (
+            OutboundWebhookDispatcher, parse_urls,
+        )
         from harness.server.llm.router import LLMRouter
         router_inst = LLMRouter()
         runner = AgentRunner(router=router_inst, repo=settings.project_root)
         verifier = AdversarialVerify(runner, judges=settings.subagent_judges)
+        # Phase 2.5: outbound dispatcher (singleton). Constructed
+        # eagerly at lifespan so the ``MergeQueue`` and
+        # ``WebhookHandler`` below can both inject it. Empty
+        # ``urls`` → outbound is a no-op (default behaviour, no
+        # network calls).
+        outbound = OutboundWebhookDispatcher(
+            urls=parse_urls(settings.outbound_webhook_urls),
+            token=settings.outbound_webhook_token,
+            timeout_s=settings.outbound_webhook_timeout_s,
+            max_retries=settings.outbound_webhook_max_retries,
+        )
+        app.state.outbound = outbound
+        if parse_urls(settings.outbound_webhook_urls):
+            print(
+                f"[harness] outbound: enabled "
+                f"({len(parse_urls(settings.outbound_webhook_urls))} url(s))"
+            )
+        else:
+            print("[harness] outbound: disabled (no urls configured)")
         merge_queue = MergeQueue(
             runner=runner, verifier=verifier, store=job_store,
+            outbound=outbound,
         )
         app.state.merge_queue = merge_queue
         # recover_running() at startup (Phase 2.1) — mark in-flight
@@ -123,6 +146,7 @@ async def lifespan(app: FastAPI):
             secret=settings.webhook_secret,
             merger=merge_pr,
             auto_merger=enable_auto_merge,
+            outbound=outbound,
         )
         # Log whether webhooks are enabled or not (without
         # leaking the secret itself).
@@ -147,7 +171,13 @@ async def lifespan(app: FastAPI):
     print(f"[harness] db_path: {settings.db_path}")
     print(f"[harness] project_root: {settings.project_root}")
     yield
-    # shutdown: nothing to clean up yet
+    # shutdown: close the outbound dispatcher's HTTP client.
+    # ``outbound`` may not exist if the runner init failed (in
+    # which case ``app.state.outbound`` was never set); guard
+    # with a default-attr lookup.
+    outbound = getattr(app.state, "outbound", None)
+    if outbound is not None:
+        await outbound.aclose()
 
 
 def create_app() -> FastAPI:

@@ -39,6 +39,7 @@ from typing import Any
 from uuid import uuid4
 
 from harness.agents.jobs import JobEvent, JobStore
+from harness.agents.outbound import OutboundWebhookDispatcher
 from harness.agents.pr_integration import (
     GHUnavailable,
     add_pr_label,
@@ -211,10 +212,19 @@ class MergeQueue:
         verifier: AdversarialVerify,
         *,
         store: JobStore | None = None,
+        outbound: OutboundWebhookDispatcher | None = None,
     ) -> None:
         self.runner = runner
         self.verifier = verifier
         self.store = store
+        # Phase 2.5: optional outbound webhook dispatcher. When
+        # set, every event passed to :meth:`_emit` is also routed
+        # through ``outbound.fire(...)`` (fire-and-forget). The
+        # dispatcher is a singleton owned by the FastAPI lifespan
+        # or the CLI dispatcher; the queue never ``await``s the
+        # delivery (so a slow / down receiver cannot stall a
+        # job's lifecycle).
+        self._outbound = outbound
         # Phase 2.2: per-repo lock registry. Two jobs in different
         # repos can now run in parallel; same-repo jobs still serialise.
         # ``self._lock`` is kept as a back-compat alias (a process-wide
@@ -371,6 +381,20 @@ class MergeQueue:
         q = self._live.get(job_id)
         if q is not None:
             await q.put(ev)
+        # Phase 2.5: fire outbound webhook for high-signal events.
+        # The dispatcher filters by ``kind`` itself; we just hand
+        # it the dict and let it decide. ``fire`` returns
+        # immediately (fire-and-forget), so this never blocks the
+        # job lifecycle.
+        if self._outbound is not None:
+            self._outbound.fire(
+                {
+                    "event": "job_event",
+                    "job_id": job_id,
+                    "kind": kind,
+                    **payload,
+                },
+            )
 
     async def _run_job_async(self, job: MergeJob, job_id: str) -> None:
         """Background-task body. Mirrors :meth:`_run_job` but emits events.
@@ -947,6 +971,18 @@ class MergeQueue:
                 timeout_s=settings.pr_wait_timeout_s,
                 env_var=settings.github_token_env,
             )
+            # Phase 2.5: signal that a human review is needed
+            # BEFORE we attempt to merge. The outbound dispatcher
+            # uses this to ping Slack / dashboard so an operator
+            # knows to look at the PR. (``wait_for_checks``
+            # already returned, so checks are green; the
+            # remaining blocker is reviewer approval.)
+            if status.review_decision == "review_required":
+                await self.store.update_status(job_id, "pr_waiting_review")
+                await self._emit(
+                    job_id, "pr_waiting_review",
+                    pr_url=created.url, pr_number=created.number,
+                )
         except asyncio.TimeoutError:
             await self.store.update_status(
                 job_id, "failed", finished=True,

@@ -333,11 +333,18 @@ class WebhookHandler:
         *,
         merger: Any = None,
         auto_merger: Any = None,
+        outbound: Any = None,
     ) -> None:
         self.store = store
         self.secret = secret
         self._merger = merger
         self._auto_merger = auto_merger
+        # Phase 2.5: optional outbound dispatcher. The webhook
+        # handler fires ``stack_merged`` events through it after
+        # promoting a parent orchestrator row. Default ``None``
+        # preserves the Phase 2.4 no-op (no outbound → handler
+        # only returns the promotion dict in the response).
+        self._outbound = outbound
 
     async def handle_raw(
         self,
@@ -500,6 +507,20 @@ class WebhookHandler:
         }
         if promoted_parent is not None:
             result["promoted_parent"] = promoted_parent
+            # Phase 2.5: notify outbound webhook subscribers.
+            # The dispatcher filters by ``kind`` (stack_merged is
+            # in OUTBOUND_EVENT_KINDS); we hand it the promotion
+            # dict and let it decide how to serialise.
+            if self._outbound is not None:
+                self._outbound.fire(
+                    {
+                        "event": "stack_merged",
+                        "job_id": promoted_parent.get("parent_job_id"),
+                        "kind": "stack_merged",
+                        "stack_id": promoted_parent.get("stack_id"),
+                        "children_count": promoted_parent.get("children_count"),
+                    },
+                )
         if not any_processed:
             # Preserve the original Phase 2.3 single-result shape
             # for callers that don't expect fan-out.
