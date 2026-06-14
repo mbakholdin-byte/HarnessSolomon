@@ -1,0 +1,192 @@
+/* Solomon Harness — Phase 0 minimal globals.
+   Dark theme, 2-column placeholder, no CSS framework. */
+
+:root {
+  --bg: #0d1117;
+  --bg-elev: #161b22;
+  --border: #30363d;
+  --fg: #e6edf3;
+  --fg-dim: #8b949e;
+  --accent: #58a6ff;
+  --accent-hover: #79b8ff;
+  --error: #f85149;
+  --ok: #3fb950;
+  --radius: 6px;
+  --gap: 16px;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
+    Arial, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--fg);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}
+
+button {
+  font: inherit;
+  cursor: pointer;
+  background: var(--bg-elev);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 12px;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+pre,
+code {
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+
+pre {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.app {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  height: 100%;
+}
+
+.app__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elev);
+}
+
+.app__title {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.app__subtitle {
+  font-size: 12px;
+  color: var(--fg-dim);
+  margin: 0;
+}
+
+.app__body {
+  display: grid;
+  grid-template-columns: 1fr 2fr;
+  gap: var(--gap);
+  padding: var(--gap);
+  overflow: hidden;
+}
+
+.panel {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.panel__title {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--fg-dim);
+  margin: 0;
+}
+
+.toolbar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.status {
+  font-size: 12px;
+  color: var(--fg-dim);
+}
+.status--ok {
+  color: var(--ok);
+}
+.status--err {
+  color: var(--error);
+}
+
+.model-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.model-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 13px;
+}
+.model-item__id {
+  font-family: var(--mono);
+}
+.model-item__tier {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: rgba(88, 166, 255, 0.15);
+  color: var(--accent);
+  margin-left: 8px;
+}
+.model-item__avail {
+  font-size: 11px;
+}
+.model-item__avail--yes {
+  color: var(--ok);
+}
+.model-item__avail--no {
+  color: var(--fg-dim);
+}
