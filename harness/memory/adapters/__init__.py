@@ -13,5 +13,6 @@ Adapters are intentionally thin — translation only. The high-level
 logic (dual-write, search routing) lives in ``harness.memory.unified``.
 """
 from harness.memory.adapters.hmem import HmemAdapter, VALID_PREFIXES
+from harness.memory.adapters.mem0 import Mem0Adapter
 
-__all__ = ["HmemAdapter", "VALID_PREFIXES"]
+__all__ = ["HmemAdapter", "VALID_PREFIXES", "Mem0Adapter"]
