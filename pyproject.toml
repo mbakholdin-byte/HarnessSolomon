@@ -72,6 +72,9 @@ Issues = "https://github.com/mark/solomon-harness/issues"
 [tool.hatch.build.targets.wheel]
 packages = ["harness"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"harness/agents/builtin" = "harness/agents/builtin"
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"

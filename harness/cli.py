@@ -32,14 +32,50 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_agents(_args: argparse.Namespace) -> int:
-    """Placeholder for the sub-agent CLI (Step 2 lands this)."""
+def _cmd_agents_list(_args: argparse.Namespace) -> int:
+    """List all available sub-agents (built-ins + project overrides)."""
+    from harness.agents.registry import all_specs, has_override, list_agents
+
+    project_root = settings.project_root
+    names = list_agents(project_root=project_root)
+    if not names:
+        print("(no sub-agents installed)", file=sys.stderr)
+        return 0
+    print(f"Available sub-agents (project root: {project_root}):")
+    for name in names:
+        marker = " (override)" if has_override(name, project_root=project_root) else ""
+        print(f"  - {name}{marker}")
+    # Show a short spec line per agent for the user.
+    specs = all_specs(project_root=project_root)
+    print()
+    for name in names:
+        s = specs.get(name)
+        if s is None:
+            continue
+        print(
+            f"  {name:8s}  model={s.model:20s}  perms={s.permissions:11s}  "
+            f"max_iter={s.max_iterations:2d}  tools={s.tools}"
+        )
+    return 0
+
+
+def _cmd_agents_run(args: argparse.Namespace) -> int:
+    """Run a sub-agent (Step 4+ lands the full implementation)."""
     print(
-        "Sub-agent CLI is not implemented yet. "
-        "It will arrive in Phase 2.0 Step 2 (built-in agents + registry).",
+        f"Sub-agent execution is not implemented yet (will land in Step 4). "
+        f"Would run {args.name!r} with prompt {args.prompt!r}.",
         file=sys.stderr,
     )
-    print("For now, start the server with: python -m harness", file=sys.stderr)
+    return 2
+
+
+def _cmd_agents(args: argparse.Namespace) -> int:
+    """Dispatch on ``agents`` sub-subcommand."""
+    if args.agents_command is None or args.agents_command == "list":
+        return _cmd_agents_list(args)
+    if args.agents_command == "run":
+        return _cmd_agents_run(args)
+    print(f"unknown agents subcommand: {args.agents_command!r}", file=sys.stderr)
     return 2
 
 
