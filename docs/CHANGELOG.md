@@ -1,6 +1,6 @@
 # Changelog — Solomon Harness
 
-## Phase 1.6 — Scope-gated API v1.0 (Steps 0-3 / 6, in progress, 2026-06-14)
+## Phase 1.6 — Scope-gated API v1.0 (Steps 0-4 / 6, in progress, 2026-06-14)
 
 ### Step 0 — Token store + scopes enum + settings (commit `eff5725`)
 
@@ -20,11 +20,17 @@
 |---|-----|-------|--------|
 | Step 2 | `harness/server/auth/route_registry.py` (NEW, ~110 LoC) — `EndpointSpec` dataclass + `collect_endpoints(app)` walks `app.routes`, finds `require_scope` deps via `_required_scopes` marker attribute; `harness/server/routes/capabilities.py` (NEW, ~70 LoC) — `GET /api/v1/capabilities` (public, returns server_version, auth_required, scopes_available, endpoints); `harness/server/routes/agents_jobs.py` — `Depends(_agents_read)` на всех 3 GET routes; `harness/server/app.py` — mount `capabilities_router` with `/api/v1` prefix | NEW: 2 файла, MODIFIED: `agents_jobs.py` + `app.py` + `tests/test_agents_api.py` (Phase 2.2 baseline fix), `tests/test_capabilities.py` (NEW, 9 tests) | 9 |
 
-### Step 3 — CLI `harness auth` subcommand + bootstrap (this commit)
+### Step 3 — CLI `harness auth` subcommand + bootstrap (commit `9567012`)
 
 | # | Что | Файлы | +Tests |
 |---|-----|-------|--------|
 | Step 3 | `harness/cli.py` — `auth` subparser (create/list/revoke/whoami/test), 5 handlers, `_dispatch_auth` runs bootstrap только для read-only commands, `_bootstrap_admin_token_if_needed` mints `bootstrap-admin` с ALL_SCOPES при `auth_required=True` И `len(list_active)==0`; `--bootstrap` flag для admin tokens; revoke supports hash (64 hex) OR label; `whoami` debug; `test` smoke against local server; **stdout reconfigure UTF-8** для Windows compat; **ASCII `...`** вместо `…` для subprocess piping | MODIFIED: `cli.py` +6 subparser + 5 handlers (~280 LoC), NEW: `tests/test_cli_auth.py` (~340 LoC, 18 tests) | 18 |
+
+### Step 4 — Memory + sessions v1 routes (this commit)
+
+| # | Что | Файлы | +Tests |
+|---|-----|-------|--------|
+| Step 4 | `harness/server/agent/memory_v1.py` (NEW, ~150 LoC) — bridge между `routes/memory_v1.py` и `UnifiedMemory`: `search()`, `write_note()`, `stats()` + lazy default слот; `harness/server/routes/memory_v1.py` (NEW, ~135 LoC) — `GET /api/v1/memory/search` (memory.read), `POST /api/v1/memory/notes` (memory.write), `GET /api/v1/memory/stats` (memory.read); `harness/server/routes/sessions_v1.py` (NEW, ~55 LoC) — `GET /api/v1/sessions?recent=N` (sessions.read, thin wrapper over `db_sqlite.list_sessions`); `harness/server/app.py` mount 2 новых router | NEW: 3 файла + `tests/test_memory_v1_routes.py` (~310 LoC, 15 tests) | 15 |
 
 **Settings added (Phase 1.6):**
 - `auth_db_path: Path` — `data/harness-scope.db` (sibling of `agent-jobs.db`)

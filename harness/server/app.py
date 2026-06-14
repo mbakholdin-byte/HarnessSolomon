@@ -127,6 +127,8 @@ def create_app() -> FastAPI:
     from harness.server.routes.chat import router as chat_router
     from harness.server.routes.agents_jobs import router as agents_jobs_router
     from harness.server.routes.capabilities import router as capabilities_router
+    from harness.server.routes.memory_v1 import router as memory_v1_router
+    from harness.server.routes.sessions_v1 import router as sessions_v1_router
 
     app.include_router(health_router, prefix="/api", tags=["health"])
     app.include_router(sessions_router, prefix="/api", tags=["sessions"])
@@ -137,10 +139,15 @@ def create_app() -> FastAPI:
     app.include_router(agents_jobs_router, prefix="/api/v1/agents", tags=["agents"])
     # Phase 1.6: capabilities discovery — always public so a client
     # with no token can still discover the server's auth surface.
-    # Mounted at /api/v1/capabilities (the router's internal path
-    # is just "/capabilities", so we add the /api/v1 prefix here).
     app.include_router(
         capabilities_router, prefix="/api/v1", tags=["capabilities"],
+    )
+    # Phase 1.6: memory + sessions v1 routes (scope-gated).
+    app.include_router(
+        memory_v1_router, prefix="/api/v1/memory", tags=["memory"],
+    )
+    app.include_router(
+        sessions_v1_router, prefix="/api/v1/sessions", tags=["sessions-v1"],
     )
 
     return app
