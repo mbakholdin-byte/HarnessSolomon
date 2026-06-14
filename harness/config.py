@@ -176,6 +176,49 @@ class Settings(BaseSettings):
         ),
     )
 
+    # === Scope-gated API (Phase 1.6) ===
+    auth_db_path: Path = Field(
+        default=PROJECT_ROOT / "data" / "harness-scope.db",
+        description=(
+            "SQLite path for the Phase 1.6 scope-gated API token store. "
+            "Lives one level above the sessions DB. Stores SHA-256 hashes "
+            "of tokens, never plaintext."
+        ),
+    )
+    auth_token_bytes: int = Field(
+        default=32,
+        ge=16,
+        le=64,
+        description=(
+            "Number of random bytes used to generate a new token's "
+            "plaintext (returned once at creation time, then discarded). "
+            "32 bytes = 256 bits = 64 hex chars, well above OWASP "
+            "minimums for a server-issued opaque token."
+        ),
+    )
+    auth_default_scopes: str = Field(
+        default="",
+        description=(
+            "Comma-separated scope names applied to tokens created via "
+            "the CLI when ``--scopes`` is not explicitly passed. Empty "
+            "string = no scopes (caller must specify). Ignored when the "
+            "bootstrap admin token is generated — bootstrap always gets "
+            "ALL_SCOPES."
+        ),
+    )
+    auth_required: bool = Field(
+        default=True,
+        description=(
+            "Master switch for the scope-gated API. When True, all "
+            "``/api/v1/*`` routes require a valid Bearer token with the "
+            "appropriate scope; ``/api/v1/capabilities`` remains public. "
+            "When False, the server runs in 'open dev mode' (no auth "
+            "checks, useful for local development and the test suite). "
+            "Legacy ``/api/*`` routes (sessions, chat, models, health) "
+            "are always open in Phase 1.6 regardless of this setting."
+        ),
+    )
+
     @model_validator(mode="after")
     def _cascade_thresholds_ordered(self) -> "Settings":
         """Guard against a misconfigured cascade: low must be strictly below high.

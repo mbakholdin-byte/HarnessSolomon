@@ -56,7 +56,8 @@ def isolated_settings(
     """Point all settings paths at a fresh tmp dir and reset the DB.
 
     Yields the dict of paths actually used so tests can read/write
-    ``project_root``, ``session_dir`` and ``db_path`` as needed.
+    ``project_root``, ``session_dir``, ``db_path`` and (Phase 1.6)
+    ``auth_db_path`` as needed.
     """
     data_dir = tmp_path / "harness-data"
     project_root = tmp_path / "project-root"
@@ -66,10 +67,18 @@ def isolated_settings(
         "project_root": project_root,
         "session_dir": data_dir / "sessions",
         "db_path": data_dir / "harness.db",
+        "auth_db_path": data_dir / "harness-scope.db",
     }
     monkeypatch.setattr(settings, "session_dir", paths["session_dir"])
     monkeypatch.setattr(settings, "db_path", paths["db_path"])
     monkeypatch.setattr(settings, "project_root", paths["project_root"])
+    # Phase 1.6: the auth token store lives in its own DB at a
+    # sibling path. Re-point it at the tmp dir so the store is
+    # rebuilt per-test, then reset the init flag so init_auth_db
+    # actually runs against the new path.
+    monkeypatch.setattr(settings, "auth_db_path", paths["auth_db_path"])
+    from harness.server.auth import db as auth_db
+    auth_db._reset_init_flag()
     # Force the DB layer to re-init under the new path.
     db_sqlite._db_initialized = False
     return paths
@@ -108,6 +117,38 @@ async def session_id(client: AsyncClient) -> str:
     )
     assert r.status_code == 201, r.text
     return r.json()["id"]
+
+
+# ---------------------------------------------------------------------------
+# Phase 1.6 — auth token store + token factory
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+async def auth_store(isolated_settings: dict[str, Path]):
+    """A :class:`TokenStore` pointed at the tmp auth DB.
+
+    Initialised in place (the lifespan does the same thing for
+    production). Returns the store object so tests can call
+    ``create()`` / ``lookup()`` / ``revoke()`` directly.
+    """
+    from harness.server.auth.tokens import TokenStore
+    store = TokenStore(isolated_settings["auth_db_path"])
+    await store.init()
+    return store
+
+
+@pytest.fixture
+def make_token(auth_store):
+    """Factory: ``await make_token(label, scopes)`` -> ``(plaintext, record)``.
+
+    The factory captures ``auth_store`` via closure so test code
+    reads as a single line::
+
+        plaintext, record = await make_token("my-test", {Scope.AGENTS_READ})
+    """
+    async def _factory(label: str, scopes: set | None = None):
+        return await auth_store.create(label, scopes)
+    return _factory
 
 
 # ---------------------------------------------------------------------------

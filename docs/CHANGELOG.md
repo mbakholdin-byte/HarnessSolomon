@@ -1,5 +1,38 @@
 # Changelog — Solomon Harness
 
+## Phase 1.6 — Scope-gated API v1.0 (Step 0 / 6, in progress, 2026-06-14)
+
+### Step 0 — Token store + scopes enum + settings (this commit)
+
+| # | Что | Файлы | +Tests |
+|---|-----|-------|--------|
+| Step 0 | `harness/server/auth/{__init__,scopes,tokens,db}.py` — `Scope` enum (6 значений), `parse_scopes` / `has_scope` / `format_scopes`, `TokenStore` (aiosqlite, SHA-256 hashed), `TokenRecord` (frozen dataclass) | NEW: 4 файла (~360 LoC), `harness/config.py` +4 settings, `harness/server/app.py` lifespan wiring, `tests/conftest.py` `auth_store` + `make_token` fixtures, `tests/test_token_store.py` (NEW, ~190 LoC) | 8 (scopes) + 6 (token store) = 14 |
+
+**Settings added (Phase 1.6):**
+- `auth_db_path: Path` — `data/harness-scope.db` (sibling of `agent-jobs.db`)
+- `auth_token_bytes: int = 32` — 256 bits of entropy
+- `auth_default_scopes: str = ""` — CLI fallback when `--scopes` is omitted
+- `auth_required: bool = True` — master switch (dev mode = False)
+
+**Scope enum (6 значений):**
+- `agents.read`, `agents.write`, `agents.pr` (Phase 2.3+ routes)
+- `memory.read`, `memory.write`
+- `sessions.read`
+
+**Architecture decisions (Step 0):**
+- **SQLite aiosqlite store** — persistent, multi-tenant, no new deps (aiosqlite уже в Phase 0)
+- **SHA-256 хэш, не bcrypt/argon2** — у нас opaque tokens с 256 бит энтропии (32 random bytes), pre-image resistance не нужна; SHA-256 fixed 64-char column → tight indexes; fast `lookup()` (важно для per-request auth check)
+- **`secrets.token_urlsafe(32)`** — 43-char URL-safe plaintext (без padding); default `auth_token_bytes=32` = 256 bits
+- **Plaintext shown ONCE** — at `create()` time; never persisted, never logged, never returned by `list_active()`
+- **`has_scope` = ANY match** — token со scope A может вызвать endpoint, требующий A OR B; "kitchen sink" semantics избегаем
+- **`_reset_init_flag()` test helper** — needed because the init flag is process-level (path-keyed init добавляет сложности для unit-тестов)
+- **`auth_required` master switch** — позволяет test suite + dev mode работать **без** токенов; `auth_required=True` в prod
+- **Default `auth_default_scopes=""`** — empty token requires explicit `--scopes`; `bootstrap-admin` token (Step 3) — единственный путь к ALL_SCOPES
+
+**Out of scope (Step 0):** FastAPI deps (Step 1), `GET /api/v1/capabilities` (Step 2), `harness auth` CLI (Step 3), `memory_v1` + `sessions_v1` routes (Step 4), `POST /api/v1/agents/jobs` (Step 5).
+
+**Tag at end of Phase 1.6:** v0.6.0
+
 ## Phase 2.2 — Sub-agents v1.2: GitHub PR + parallel cross-repo queue (ЗАКРЫТО v0.5.0, 2026-06-14)
 
 ### 5 шагов / 5 коммитов за ~2.5 часа (post-Phase 2.1, единая сессия)

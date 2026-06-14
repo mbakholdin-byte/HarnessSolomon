@@ -4,6 +4,11 @@ Phase 0: Web MVP. Cloud-only LLM providers, 6 tools, WebSocket chat.
 Phase 2.2: lifespan-level JobStore + MergeQueue singleton + the
 ``/api/v1/agents/jobs/...`` routes (see
 :mod:`harness.server.routes.agents_jobs`).
+Phase 1.6: scope-gated API — the ``TokenStore`` is initialised at
+lifespan and exposed via ``app.state.token_store``. The
+``app.state.auth_required`` flag mirrors ``settings.auth_required``
+and lets the dependency layer short-circuit auth in dev mode
+(``auth_required=False``).
 """
 from __future__ import annotations
 
@@ -69,6 +74,23 @@ async def lifespan(app: FastAPI):
         print(f"[harness] merge_queue disabled (init failed: {type(e).__name__}: {e})")
         app.state.merge_queue = None
 
+    # Phase 1.6: scope-gated API — initialise the auth token store.
+    # The store lives at <db_path.parent>/harness-scope.db (sibling
+    # of agent-jobs.db). Initialisation is idempotent (CREATE TABLE
+    # IF NOT EXISTS), and we always succeed — there is no external
+    # dependency to fail on. The ``auth_required`` flag is stashed
+    # on ``app.state`` so the FastAPI dependency layer can read it
+    # in O(1) without re-resolving settings on every request.
+    from harness.server.auth.tokens import TokenStore
+    token_store = TokenStore(settings.auth_db_path)
+    await token_store.init()
+    app.state.token_store = token_store
+    app.state.auth_required = settings.auth_required
+    print(
+        f"[harness] token_store: {token_store.db_path} "
+        f"(auth_required={settings.auth_required})"
+    )
+
     print(f"[harness] session_dir: {settings.session_dir}")
     print(f"[harness] db_path: {settings.db_path}")
     print(f"[harness] project_root: {settings.project_root}")
@@ -80,10 +102,11 @@ def create_app() -> FastAPI:
     """Build FastAPI app with middleware and routers."""
     app = FastAPI(
         title="Solomon Harness",
-        version="0.5.0",
+        version="0.6.0",
         description=(
             "Open-source agentic shell — Web MVP (Phase 0) + "
-            "sub-agent system (Phase 2.0+2.1) + GitHub PR integration (Phase 2.2)"
+            "sub-agent system (Phase 2.0+2.1) + GitHub PR integration (Phase 2.2) "
+            "+ scope-gated API (Phase 1.6)"
         ),
         lifespan=lifespan,
     )
