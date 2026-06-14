@@ -37,6 +37,13 @@ from pathlib import Path
 from typing import Any
 
 from harness.agents.jobs import JobEvent, JobStore
+from harness.agents.pr_integration import (
+    GHUnavailable,
+    create_pr,
+    get_pr_status,
+    merge_pr,
+    wait_for_checks,
+)
 from harness.agents.repo_locks import RepoLockRegistry
 from harness.agents.runner import AgentRunner
 from harness.agents.spec import AgentSpec
@@ -78,6 +85,19 @@ class MergeJob:
     model_t1: str | None = None
     model_t2: str | None = None
     model_t3: str | None = None
+    # === Phase 2.2: PR integration ===
+    #: ``"off"`` (default, local ff-merge), ``"draft"`` (open draft
+    #: PR), or ``"ready"`` (open ready-for-review PR). See
+    #: :class:`~harness.agents.pr_integration` for the full lifecycle.
+    pr_mode: str = "off"
+    #: Target branch the PR is opened against. ``None`` defaults to
+    #: ``settings.pr_default_target_branch`` (``"main"``).
+    pr_target_branch: str | None = None
+    #: Optional per-job repo override. When ``None``, the queue uses
+    #: ``self.runner.repo`` (Phase 2.1 single-repo behaviour). When
+    #: set, the queue uses this path for the worktree + the cross-repo
+    #: lock registry. This is the lever for cross-repo parallelism.
+    repo_override: Path | None = None
 
 
 @dataclass
@@ -92,6 +112,18 @@ class MergeResult:
     cost: float = 0.0
     error: str | None = None
     timeout: bool = False
+    # === Phase 2.2: PR integration ===
+    #: PR URL (e.g. ``https://github.com/owner/repo/pull/12``). Set
+    #: when ``pr_mode != "off"`` and the PR was opened. ``None`` for
+    #: local-only merges.
+    pr_url: str | None = None
+    #: PR number extracted from the URL. ``None`` if no PR yet.
+    pr_number: int | None = None
+    #: True when ``pr_mode != "off"`` but ``gh`` was unavailable and
+    #: the queue fell back to a local ff-merge (``pr_strategy="auto"``
+    #: only). Lets callers tell apart "merged via PR" from "merged
+    #: locally after PR was requested but skipped".
+    pr_skipped: bool = False
 
 
 class MergeQueue:
@@ -152,14 +184,14 @@ class MergeQueue:
             return await self._run_job(job)
 
     def _job_repo(self, job: MergeJob) -> Path:
-        """Resolve the repo a job targets. Phase 2.2 Step 3 will
-        extend ``MergeJob`` with ``repo_override``; this helper
-        isolates that change so we can wire per-repo locking now
-        without changing the dataclass.
+        """Resolve the repo a job targets.
+
+        Phase 2.2: prefers ``job.repo_override`` (per-job override,
+        enables cross-repo parallelism via the lock registry) and
+        falls back to ``self.runner.repo`` (Phase 2.1 single-repo
+        behaviour).
         """
-        # Phase 2.1: only ``self.runner.repo`` exists. Phase 2.2 Step 3
-        # will read ``job.repo_override`` first.
-        return self.runner.repo
+        return job.repo_override or self.runner.repo
 
     # === Background mode (Phase 2.1) ===
 
@@ -186,6 +218,9 @@ class MergeQueue:
             model=job.model or job.code_spec.model,
             prompt=job.task[:500],   # truncate for DB display
             status="queued",
+            repo=str(self._job_repo(job)),
+            pr_mode=job.pr_mode,
+            target_branch=job.pr_target_branch or settings.pr_default_target_branch,
         )
         # Live event queue (consumed by ``subscribe``).
         self._live[job_id] = asyncio.Queue()
@@ -377,9 +412,50 @@ class MergeQueue:
                     await self._emit(job_id, "failed", reason="verify rejected")
                     return
 
-                # 5. Fast-forward merge.
+                # 5. PR phase OR local ff-merge.
+                # Phase 2.2: branch on ``pr_mode``. Default = local
+                # ff-merge (Phase 2.1). With ``pr_mode in ("draft",
+                # "ready")``, run the full PR lifecycle via
+                # ``_run_pr_phase`` (open PR, wait for checks, merge).
+                repo = self._job_repo(job)
+                if job.pr_mode in ("draft", "ready"):
+                    pr_result = await self._run_pr_phase(
+                        job, job_id, repo, wt.branch,
+                        cost_so_far=code_result.total_cost + review_result.total_cost,
+                    )
+                    if pr_result is None:
+                        # PR phase did its own store + emit + return;
+                        # do NOT continue to the local-ff-merge path.
+                        return
+                    # ``pr_result`` is a (merged, pr_url, pr_number, pr_skipped) tuple
+                    pr_merged, pr_url, pr_number, pr_skipped = pr_result
+                    if not pr_merged:
+                        # PR phase already updated the store + emitted the
+                        # appropriate "failed" / "pr_skipped" event.
+                        return
+                    # PR merged successfully (via gh pr merge).
+                    try:
+                        await worktree_ctx.__aexit__(None, None, None)
+                    except Exception:
+                        pass
+                    try:
+                        await worktree_ctx.delete_branch()
+                    except Exception:
+                        pass
+                    await self.store.update_status(
+                        job_id, "merged", finished=True,
+                        cost=code_result.total_cost + review_result.total_cost,
+                        pr_url=pr_url, pr_number=pr_number,
+                    )
+                    await self._emit(
+                        job_id, "merged",
+                        pr_url=pr_url, pr_number=pr_number,
+                    )
+                    return
+
+                # 5b. Local fast-forward merge (Phase 2.1 path, pr_mode="off").
                 try:
-                    await self._ff_merge(self.runner.repo, wt.branch)
+                    await self._ff_merge(repo, wt.branch)
                 except Exception as e:
                     await self.store.update_status(
                         job_id, "failed", finished=True,
@@ -422,6 +498,20 @@ class MergeQueue:
                 self._live.pop(job_id, None)
 
     async def _run_job(self, job: MergeJob) -> MergeResult:
+        # Phase 2.2: PR mode requires the async background path (so
+        # we can ``await`` PR lifecycle events, poll CI, etc.). The
+        # sync path is for fast local-ff-merge only; with PR mode it
+        # returns a clear "use --background" error.
+        if job.pr_mode != "off":
+            return MergeResult(
+                merged=False, reason="pr mode requires --background",
+                worktree_preserved=False,
+                error=(
+                    f"pr_mode={job.pr_mode!r} is only supported via "
+                    "MergeQueue.enqueue_async; use the CLI --background flag"
+                ),
+            )
+
         # 1. Open the worktree.
         try:
             worktree_ctx = WorktreeSession(self.runner.repo, worktree_id=job.worktree_id)
@@ -573,6 +663,218 @@ class MergeQueue:
             return await asyncio.wait_for(coro, timeout=settings.subagent_timeout_s)
         except (asyncio.TimeoutError, _Timeout):
             raise _Timeout() from None
+
+    async def _run_pr_phase(
+        self,
+        job: MergeJob,
+        job_id: str,
+        repo: Path,
+        head_branch: str,
+        *,
+        cost_so_far: float,
+    ) -> tuple[bool, str | None, int | None, bool] | None:
+        """Run the GitHub PR lifecycle for a job with ``pr_mode != "off"``.
+
+        Lifecycle (Phase 2.2):
+            pr_creating -> create_pr() -> pr_open
+            -> pr_waiting_checks -> wait_for_checks()
+            -> (pr_waiting_review if review_required)
+            -> merging_pr -> merge_pr() -> merged
+
+        On ``GHUnavailable`` (gh missing or not authenticated):
+          - ``pr_strategy="auto"``: emit ``pr_skipped`` event, log a
+            warning, and fall back to a local ``_ff_merge``. The
+            caller's branch in ``_run_job_async`` continues with the
+            normal local-merge cleanup. We return ``(True, None,
+            None, True)`` where ``pr_skipped=True`` signals the
+            caller to update status as ``merged`` (not ``pr_merged``).
+          - ``pr_strategy="strict"``: emit ``pr_failed`` event, mark
+            the job ``failed`` with the ``GHUnavailable`` message,
+            preserve the worktree for human inspection. Return
+            ``(False, None, None, False)``.
+
+        On any other failure (PR create fails, checks timeout, merge
+        is rejected): mark the job ``failed`` with a descriptive
+        error, preserve the worktree, and return ``(False, ...)``.
+
+        Returns:
+            ``None`` if the PR phase is not applicable (i.e. an
+            earlier failure short-circuited the lifecycle — currently
+            not used, but reserved for future expansion).
+            Otherwise a 4-tuple ``(merged, pr_url, pr_number,
+            pr_skipped)``. ``pr_skipped=True`` means the queue fell
+            back to a local merge (auto-strategy).
+        """
+        target_branch = job.pr_target_branch or settings.pr_default_target_branch
+        title = f"harness: {job.task[:80]}"  # truncate to 80 chars for the title
+        body = (
+            f"Auto-generated by Solomon Harness merge queue.\n\n"
+            f"**Task:** {job.task}\n\n"
+            f"**Worktree:** `{head_branch}`\n"
+        )
+
+        # === 1. Create the PR ===
+        try:
+            await self.store.update_status(job_id, "pr_creating")
+            await self._emit(job_id, "pr_creating", target=target_branch)
+            created = await create_pr(
+                repo=repo, head_branch=head_branch, base_branch=target_branch,
+                title=title, body=body, draft=(job.pr_mode == "draft"),
+                env_var=settings.github_token_env,
+            )
+        except GHUnavailable as e:
+            if settings.pr_strategy == "auto":
+                logger.warning(
+                    "gh unavailable for job %s, falling back to local merge: %s "
+                    "(hint: %s)", job_id, e, e.hint,
+                )
+                await self._emit(
+                    job_id, "pr_skipped",
+                    reason="gh unavailable", hint=e.hint,
+                )
+                # Local fallback: do the ff-merge right here. The
+                # caller in ``_run_job_async`` will see the tuple and
+                # NOT proceed to the local-ff-merge again (we return
+                # ``merged=True`` with ``pr_skipped=True``).
+                try:
+                    await self._ff_merge(repo, head_branch)
+                except Exception as merge_err:
+                    await self.store.update_status(
+                        job_id, "failed", finished=True,
+                        cost=cost_so_far,
+                        error=(
+                            f"gh unavailable and local fallback merge failed: "
+                            f"{merge_err}"
+                        ),
+                    )
+                    await self._emit(
+                        job_id, "failed", reason="local fallback merge failed",
+                    )
+                    return (False, None, None, True)
+                return (True, None, None, True)
+            # strict: PR is required; treat as failure.
+            await self.store.update_status(
+                job_id, "failed", finished=True,
+                cost=cost_so_far, error=f"gh unavailable: {e} (hint: {e.hint})",
+            )
+            await self._emit(job_id, "failed", reason="gh unavailable")
+            return (False, None, None, False)
+        except Exception as e:
+            # PR create itself failed (network, auth, repo state, etc.)
+            await self.store.update_status(
+                job_id, "failed", finished=True,
+                cost=cost_so_far, error=f"gh pr create failed: {e}",
+            )
+            await self._emit(job_id, "failed", reason="pr create failed")
+            return (False, None, None, False)
+
+        # PR created successfully.
+        await self.store.update_status(
+            job_id, "pr_open", pr_url=created.url, pr_number=created.number,
+        )
+        await self._emit(
+            job_id, "pr_open",
+            url=created.url, number=created.number,
+        )
+
+        # === 2. Wait for CI checks + review ===
+        try:
+            await self.store.update_status(job_id, "pr_waiting_checks")
+            await self._emit(job_id, "pr_waiting_checks", pr_number=created.number)
+            status = await wait_for_checks(
+                repo=repo, pr_number=created.number,
+                poll_s=settings.pr_poll_interval_s,
+                timeout_s=settings.pr_wait_timeout_s,
+                env_var=settings.github_token_env,
+            )
+        except asyncio.TimeoutError:
+            await self.store.update_status(
+                job_id, "failed", finished=True,
+                cost=cost_so_far,
+                pr_url=created.url, pr_number=created.number,
+                error=(
+                    f"PR checks timed out after {settings.pr_wait_timeout_s}s"
+                ),
+            )
+            await self._emit(
+                job_id, "failed",
+                reason="pr checks timeout",
+                pr_url=created.url,
+            )
+            return (False, created.url, created.number, False)
+        except Exception as e:
+            await self.store.update_status(
+                job_id, "failed", finished=True,
+                cost=cost_so_far,
+                pr_url=created.url, pr_number=created.number,
+                error=f"PR wait failed: {e}",
+            )
+            await self._emit(job_id, "failed", reason="pr wait failed")
+            return (False, created.url, created.number, False)
+
+        # Inspect the final status.
+        if status.review_decision == "changes_requested":
+            await self.store.update_status(
+                job_id, "failed", finished=True,
+                cost=cost_so_far,
+                pr_url=created.url, pr_number=created.number,
+                error="PR review requested changes",
+            )
+            await self._emit(
+                job_id, "failed", reason="review changes requested",
+                pr_url=created.url,
+            )
+            return (False, created.url, created.number, False)
+        if status.checks_state == "failure":
+            await self.store.update_status(
+                job_id, "failed", finished=True,
+                cost=cost_so_far,
+                pr_url=created.url, pr_number=created.number,
+                error="PR CI checks failed",
+            )
+            await self._emit(
+                job_id, "failed", reason="pr checks failed",
+                pr_url=created.url,
+            )
+            return (False, created.url, created.number, False)
+        if status.merged or status.state == "merged":
+            # Someone merged it out-of-band; we're done.
+            await self.store.update_status(
+                job_id, "merged", finished=True,
+                cost=cost_so_far,
+                pr_url=created.url, pr_number=created.number,
+            )
+            await self._emit(
+                job_id, "merged", reason="merged out-of-band",
+                pr_url=created.url,
+            )
+            return (True, created.url, created.number, False)
+
+        # === 3. Merge the PR ===
+        try:
+            await self.store.update_status(job_id, "merging_pr")
+            await self._emit(job_id, "merging_pr", pr_number=created.number)
+            result = await merge_pr(
+                repo=repo, pr_number=created.number,
+                squash=(job.pr_mode == "draft"),
+                delete_branch=True,
+                env_var=settings.github_token_env,
+            )
+        except Exception as e:
+            await self.store.update_status(
+                job_id, "failed", finished=True,
+                cost=cost_so_far,
+                pr_url=created.url, pr_number=created.number,
+                error=f"gh pr merge failed: {e}",
+            )
+            await self._emit(
+                job_id, "failed", reason="pr merge failed",
+                pr_url=created.url,
+            )
+            return (False, created.url, created.number, False)
+
+        # PR merged successfully.
+        return (True, created.url, created.number, False)
 
     async def _ff_merge(self, repo: Path, branch: str) -> None:
         """``git merge --ff-only <branch>`` inside ``repo``.
