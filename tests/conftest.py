@@ -129,6 +129,56 @@ def ws_client(
 
 
 # ---------------------------------------------------------------------------
+# Git repo (used by Phase 2.0 worktree / merge-queue tests)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def git_repo(tmp_path: Path) -> Path:
+    """A throwaway git repository with one initial commit on ``main``.
+
+    Initialised with ``git init -b main``, a configured user, a single
+    ``README.md`` and a commit. Returns the repo directory. Each test
+    gets its own repo under ``tmp_path``, so tests can run in parallel
+    without colliding on ``.harness/worktrees/`` paths.
+    """
+    import subprocess
+
+    repo = tmp_path / "repo"
+    repo.mkdir(parents=True, exist_ok=True)
+
+    def _git(*args: str, check: bool = True) -> str:
+        proc = subprocess.run(
+            ["git", *args],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            check=check,
+        )
+        return proc.stdout
+
+    _git("init", "-b", "main")
+    _git("config", "user.email", "test@harness.local")
+    _git("config", "user.name", "Harness Test")
+    (repo / "README.md").write_text("# test repo\n", encoding="utf-8")
+    _git("add", ".")
+    _git("commit", "-m", "initial commit")
+    return repo
+
+
+@pytest.fixture
+def agents_dir(tmp_path: Path) -> Path:
+    """An empty ``.harness/agents/`` directory under a fresh project root.
+
+    Returns the ``agents/`` directory itself (suitable for passing as
+    ``project_root / '.harness' / 'agents'`` to the registry). The
+    parent project root is at ``tmp_path / 'project'``.
+    """
+    d = tmp_path / "project" / ".harness" / "agents"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+# ---------------------------------------------------------------------------
 # Real LLM marker — auto-skip when no API key is set
 # ---------------------------------------------------------------------------
 
