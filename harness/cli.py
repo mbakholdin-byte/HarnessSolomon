@@ -15,9 +15,22 @@ from __future__ import annotations
 import argparse
 import sys
 
-import uvicorn
+# Phase 1.6: ensure UTF-8 stdout on Windows. The default
+# encoding is cp1251 in some Russian Windows installs, which
+# would mangle the ``...`` ellipsis in our table output. We
+# reconfigure lazily (the attribute may not exist on older
+# Python, hence the guard).
+for _stream in (sys.stdout, sys.stderr):
+    reconfigure = getattr(_stream, "reconfigure", None)
+    if reconfigure is not None:
+        try:
+            reconfigure(encoding="utf-8")
+        except Exception:  # noqa: BLE001 — non-TTY streams may refuse
+            pass
 
-from harness.config import settings
+import uvicorn  # noqa: E402  (import after stdout reconfigure)
+
+from harness.config import settings  # noqa: E402
 
 
 def _cmd_serve(args: argparse.Namespace) -> int:
@@ -277,6 +290,288 @@ def _cmd_agents(args: argparse.Namespace) -> int:
     return 2
 
 
+# === Phase 1.6: scope-gated API auth subcommand ===
+
+async def _bootstrap_admin_token_if_needed(store) -> None:
+    """Mint a bootstrap-admin token if no active token exists.
+
+    The bootstrap path runs at every CLI invocation that touches
+    the auth store (read-only commands only — see
+    :func:`_dispatch_auth`). It is a no-op when at least one
+    non-revoked token already exists, so manual revokes don't
+    trigger re-bootstrap. The bootstrap token always gets
+    ALL_SCOPES and is labelled ``bootstrap-admin``.
+    """
+    from harness.server.auth.scopes import ALL_SCOPES
+    if await store.has_any_active():
+        return
+    plaintext, _ = await store.create("bootstrap-admin", scopes=set(ALL_SCOPES))
+    print(
+        f"[harness] bootstrap-admin token created (label=bootstrap-admin).",
+        file=sys.stderr,
+    )
+    print(
+        f"[harness] SAVE THIS — it will not be shown again:\n  {plaintext}",
+        file=sys.stderr,
+    )
+    print(
+        f"[harness] verify with: harness auth test {plaintext}",
+        file=sys.stderr,
+    )
+
+
+def _cmd_auth_create(args: argparse.Namespace) -> int:
+    """``harness auth create --label L --scopes S`` → print token ONCE."""
+    import asyncio
+    from harness.server.auth.scopes import ALL_SCOPES, Scope, format_scopes, parse_scopes
+    from harness.server.auth.tokens import TokenStore
+
+    async def _run() -> int:
+        store = TokenStore(settings.auth_db_path)
+        await store.init()
+        if args.bootstrap:
+            scopes: set[Scope] = set(ALL_SCOPES)
+        elif args.scopes is not None:
+            try:
+                scopes = parse_scopes(args.scopes)
+            except ValueError as e:
+                print(f"error: {e}", file=sys.stderr)
+                return 2
+        else:
+            try:
+                scopes = parse_scopes(settings.auth_default_scopes)
+            except ValueError as e:
+                print(f"error: {e}", file=sys.stderr)
+                return 2
+        if not scopes:
+            print(
+                "error: no scopes specified (use --scopes, --bootstrap, "
+                "or set settings.auth_default_scopes)",
+                file=sys.stderr,
+            )
+            return 2
+        plaintext, record = await store.create(args.label, scopes)
+        # Parseable stdout format — easy to grep from a script.
+        print(f"token={plaintext}")
+        print(f"label={record.label}")
+        # Use format_scopes so the ``*`` shorthand is rendered for
+        # the ALL_SCOPES case (matches `harness auth list` output).
+        print(f"scopes={format_scopes(scopes)}")
+        print(
+            "WARNING: this is the only time the plaintext will be shown. "
+            "Store it in a password manager or env var.",
+            file=sys.stderr,
+        )
+        return 0
+
+    return asyncio.run(_run())
+
+
+def _cmd_auth_list(_args: argparse.Namespace) -> int:
+    """``harness auth list`` → table of active tokens."""
+    import asyncio
+    from harness.server.auth.scopes import format_scopes
+    from harness.server.auth.tokens import TokenStore
+
+    async def _run() -> int:
+        store = TokenStore(settings.auth_db_path)
+        await store.init()
+        records = await store.list_active()
+        if not records:
+            print("(no active tokens)", file=sys.stderr)
+            return 0
+        label_w = max(len("label"), max(len(r.label) for r in records))
+        scopes_w = max(
+            len("scopes"),
+            max(len(format_scopes(r.scopes)) for r in records),
+        )
+        print(
+            f"{'label':{label_w}s}  {'scopes':{scopes_w}s}  "
+            f"{'created_at':19s}  {'last_used_at':19s}  hash"
+        )
+        print("-" * (label_w + scopes_w + 19 * 2 + 100))
+        for r in records:
+            last_used = (
+                r.last_used_at.isoformat() if r.last_used_at else "(never)"
+            )
+            created = (
+                r.created_at.isoformat() if r.created_at else "?"
+            )
+            print(
+                f"{r.label:{label_w}s}  "
+                f"{format_scopes(r.scopes):{scopes_w}s}  "
+                f"{created:19s}  "
+                f"{last_used:19s}  "
+                f"{r.token_hash[:12]}..."
+            )
+        return 0
+
+    return asyncio.run(_run())
+
+
+def _cmd_auth_revoke(args: argparse.Namespace) -> int:
+    """``harness auth revoke <hash-or-label>`` → mark revoked.
+
+    Accepts a 64-char token_hash or a label. The label form is
+    for one-off revokes; the hash form is the programmatic
+    path (no ambiguity when labels collide).
+    """
+    import asyncio
+    from harness.server.auth.tokens import TokenStore
+
+    async def _run() -> int:
+        store = TokenStore(settings.auth_db_path)
+        await store.init()
+        target = args.target.strip()
+        is_hash = (
+            len(target) == 64
+            and all(c in "0123456789abcdef" for c in target.lower())
+        )
+        if is_hash:
+            ok = await store.revoke(target)
+            if ok:
+                print(f"revoked: {target[:12]}...")
+                return 0
+            print(
+                f"error: no active token with hash {target[:12]}...",
+                file=sys.stderr,
+            )
+            return 1
+        # Label path.
+        records = await store.list_active()
+        matches = [r for r in records if r.label == target]
+        if not matches:
+            print(
+                f"error: no active token with label {target!r}",
+                file=sys.stderr,
+            )
+            return 1
+        if len(matches) > 1:
+            print(
+                f"error: multiple active tokens with label {target!r} "
+                f"({len(matches)} found) — revoke by hash to disambiguate",
+                file=sys.stderr,
+            )
+            return 1
+        ok = await store.revoke(matches[0].token_hash)
+        if ok:
+            print(
+                f"revoked: {target} ({matches[0].token_hash[:12]}...)"
+            )
+            return 0
+        print(
+            f"error: token {target!r} was already revoked (race?)",
+            file=sys.stderr,
+        )
+        return 1
+
+    return asyncio.run(_run())
+
+
+def _cmd_auth_whoami(args: argparse.Namespace) -> int:
+    """``harness auth whoami <plaintext>`` → show scopes + metadata."""
+    import asyncio
+    from harness.server.auth.scopes import format_scopes
+    from harness.server.auth.tokens import TokenStore
+
+    async def _run() -> int:
+        store = TokenStore(settings.auth_db_path)
+        await store.init()
+        record = await store.lookup(args.plaintext)
+        if record is None:
+            print("error: invalid or revoked token", file=sys.stderr)
+            return 1
+        print(f"label        : {record.label}")
+        print(f"scopes       : {format_scopes(record.scopes)}")
+        print(f"hash         : {record.token_hash}")
+        print(
+            f"created_at   : "
+            f"{record.created_at.isoformat() if record.created_at else '?'}"
+        )
+        print(
+            f"last_used_at : "
+            f"{record.last_used_at.isoformat() if record.last_used_at else '(never)'}"
+        )
+        print(
+            f"revoked_at   : "
+            f"{record.revoked_at.isoformat() if record.revoked_at else '(active)'}"
+        )
+        return 0
+
+    return asyncio.run(_run())
+
+
+def _cmd_auth_test(args: argparse.Namespace) -> int:
+    """``harness auth test <plaintext>`` → smoke test the token.
+
+    Calls ``GET /api/v1/capabilities`` on the local server with
+    the supplied token. Useful for CI smoke tests and operator
+    debugging. Exits 0 on 200, 1 on any error.
+    """
+    import urllib.error
+    import urllib.request
+
+    url = args.base_url.rstrip("/") + "/api/v1/capabilities"
+    req = urllib.request.Request(
+        url,
+        headers={"Authorization": f"Bearer {args.plaintext}"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            if resp.status == 200:
+                print(f"ok: {url} -> 200")
+                return 0
+            body = resp.read().decode("utf-8")
+            print(
+                f"error: {url} -> {resp.status} {body}",
+                file=sys.stderr,
+            )
+            return 1
+    except urllib.error.HTTPError as e:
+        print(f"error: {url} -> {e.code} {e.reason}", file=sys.stderr)
+        return 1
+    except (urllib.error.URLError, TimeoutError) as e:
+        print(
+            f"error: {url} unreachable ({type(e).__name__}: {e}). "
+            f"Is `harness serve` running on {args.base_url}?",
+            file=sys.stderr,
+        )
+        return 1
+
+
+def _dispatch_auth(args: argparse.Namespace) -> int:
+    """Dispatch on ``auth`` sub-subcommand + run bootstrap when needed.
+
+    Bootstrap runs BEFORE read-only commands (``list``, ``whoami``,
+    ``test``) so the operator can always inspect the auth state.
+    It does NOT run before ``create`` / ``revoke`` — those are
+    write commands and bootstrap could surprise the user.
+    """
+    import asyncio
+    from harness.server.auth.tokens import TokenStore
+
+    needs_bootstrap = args.auth_command in {"list", "whoami", "test"}
+    if needs_bootstrap and settings.auth_required:
+        async def _run_bootstrap() -> None:
+            store = TokenStore(settings.auth_db_path)
+            await store.init()
+            await _bootstrap_admin_token_if_needed(store)
+        asyncio.run(_run_bootstrap())
+
+    if args.auth_command is None or args.auth_command == "list":
+        return _cmd_auth_list(args)
+    if args.auth_command == "create":
+        return _cmd_auth_create(args)
+    if args.auth_command == "revoke":
+        return _cmd_auth_revoke(args)
+    if args.auth_command == "whoami":
+        return _cmd_auth_whoami(args)
+    if args.auth_command == "test":
+        return _cmd_auth_test(args)
+    print(f"unknown auth subcommand: {args.auth_command!r}", file=sys.stderr)
+    return 2
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="harness",
@@ -370,6 +665,88 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     agents.set_defaults(func=_cmd_agents)
 
+    # Phase 1.6: auth subcommand for managing scope-gated API tokens.
+    auth = sub.add_parser(
+        "auth",
+        help=(
+            "Manage scope-gated API tokens (Phase 1.6). "
+            "Tokens gate the /api/v1/* routes; see `harness auth --help`."
+        ),
+    )
+    auth_sub = auth.add_subparsers(dest="auth_command")
+
+    # ``harness auth create`` — mint a new token, print plaintext ONCE.
+    auth_create = auth_sub.add_parser(
+        "create",
+        help="Create a new token. Prints the plaintext to stdout ONCE.",
+    )
+    auth_create.add_argument(
+        "--label", required=True,
+        help="Human-readable label for the token (e.g. 'opencode-mcp').",
+    )
+    auth_create.add_argument(
+        "--scopes", default=None,
+        help=(
+            "Comma-separated scopes (e.g. 'agents.read,memory.read'). "
+            f"Valid: {', '.join(s.value for s in __import__('harness.server.auth.scopes', fromlist=['Scope']).Scope)}. "
+            "Defaults to settings.auth_default_scopes (empty if not set)."
+        ),
+    )
+    auth_create.add_argument(
+        "--bootstrap",
+        action="store_true",
+        help=(
+            "Mint with ALL_SCOPES (admin token). Only intended for the "
+            "implicit bootstrap path; explicitly minting a bootstrap "
+            "token is allowed but the label should be unique."
+        ),
+    )
+    # Note: no set_defaults(func=...) — see :func:`main`, the auth
+    # sub-subcommands are dispatched in one pass by
+    # :func:`_dispatch_auth` because the bootstrap path needs to
+    # run before the user's command.
+
+    # ``harness auth list`` — table of active tokens.
+    auth_list = auth_sub.add_parser(
+        "list",
+        help="List active (non-revoked) tokens.",
+    )
+
+    # ``harness auth revoke <hash-or-label>`` — mark as revoked.
+    auth_revoke = auth_sub.add_parser(
+        "revoke",
+        help="Revoke a token by its hash or by its label.",
+    )
+    auth_revoke.add_argument(
+        "target",
+        help="The token's hash (64 hex chars) or its label.",
+    )
+
+    # ``harness auth whoami <plaintext>`` — debug: show scopes for a token.
+    auth_whoami = auth_sub.add_parser(
+        "whoami",
+        help="Show the scopes and metadata for a token (debug).",
+    )
+    auth_whoami.add_argument(
+        "plaintext",
+        help="The plaintext token (returned by `harness auth create`).",
+    )
+
+    # ``harness auth test <plaintext>`` — smoke-test a token against
+    # the local server (calls /api/v1/capabilities with the token).
+    auth_test = auth_sub.add_parser(
+        "test",
+        help="Test a token against the local /api/v1/capabilities endpoint.",
+    )
+    auth_test.add_argument(
+        "plaintext",
+        help="The plaintext token (returned by `harness auth create`).",
+    )
+    auth_test.add_argument(
+        "--base-url", default="http://127.0.0.1:8765",
+        help="Base URL of the harness server (default: %(default)s).",
+    )
+
     return parser
 
 
@@ -384,6 +761,12 @@ def main(argv: list[str] | None = None) -> int:
         args.host = settings.host
         args.port = settings.port
         args.func = _cmd_serve
+
+    # Phase 1.6: the auth subparser doesn't have a single func — it
+    # has a sub-subcommand, and the dispatcher needs the parsed args
+    # to know which to invoke. We rewrite the func here.
+    if args.command == "auth":
+        return _dispatch_auth(args)
 
     return args.func(args)
 

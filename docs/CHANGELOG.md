@@ -1,6 +1,6 @@
 # Changelog — Solomon Harness
 
-## Phase 1.6 — Scope-gated API v1.0 (Steps 0-2 / 6, in progress, 2026-06-14)
+## Phase 1.6 — Scope-gated API v1.0 (Steps 0-3 / 6, in progress, 2026-06-14)
 
 ### Step 0 — Token store + scopes enum + settings (commit `eff5725`)
 
@@ -14,11 +14,17 @@
 |---|-----|-------|--------|
 | Step 1 | `harness/server/auth/deps.py` (NEW, ~155 LoC) — `get_token_store` (503 on missing), `get_current_token` (401 on missing/malformed/wrong/revoked), `require_scope(*required)` factory (403 with informative detail on missing scope, ANY match, 401 bubbles up); `auth_required=False` short-circuits both deps for dev mode | NEW: `deps.py` + `tests/test_auth_deps.py` (~290 LoC, 13 tests) | 13 |
 
-### Step 2 — Capabilities endpoint + apply to /api/v1/agents (this commit)
+### Step 2 — Capabilities endpoint + apply to /api/v1/agents (commit `3f30bf0`)
 
 | # | Что | Файлы | +Tests |
 |---|-----|-------|--------|
-| Step 2 | `harness/server/auth/route_registry.py` (NEW, ~120 LoC) — `EndpointSpec` dataclass + `collect_endpoints(app)` walks `app.routes`, finds `require_scope` deps via `_required_scopes` marker attribute (на самих dep callables); `harness/server/routes/capabilities.py` (NEW, ~70 LoC) — `GET /api/v1/capabilities` (public, returns server_version, auth_required, scopes_available, endpoints); `harness/server/routes/agents_jobs.py` — `Depends(_agents_read)` на всех 3 GET routes; `harness/server/app.py` — mount `capabilities_router` with `/api/v1` prefix | NEW: 2 файла, MODIFIED: `agents_jobs.py` + `app.py` + `tests/test_agents_api.py` (Phase 2.2 baseline fix), `tests/test_capabilities.py` (NEW, 9 tests) | 9 |
+| Step 2 | `harness/server/auth/route_registry.py` (NEW, ~110 LoC) — `EndpointSpec` dataclass + `collect_endpoints(app)` walks `app.routes`, finds `require_scope` deps via `_required_scopes` marker attribute; `harness/server/routes/capabilities.py` (NEW, ~70 LoC) — `GET /api/v1/capabilities` (public, returns server_version, auth_required, scopes_available, endpoints); `harness/server/routes/agents_jobs.py` — `Depends(_agents_read)` на всех 3 GET routes; `harness/server/app.py` — mount `capabilities_router` with `/api/v1` prefix | NEW: 2 файла, MODIFIED: `agents_jobs.py` + `app.py` + `tests/test_agents_api.py` (Phase 2.2 baseline fix), `tests/test_capabilities.py` (NEW, 9 tests) | 9 |
+
+### Step 3 — CLI `harness auth` subcommand + bootstrap (this commit)
+
+| # | Что | Файлы | +Tests |
+|---|-----|-------|--------|
+| Step 3 | `harness/cli.py` — `auth` subparser (create/list/revoke/whoami/test), 5 handlers, `_dispatch_auth` runs bootstrap только для read-only commands, `_bootstrap_admin_token_if_needed` mints `bootstrap-admin` с ALL_SCOPES при `auth_required=True` И `len(list_active)==0`; `--bootstrap` flag для admin tokens; revoke supports hash (64 hex) OR label; `whoami` debug; `test` smoke against local server; **stdout reconfigure UTF-8** для Windows compat; **ASCII `...`** вместо `…` для subprocess piping | MODIFIED: `cli.py` +6 subparser + 5 handlers (~280 LoC), NEW: `tests/test_cli_auth.py` (~340 LoC, 18 tests) | 18 |
 
 **Settings added (Phase 1.6):**
 - `auth_db_path: Path` — `data/harness-scope.db` (sibling of `agent-jobs.db`)
