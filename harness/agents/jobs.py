@@ -419,6 +419,8 @@ class JobStore:
         repo: str | None = None,
         pr_mode: str = "off",
         target_branch: str | None = None,
+        pr_url: str | None = None,
+        pr_number: int | None = None,
         pr_stack_id: str | None = None,
         stack_position: int = 0,
         stack_size: int = 1,
@@ -432,10 +434,12 @@ class JobStore:
         jobs that opt into GitHub PR integration. All three default to
         ``None`` / ``"off"`` for backward compat with Phase 2.1 callers.
 
-        Phase 2.4: accepts ``pr_stack_id``, ``stack_position``,
-        ``stack_size``, ``depends_on_pr_number`` for stacked / multi-PR
-        jobs. All default to ``None``/``0``/``1`` for backward compat
-        with Phase 2.1/2.2/2.3 callers.
+        Phase 2.4: accepts ``pr_url``, ``pr_number`` (used by the
+        stack orchestrator to persist a child slice's PR at the
+        moment of ``create_pr``), plus ``pr_stack_id``,
+        ``stack_position``, ``stack_size``, ``depends_on_pr_number``
+        for stacked / multi-PR jobs. All default to ``None``/``0``/
+        ``1`` for backward compat with Phase 2.1/2.2/2.3 callers.
         """
         await self._ensure_schema()
         job_id = _new_job_id()
@@ -446,13 +450,16 @@ class JobStore:
                 INSERT INTO merge_jobs
                     (id, worktree_id, status, started_at, cost, model,
                      prompt, repo, pr_mode, target_branch,
+                     pr_url, pr_number,
                      pr_stack_id, stack_position, stack_size,
                      depends_on_pr_number)
                 VALUES (?, ?, ?, ?, 0.0, ?, ?, ?, ?, ?,
+                        ?, ?,
                         ?, ?, ?, ?)
                 """,
                 (job_id, worktree_id, status, now, model, prompt,
                  repo, pr_mode, target_branch,
+                 pr_url, pr_number,
                  pr_stack_id, stack_position, stack_size,
                  depends_on_pr_number),
             )

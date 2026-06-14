@@ -50,6 +50,11 @@ class _JobRecordSchema(BaseModel):
     pr_number: int | None = None
     target_branch: str | None = None
     pr_mode: str = "off"
+    # Phase 2.4: stacked / multi-PR fields
+    pr_stack_id: str | None = None
+    stack_position: int = 0
+    stack_size: int = 1
+    depends_on_pr_number: int | None = None
 
     @classmethod
     def from_record(cls, rec: Any) -> "_JobRecordSchema":
@@ -59,7 +64,19 @@ class _JobRecordSchema(BaseModel):
             cost=rec.cost, error=rec.error, model=rec.model, prompt=rec.prompt,
             repo=rec.repo, pr_url=rec.pr_url, pr_number=rec.pr_number,
             target_branch=rec.target_branch, pr_mode=rec.pr_mode,
+            pr_stack_id=rec.pr_stack_id,
+            stack_position=rec.stack_position,
+            stack_size=rec.stack_size,
+            depends_on_pr_number=rec.depends_on_pr_number,
         )
+
+
+class _StackSchema(BaseModel):
+    """JSON shape of ``GET /stacks/{stack_id}`` — a parent + children."""
+
+    stack_id: str
+    parent: _JobRecordSchema | None = None
+    children: list[_JobRecordSchema] = []
 
 
 class _QueueHealth(BaseModel):
@@ -129,6 +146,41 @@ async def list_jobs(
         return []
     recs = await store.list_recent(recent)
     return [_JobRecordSchema.from_record(r) for r in recs]
+
+
+@router.get("/stacks/{stack_id}", response_model=_StackSchema)
+async def get_stack(
+    stack_id: str,
+    request: Request,
+    _token: Any = Depends(_agents_read),
+) -> _StackSchema:
+    """Phase 2.4: fetch a stack by its ``pr_stack_id``.
+
+    Returns the parent orchestrator row (``stack_position=0``) and
+    the ordered list of children (one per slice). 404 if no row
+    matches ``stack_id``. The parent's status reflects the
+    aggregate (``pr_open`` while children are in flight, ``merged``
+    after ``all_stack_children_merged`` is True, ``failed`` if
+    the stack was cascade-cancelled).
+
+    Phase 1.6: requires ``agents.read`` scope.
+    """
+    store = _get_store(request)
+    rows = await store.find_jobs_by_stack_id(stack_id)
+    if not rows:
+        raise HTTPException(
+            status_code=404,
+            detail=f"stack {stack_id!r} not found",
+        )
+    parent: _JobRecordSchema | None = None
+    children: list[_JobRecordSchema] = []
+    for r in rows:
+        schema = _JobRecordSchema.from_record(r)
+        if r.stack_position == 0:
+            parent = schema
+        else:
+            children.append(schema)
+    return _StackSchema(stack_id=stack_id, parent=parent, children=children)
 
 
 @router.get("/health", response_model=_QueueHealth)
@@ -205,6 +257,34 @@ class _EnqueueRequest(_BaseModel):
             "Enqueue and return a job_id (default true). If false, "
             "the route runs the agent synchronously and returns the "
             "result inline."
+        ),
+    )
+    # Phase 2.4: stacked / multi-PR
+    split_into: int | None = _Field(
+        default=None,
+        ge=1, le=64,
+        description=(
+            "Phase 2.4: split the job's diff into N stacked PRs. "
+            "Each slice's PR targets the previous slice's branch. "
+            "Requires ``pr_mode`` != 'off' (stacks need gh). "
+            "Default: null (no split, single-PR path)."
+        ),
+    )
+    split_strategy: str | None = _Field(
+        default=None,
+        description=(
+            "Phase 2.4: split strategy override. One of 'auto', "
+            "'files', 'directory', 'size'. Default: "
+            "settings.pr_split_strategy = 'auto'."
+        ),
+    )
+    stack_id: str | None = _Field(
+        default=None,
+        description=(
+            "Phase 2.4: stack identifier. If omitted, the queue "
+            "generates a new one. Use to re-enqueue an existing "
+            "stack with the same id (rare; usually managed by the "
+            "orchestrator)."
         ),
     )
 

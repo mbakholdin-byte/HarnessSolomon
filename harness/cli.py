@@ -139,6 +139,27 @@ def _cmd_agents_run(args: argparse.Namespace) -> int:
             pr_mode = "draft"
         pr_target = args.pr_target or settings.pr_default_target_branch
 
+        # Phase 2.4: --split-into + --stack-files are independent
+        # of --pr in the parser, but the stack orchestrator needs
+        # pr_mode != "off" (stacks REQUIRE gh). Reject early if the
+        # user forgot to combine them.
+        if args.split_into and args.split_into > 1 and pr_mode == "off":
+            print(
+                "error: --split-into > 1 requires --pr / --pr-draft / "
+                "--pr-ready (stacks require gh for create_pr)",
+                file=sys.stderr,
+            )
+            return 2
+        # Read --stack-files (path list override) into a list. The
+        # planner uses this in place of the auto-computed diff.
+        slice_files_list: list[str] | None = None
+        if args.stack_files is not None:
+            slice_files_list = [
+                line.strip() for line in args.stack_files
+                if line.strip()
+            ]
+            args.stack_files.close()
+
         # In mock environments the ``code`` agent has no review spec
         # — we synthesize a read-only one so the merge queue's
         # code → review → verify path can complete (it will still
@@ -185,6 +206,12 @@ def _cmd_agents_run(args: argparse.Namespace) -> int:
             auto_merge=args.auto_merge,
             auto_merge_method=args.auto_merge_method,
             auto_merge_label=args.auto_merge_label,
+            split_into=args.split_into,
+            stack_id=args.stack_id,
+            stack_position=args.stack_position,
+            stack_size=args.stack_size,
+            depends_on_pr_number=args.depends_on_pr_number,
+            slice_files=slice_files_list,
         )
         job_id = asyncio.run(queue.enqueue_async(job))
         print(f"job_id={job_id}")
@@ -207,6 +234,14 @@ def _cmd_agents_run(args: argparse.Namespace) -> int:
             "error: --pr / --pr-draft / --pr-ready / --pr-auto-merge "
             "require --background "
             "(the sync path can't await the PR lifecycle)",
+            file=sys.stderr,
+        )
+        return 2
+    # Phase 2.4: stacked PRs also require --background.
+    if args.split_into and args.split_into > 1:
+        print(
+            "error: --split-into > 1 requires --background "
+            "(the stack orchestrator awaits per-slice create_pr)",
             file=sys.stderr,
         )
         return 2
@@ -721,6 +756,67 @@ def _build_parser() -> argparse.ArgumentParser:
             "Ignored without --auto-merge."
         ),
     )
+    # === Phase 2.4: stacked / multi-PR ===
+    run.add_argument(
+        "--split-into",
+        type=int, default=None,
+        help=(
+            "Phase 2.4: split the worktree's diff into N PR slices "
+            "(N stacked PRs per job). Each slice's PR targets the "
+            "previous slice's branch (GitHub stacked-PR convention). "
+            "Requires --pr / --pr-draft / --pr-ready AND --background. "
+            "Use 'harness agents split-plan' to preview the split "
+            "before enqueuing."
+        ),
+    )
+    run.add_argument(
+        "--split-strategy",
+        choices=["auto", "files", "directory", "size"], default=None,
+        help=(
+            "Phase 2.4: split strategy for --split-into. "
+            "(default: settings.pr_split_strategy = 'auto'). "
+            "'auto' collapses to 1 slice if the diff fits in "
+            "max_files_per_slice; 'directory' groups by top-level "
+            "dir; 'files' round-robins; 'size' balances by LOC."
+        ),
+    )
+    run.add_argument(
+        "--stack-files",
+        type=argparse.FileType("r", encoding="utf-8"), default=None,
+        help=(
+            "Phase 2.4: file with newline-separated paths to use for "
+            "the split (overrides the planner's grouping). Only the "
+            "listed files are split; unlisted files are ignored. "
+            "Useful for ops: 'git diff --name-only main > stack.txt'."
+        ),
+    )
+    # Internal: stack_id / stack_position / stack_size /
+    # depends_on_pr_number are advanced args for re-enqueueing an
+    # existing stack (rare; usually managed by the orchestrator).
+    run.add_argument(
+        "--stack-id",
+        default=None,
+        help=argparse.SUPPRESS,  # internal: re-enqueue a known stack
+    )
+    run.add_argument(
+        "--stack-position",
+        type=int, default=0,
+        help=argparse.SUPPRESS,  # internal: 0 = orchestrator
+    )
+    run.add_argument(
+        "--stack-size",
+        type=int, default=1,
+        help=argparse.SUPPRESS,  # internal: total slice count
+    )
+    run.add_argument(
+        "--depends-on-pr-number",
+        type=int, default=None,
+        help=argparse.SUPPRESS,  # internal: parent slice's PR number
+    )
+    # ^ Note: ``--stack-files`` is the public override; the other 4
+    # fields are set automatically by the stack orchestrator when it
+    # re-enqueues child slices. We hide them from ``--help`` to keep
+    # the CLI surface clean.
     jobs = agents_sub.add_parser("jobs", help="Inspect background jobs (Phase 2.1)")
     jobs.add_argument(
         "job_id", nargs="?", default=None,

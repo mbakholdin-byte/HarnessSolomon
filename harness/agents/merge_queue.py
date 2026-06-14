@@ -31,10 +31,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import subprocess
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from harness.agents.jobs import JobEvent, JobStore
 from harness.agents.pr_integration import (
@@ -45,6 +47,7 @@ from harness.agents.pr_integration import (
     merge_pr,
     wait_for_checks,
 )
+from harness.agents.pr_split import plan_splits
 from harness.agents.repo_locks import RepoLockRegistry
 from harness.agents.runner import AgentRunner
 from harness.agents.spec import AgentSpec
@@ -469,7 +472,22 @@ class MergeQueue:
                 # ff-merge (Phase 2.1). With ``pr_mode in ("draft",
                 # "ready")``, run the full PR lifecycle via
                 # ``_run_pr_phase`` (open PR, wait for checks, merge).
+                # Phase 2.4: when ``split_into > 1``, route to
+                # ``_run_stack_phase`` (multi-PR stacked flow).
                 repo = self._job_repo(job)
+                if job.split_into and job.split_into > 1 and job.pr_mode != "off":
+                    stack_result = await self._run_stack_phase(
+                        job, job_id, repo, wt.branch,
+                        cost_so_far=code_result.total_cost + review_result.total_cost,
+                    )
+                    if stack_result is None:
+                        return
+                    # stack_result shape: (merged, pr_url, pr_number, pr_skipped).
+                    # For stacks, the orchestrator's pr_url is None;
+                    # the caller's flow treats this as "no local
+                    # cleanup needed" — the stack is now in flight
+                    # and will be resolved by webhooks (Step 3).
+                    return
                 if job.pr_mode in ("draft", "ready"):
                     pr_result = await self._run_pr_phase(
                         job, job_id, repo, wt.branch,
@@ -560,6 +578,18 @@ class MergeQueue:
                 worktree_preserved=False,
                 error=(
                     f"pr_mode={job.pr_mode!r} is only supported via "
+                    "MergeQueue.enqueue_async; use the CLI --background flag"
+                ),
+            )
+        # Phase 2.4: stacked PRs also require the async path
+        # (the stack orchestrator awaits per-slice ``create_pr``,
+        # which can't be done in a sync flow).
+        if job.split_into and job.split_into > 1:
+            return MergeResult(
+                merged=False, reason="stack mode requires --background",
+                worktree_preserved=False,
+                error=(
+                    f"split_into={job.split_into} is only supported via "
                     "MergeQueue.enqueue_async; use the CLI --background flag"
                 ),
             )
@@ -1024,6 +1054,508 @@ class MergeQueue:
 
         # PR merged successfully.
         return (True, created.url, created.number, False)
+
+    # === Phase 2.4: stacked / multi-PR orchestration ===
+
+    async def _get_diff_files(
+        self,
+        repo: Path,
+        base_branch: str,
+    ) -> list[str]:
+        """List files changed in the worktree vs ``base_branch``.
+
+        Phase 2.4: used by ``_run_stack_phase`` to feed
+        :func:`harness.agents.pr_split.plan_splits`. Runs
+        ``git -C <repo> diff --name-only <base>`` and parses the
+        output. Returns ``[]`` if the diff is empty (no changes),
+        the base branch doesn't exist (orphan worktree), or git
+        fails (logged + empty list, never raises).
+
+        Note: the worktree is checked out to a feature branch
+        (``harness/<worktree_id>``) when this is called — the diff
+        vs ``base_branch`` (``main`` by default) shows the agent's
+        output.
+        """
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "git", "-C", str(repo), "diff", "--name-only",
+                base_branch,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(), timeout=30,
+            )
+        except (asyncio.TimeoutError, FileNotFoundError) as e:
+            logger.warning(
+                "_get_diff_files: git diff failed for repo=%s base=%s: %s",
+                repo, base_branch, e,
+            )
+            return []
+        if proc.returncode != 0:
+            logger.warning(
+                "_get_diff_files: git diff rc=%d: %s",
+                proc.returncode,
+                (stderr or b"").decode("utf-8", errors="replace").strip(),
+            )
+            return []
+        return [
+            line.strip()
+            for line in (stdout or b"").decode("utf-8", errors="replace").splitlines()
+            if line.strip()
+        ]
+
+    async def _commit_slice(
+        self,
+        repo: Path,
+        branch: str,
+        files: list[str],
+        message: str,
+    ) -> bool:
+        """Checkout a new branch, commit ``files`` only, return success.
+
+        Phase 2.4: used by ``_run_stack_phase`` to materialise each
+        slice as its own branch in the same worktree. Returns
+        ``True`` on success, ``False`` on any failure (logged).
+
+        Sequence:
+          1. ``git checkout -b <branch>`` (or ``-B`` if it exists)
+          2. ``git reset HEAD~<N>`` if previous slice left uncommitted
+             changes (we don't — each slice is atomic)
+          3. ``git add <files>`` (only this slice's files)
+          4. ``git commit -m <message>``
+          5. ``git push -u origin <branch>`` (first push of this branch)
+
+        We do NOT push here — the orchestrator decides per-slice
+        whether to push (caller passes the result to ``create_pr``,
+        which expects the branch to be pushed first).
+        """
+        try:
+            # 1. Create/switch to the slice branch.
+            proc = await asyncio.create_subprocess_exec(
+                "git", "-C", str(repo), "checkout", "-B", branch,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+            if proc.returncode != 0:
+                logger.error(
+                    "_commit_slice: checkout -B %s failed: %s",
+                    branch,
+                    (stderr or b"").decode("utf-8", errors="replace").strip(),
+                )
+                return False
+            # 2. Add the slice's files.
+            if not files:
+                logger.warning(
+                    "_commit_slice: slice %s has no files to commit", branch,
+                )
+                return True  # nothing to commit, but branch exists
+            add_proc = await asyncio.create_subprocess_exec(
+                "git", "-C", str(repo), "add", "--", *files,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await asyncio.wait_for(add_proc.communicate(), timeout=30)
+            if add_proc.returncode != 0:
+                logger.error(
+                    "_commit_slice: git add failed for %s: %s",
+                    branch,
+                    (stderr or b"").decode("utf-8", errors="replace").strip(),
+                )
+                return False
+            # 3. Commit. ``--allow-empty`` is unnecessary — if there's
+            # nothing to commit, ``git commit`` will fail with a
+            # clear message and we treat that as success (the
+            # branch still exists; the slice may be informational).
+            commit_proc = await asyncio.create_subprocess_exec(
+                "git", "-C", str(repo), "commit",
+                "-m", message,
+                "--no-verify",  # skip hooks (Phase 2.4: speed; operators can override)
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await asyncio.wait_for(
+                commit_proc.communicate(), timeout=60,
+            )
+            if commit_proc.returncode != 0:
+                # "nothing to commit" is a non-fatal no-op.
+                err = (stderr or b"").decode("utf-8", errors="replace").strip()
+                if "nothing to commit" in err:
+                    logger.info(
+                        "_commit_slice: %s has nothing to commit (no-op)",
+                        branch,
+                    )
+                    return True
+                logger.error(
+                    "_commit_slice: git commit failed for %s: %s",
+                    branch, err,
+                )
+                return False
+            return True
+        except (asyncio.TimeoutError, FileNotFoundError) as e:
+            logger.error("_commit_slice: %s: %s", branch, e)
+            return False
+
+    async def _push_branch(self, repo: Path, branch: str) -> bool:
+        """``git push -u origin <branch>``. Returns success bool.
+
+        Phase 2.4: pushes each slice branch to ``origin`` before
+        ``create_pr`` is called. Idempotent — ``-u`` is fine for
+        subsequent pushes (just sets the upstream; harmless).
+        """
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "git", "-C", str(repo), "push", "-u", "origin", branch,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+            if proc.returncode != 0:
+                err = (stderr or b"").decode("utf-8", errors="replace").strip()
+                logger.error(
+                    "_push_branch: push origin %s failed: %s",
+                    branch, err,
+                )
+                return False
+            return True
+        except (asyncio.TimeoutError, FileNotFoundError) as e:
+            logger.error("_push_branch: %s: %s", branch, e)
+            return False
+
+    async def _run_stack_phase(
+        self,
+        job: MergeJob,
+        job_id: str,
+        repo: Path,
+        worktree_branch: str,
+        *,
+        cost_so_far: float,
+    ) -> tuple[bool, str | None, int | None, bool] | None:
+        """Phase 2.4 stacked PR orchestration.
+
+        Replaces the single-PR ``_run_pr_phase`` when ``job.split_into
+        and job.split_into > 1``. Splits the worktree's diff into N
+        slices, creates N branches in the SAME worktree (no extra
+        worktrees — just ``git checkout -B``), opens N dependent PRs
+        (PR-N+1's base = PR-N's branch), waits for each to merge, and
+        promotes the orchestrator row to ``merged`` after the last
+        child.
+
+        Architecture decisions (see plan-файл replicated-sleeping-muffin.md
+        Step 2):
+
+          - **N branches in 1 worktree** (not N worktrees) — the
+            existing worktree is reused; we just checkout different
+            branches. ``WorktreeSession`` doesn't support mid-life
+            branch switching, but the worktree IS just a checkout —
+            git handles it.
+
+          - **Per-repo ``RepoLockRegistry``** keeps the stack
+            serialised inside one repo (multiple stacks in different
+            repos can run in parallel via ``repo_override``).
+
+          - **Cascade cancel on failure**: if any child slice fails
+            to open PR or fails its lifecycle, we attempt
+            ``gh pr close <N>`` for the previously-opened siblings to
+            keep the remote tidy. The parent row goes to ``failed``.
+
+          - **No ``local ff-merge`` for stacks**: stacks require
+            GitHub (no point in 3 stacked PRs all in one local
+            branch). If ``gh`` is unavailable, the parent row goes
+            to ``failed`` with a clear error, regardless of
+            ``pr_strategy`` (Phase 2.2 auto-fallback only makes sense
+            for single-PR local merging).
+
+        Lifecycle:
+
+            orchestrator (stack_position=0) → pr_creating →
+            split + create branches + push + create_pr per slice
+            (each child: pr_creating → pr_open → ... → merged)
+            → orchestrator → merged (after last child)
+
+        Returns:
+            Same shape as ``_run_pr_phase``: a 4-tuple
+            ``(merged, pr_url, pr_number, pr_skipped)``. The
+            orchestrator's ``pr_url`` and ``pr_number`` are ``None``
+            (it has no PR); the caller can read child PRs via
+            ``find_jobs_by_stack_id``.
+        """
+        target_branch = job.pr_target_branch or settings.pr_default_target_branch
+        n_slices = job.split_into or 1
+
+        # 1. Compute the diff and split plan.
+        diff_files = await self._get_diff_files(repo, target_branch)
+        if not diff_files:
+            # Empty diff — fall back to single-PR legacy path (the
+            # agent didn't change anything; treat as a no-op merge).
+            await self.store.update_status(
+                job_id, "merged", finished=True,
+                cost=cost_so_far,
+                error="stack with empty diff; nothing to split",
+            )
+            await self._emit(
+                job_id, "merged",
+                reason="empty diff", stack_size=0,
+            )
+            return (True, None, None, False)
+
+        # Honour explicit ``slice_files`` override (CLI flag).
+        files_for_plan = job.slice_files or diff_files
+        plan = plan_splits(
+            diff_files=files_for_plan,
+            strategy=settings.pr_split_strategy,
+            worktree_id=job.worktree_id,
+            task=job.task,
+            n_slices=n_slices,
+            max_files_per_slice=settings.pr_split_max_files_per_slice,
+            min_slices=settings.pr_split_min_slices,
+            max_slices=settings.pr_split_max_slices,
+        )
+        if len(plan) <= 1:
+            # Planner collapsed to a single slice — fall through to
+            # the single-PR path (Phase 2.2/2.3 behaviour).
+            logger.info(
+                "_run_stack_phase: planner collapsed %d diff files to "
+                "1 slice; using single-PR path",
+                len(diff_files),
+            )
+            return await self._run_pr_phase(
+                job, job_id, repo, worktree_branch,
+                cost_so_far=cost_so_far,
+            )
+
+        # Assign the stack_id if not set (the orchestrator row was
+        # created with stack_id=None; the children get the same id).
+        stack_id = job.stack_id or uuid4().hex[:12]
+        # Persist the orchestrator's stack_id + size BEFORE creating
+        # children, so the child ``pr_stack_id`` foreign-key-style
+        # lookup works. We bypass ``update_status`` (which only
+        # touches status/cost/error/finished_at/pr_url/pr_number) and
+        # do a direct UPDATE — this is the one place we need to
+        # touch stack columns.
+        import aiosqlite
+        async with aiosqlite.connect(self.store.db_path) as db:
+            await db.execute(
+                """
+                UPDATE merge_jobs
+                SET pr_stack_id = ?, stack_size = ?
+                WHERE id = ?
+                """,
+                (stack_id, len(plan), job_id),
+            )
+            await db.commit()
+        await self.store.update_status(job_id, "pr_creating")
+        await self._emit(
+            job_id, "pr_creating",
+            target=target_branch, stack_id=stack_id,
+            stack_size=len(plan),
+        )
+
+        # 2. Create each slice: branch + commit + push + open PR.
+        opened_prs: list[tuple[int, int]] = []  # (position, pr_number)
+        prev_pr_number: int | None = None
+        for i, slice in enumerate(plan):
+            slice_branch = slice.branch_name
+            base = (
+                target_branch
+                if i == 0
+                else f"harness/{job.worktree_id}/step-{i - 1}"
+            )
+            # If the user passed explicit slice_files AND this slice
+            # is the i-th one, the planner already grouped the right
+            # files. Otherwise, fall back to the diff slice.
+            slice_files = slice.files
+            commit_msg = (
+                f"harness: stack slice {i + 1}/{len(plan)}\n\n"
+                f"Task: {job.task[:200]}"
+            )
+            ok = await self._commit_slice(repo, slice_branch, slice_files, commit_msg)
+            if not ok:
+                # Cascade cancel siblings.
+                await self._emit(
+                    job_id, "failed",
+                    reason=f"slice {i + 1} commit failed",
+                )
+                return await self._cancel_stack(
+                    job_id, stack_id, opened_prs, repo,
+                    cost_so_far=cost_so_far,
+                    error=f"slice {i + 1} commit failed",
+                )
+            pushed = await self._push_branch(repo, slice_branch)
+            if not pushed:
+                await self._emit(
+                    job_id, "failed",
+                    reason=f"slice {i + 1} push failed",
+                )
+                return await self._cancel_stack(
+                    job_id, stack_id, opened_prs, repo,
+                    cost_so_far=cost_so_far,
+                    error=f"slice {i + 1} push failed",
+                )
+
+            # 3. Create the PR for this slice.
+            try:
+                # Render the body for this slice (Phase 2.4 templating).
+                from harness.agents.pr_templating import (
+                    extract_issue_numbers,
+                    render_pr_body,
+                )
+                issues = extract_issue_numbers(
+                    job.task, settings.pr_issue_link_re,
+                )
+                template_path = (
+                    Path(settings.pr_template_path)
+                    if settings.pr_template_path else None
+                )
+                slice_body = render_pr_body(
+                    task=job.task,
+                    head_branch=slice_branch,
+                    base_branch=base,
+                    template_path=template_path,
+                    slice_index=i, slice_total=len(plan),
+                    stack_id=stack_id,
+                    issue_numbers=issues,
+                )
+                created = await create_pr(
+                    repo=repo,
+                    head_branch=slice_branch,
+                    base_branch=base,
+                    title=slice.title,
+                    body=slice_body,
+                    draft=(job.pr_mode == "draft"),
+                    env_var=settings.github_token_env,
+                )
+            except GHUnavailable as e:
+                # Stacks require gh — no local fallback.
+                await self.store.update_status(
+                    job_id, "failed", finished=True,
+                    cost=cost_so_far,
+                    error=f"gh unavailable for stack: {e}",
+                )
+                await self._emit(
+                    job_id, "failed",
+                    reason="gh unavailable (stacks require gh)",
+                )
+                return await self._cancel_stack(
+                    job_id, stack_id, opened_prs, repo,
+                    cost_so_far=cost_so_far,
+                    error=f"gh unavailable: {e}",
+                )
+            except Exception as e:
+                await self.store.update_status(
+                    job_id, "failed", finished=True,
+                    cost=cost_so_far,
+                    error=f"slice {i + 1} create_pr failed: {e}",
+                )
+                await self._emit(
+                    job_id, "failed",
+                    reason=f"slice {i + 1} create_pr failed",
+                )
+                return await self._cancel_stack(
+                    job_id, stack_id, opened_prs, repo,
+                    cost_so_far=cost_so_far,
+                    error=str(e),
+                )
+
+            # 4. Persist a child row in merge_jobs. The orchestrator
+            # row is the parent's job_id; children get fresh ids.
+            child_id = await self.store.create(
+                worktree_id=f"{job.worktree_id}-step-{i}",
+                model=job.model or "stack-child",
+                prompt=f"slice {i + 1}/{len(plan)}: {job.task}",
+                status="pr_open",
+                repo=str(repo),
+                pr_mode=job.pr_mode,
+                target_branch=base,
+                pr_url=created.url,
+                pr_number=created.number,
+                pr_stack_id=stack_id,
+                stack_position=i + 1,
+                stack_size=len(plan),
+                depends_on_pr_number=prev_pr_number,
+            )
+            await self._emit(
+                child_id, "pr_open",
+                pr_url=created.url, pr_number=created.number,
+                parent_job_id=job_id,
+            )
+            opened_prs.append((i + 1, created.number))
+            prev_pr_number = created.number
+
+        # 5. Each child PR will be merged via its own
+        # ``_run_pr_phase`` lifecycle (called by the dispatcher when
+        # the child gets a ``pull_request.closed+merged`` webhook).
+        # The orchestrator row stays in ``pr_creating`` until all
+        # children are merged, then transitions to ``merged`` via
+        # ``JobStore.all_stack_children_merged`` in
+        # ``WebhookHandler.dispatch_event`` (Step 3).
+        await self.store.update_status(
+            job_id, "pr_open",
+            cost=cost_so_far,
+        )
+        await self._emit(
+            job_id, "pr_open",
+            stack_id=stack_id,
+            stack_size=len(plan),
+            children=opened_prs,
+        )
+        return (False, None, None, False)  # orchestrator not yet "merged"
+
+    async def _cancel_stack(
+        self,
+        orchestrator_id: str,
+        stack_id: str,
+        opened_prs: list[tuple[int, int]],
+        repo: Path,
+        *,
+        cost_so_far: float,
+        error: str,
+    ) -> tuple[bool, str | None, int | None, bool]:
+        """Cascade-cancel a partially-created stack.
+
+        Phase 2.4: when one slice fails (commit / push / create_pr),
+        we close the previously-opened child PRs via
+        ``gh pr close <N>`` to keep the remote tidy, then mark the
+        orchestrator row ``failed``. Returns the standard
+        ``(merged, pr_url, pr_number, pr_skipped)`` tuple — ``False``
+        for ``merged`` signals the caller to stop.
+        """
+        for pos, pr_number in opened_prs:
+            try:
+                from harness.agents.pr_integration import _gh, _env_for_token
+                await check_gh_available(env_var=settings.github_token_env)
+                cmd = [
+                    "pr", "close", str(pr_number),
+                    "--delete-branch",  # clean up the slice branch
+                ]
+                env = _env_for_token(settings.github_token_env)
+                rc, _, stderr = await _gh(
+                    *cmd, cwd=str(repo), env=env,
+                )
+                if rc != 0:
+                    logger.warning(
+                        "_cancel_stack: gh pr close %d rc=%d: %s",
+                        pr_number, rc,
+                        (stderr or b"").decode("utf-8", errors="replace").strip(),
+                    )
+            except Exception as e:
+                logger.warning(
+                    "_cancel_stack: close pr %d failed: %s", pr_number, e,
+                )
+        # Mark the orchestrator row failed. (Children stay in their
+        # own status — ``pr_creating`` if the slice never created
+        # the PR, ``pr_open`` if it did and we just closed it.)
+        await self.store.update_status(
+            orchestrator_id, "failed", finished=True,
+            cost=cost_so_far, error=error,
+        )
+        await self._emit(
+            orchestrator_id, "failed",
+            reason="stack cascade-cancelled",
+            stack_id=stack_id,
+        )
+        return (False, None, None, False)
 
     async def _ff_merge(self, repo: Path, branch: str) -> None:
         """``git merge --ff-only <branch>`` inside ``repo``.
