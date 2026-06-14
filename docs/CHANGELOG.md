@@ -1,12 +1,18 @@
 # Changelog — Solomon Harness
 
-## Phase 1.6 — Scope-gated API v1.0 (Step 0 / 6, in progress, 2026-06-14)
+## Phase 1.6 — Scope-gated API v1.0 (Steps 0-1 / 6, in progress, 2026-06-14)
 
-### Step 0 — Token store + scopes enum + settings (this commit)
+### Step 0 — Token store + scopes enum + settings (commit `eff5725`)
 
 | # | Что | Файлы | +Tests |
 |---|-----|-------|--------|
-| Step 0 | `harness/server/auth/{__init__,scopes,tokens,db}.py` — `Scope` enum (6 значений), `parse_scopes` / `has_scope` / `format_scopes`, `TokenStore` (aiosqlite, SHA-256 hashed), `TokenRecord` (frozen dataclass) | NEW: 4 файла (~360 LoC), `harness/config.py` +4 settings, `harness/server/app.py` lifespan wiring, `tests/conftest.py` `auth_store` + `make_token` fixtures, `tests/test_token_store.py` (NEW, ~190 LoC) | 8 (scopes) + 6 (token store) = 14 |
+| Step 0 | `harness/server/auth/{__init__,scopes,tokens,db}.py` — `Scope` enum (6 значений), `parse_scopes` / `has_scope` / `format_scopes`, `TokenStore` (aiosqlite, SHA-256 hashed), `TokenRecord` (frozen dataclass) | NEW: 4 файла (~530 LoC), `harness/config.py` +4 settings, `harness/server/app.py` lifespan wiring, `tests/conftest.py` `auth_store` + `make_token` fixtures, `tests/test_token_store.py` (NEW, ~190 LoC) | 8 (scopes) + 6 (token store) = 14 |
+
+### Step 1 — FastAPI deps (`get_current_token`, `require_scope`) (this commit)
+
+| # | Что | Файлы | +Tests |
+|---|-----|-------|--------|
+| Step 1 | `harness/server/auth/deps.py` (NEW, ~155 LoC) — `get_token_store` (503 on missing), `get_current_token` (401 on missing/malformed/wrong/revoked), `require_scope(*required)` factory (403 with informative detail on missing scope, ANY match, 401 bubbles up); `auth_required=False` short-circuits both deps for dev mode | NEW: `deps.py` + `tests/test_auth_deps.py` (~290 LoC, 13 tests) | 13 |
 
 **Settings added (Phase 1.6):**
 - `auth_db_path: Path` — `data/harness-scope.db` (sibling of `agent-jobs.db`)
