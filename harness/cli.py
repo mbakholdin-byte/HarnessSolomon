@@ -60,13 +60,43 @@ def _cmd_agents_list(_args: argparse.Namespace) -> int:
 
 
 def _cmd_agents_run(args: argparse.Namespace) -> int:
-    """Run a sub-agent (Step 4+ lands the full implementation)."""
-    print(
-        f"Sub-agent execution is not implemented yet (will land in Step 4). "
-        f"Would run {args.name!r} with prompt {args.prompt!r}.",
-        file=sys.stderr,
-    )
-    return 2
+    """Run a single sub-agent (no merge queue) and print the result."""
+    import asyncio
+    from pathlib import Path
+    from harness.agents.registry import load_agent
+    from harness.agents.runner import AgentRunner
+    from harness.config import settings
+    from harness.server.llm.router import LLMRouter
+
+    try:
+        spec = load_agent(args.name, project_root=settings.project_root)
+    except FileNotFoundError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+
+    if args.no_worktree:
+        # Force worktree off — useful for read-only smoke tests.
+        spec = spec.model_copy(update={"worktree_required": False})
+
+    repo = Path(args.repo) if args.repo else settings.project_root
+    if not (repo / ".git").exists() and not (repo / ".harness").exists():
+        print(
+            f"warning: {repo} does not look like a git repo with .harness/. "
+            f"Sub-agent will create a worktree if needed.",
+            file=sys.stderr,
+        )
+
+    router = LLMRouter()
+    runner = AgentRunner(router=router, repo=repo)
+    result = asyncio.run(runner.run(spec, args.prompt, worktree_id=args.worktree_id))
+    print(f"agent={result.spec.name} iterations={result.iterations} "
+          f"cost=${result.total_cost:.4f} worktree={result.worktree.worktree_id}")
+    if result.error:
+        print(f"error: {result.error}", file=sys.stderr)
+        return 1
+    print()
+    print(result.final_text or "(no final text)")
+    return 0
 
 
 def _cmd_agents(args: argparse.Namespace) -> int:
@@ -101,6 +131,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "--no-worktree",
         action="store_true",
         help="Run in the current directory (skip worktree isolation)",
+    )
+    run.add_argument(
+        "--repo",
+        help="Override project root (default: settings.project_root)",
+    )
+    run.add_argument(
+        "--worktree-id",
+        help="Override the auto-generated worktree id",
     )
     agents.set_defaults(func=_cmd_agents)
 

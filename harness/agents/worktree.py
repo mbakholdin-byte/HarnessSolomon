@@ -140,6 +140,10 @@ class WorktreeSession:
             raise WorktreeError("WorktreeSession already entered")
         try:
             await self._ensure_repo()
+            # If a previous session crashed mid-cleanup, the branch may
+            # exist as an orphan. Drop it so the next ``worktree add``
+            # doesn't fail with "branch already exists".
+            await self._delete_orphan_branch_if_exists()
             existing = await self._find_existing_worktree()
             if existing is not None:
                 logger.info(
@@ -163,6 +167,20 @@ class WorktreeSession:
                 raise WorktreeError(
                     f"worktree path {target} escaped the repo root {self.repo} — aborting"
                 )
+            # Seed the new branch with an empty commit ahead of the base
+            # so that downstream ``git merge --ff-only harness/<id>`` has
+            # something to fast-forward to. The commit message flags it as
+            # a sub-agent start marker; reviewers can spot it at a glance.
+            # We must run the commit INSIDE the new worktree (not the main
+            # repo) so the commit lands on the new branch.
+            proc = await asyncio.create_subprocess_exec(
+                "git", "commit", "--allow-empty", "-m",
+                f"sub-agent start: {self.branch} (id={self.worktree_id})",
+                cwd=str(target),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await proc.communicate()  # best-effort; ignore failure
             self._info = WorktreeInfo(
                 path=target.resolve(strict=False),
                 branch=self.branch,
@@ -186,12 +204,14 @@ class WorktreeSession:
             return  # init failed; nothing to clean
         try:
             # `git worktree remove --force` is the documented way to clean up.
+            # We do NOT delete the branch here — a downstream merge-queue
+            # call may still need it for ``git merge --ff-only``. The
+            # caller is responsible for branch deletion (use
+            # :meth:`delete_branch` explicitly, or rely on the merge-queue
+            # to clean up after a successful merge).
             await self._run_git(
                 "worktree", "remove", "--force", str(self._info.path), check=False,
             )
-            # Drop the temporary branch (best-effort — it may not exist if the
-            # worktree was created without -b for some reason).
-            await self._run_git("branch", "-D", self.branch, check=False)
             # Optionally prune administrative data so `git worktree list` is clean.
             await self._run_git("worktree", "prune", check=False)
         except Exception as cleanup_err:
@@ -201,6 +221,15 @@ class WorktreeSession:
                 self.worktree_id, cleanup_err, exc,
             )
         self._info = None
+
+    async def delete_branch(self) -> None:
+        """Explicitly delete the ``harness/<id>`` branch.
+
+        Called by the merge queue after a successful ``git merge --ff-only``
+        (or by callers that want a clean teardown without merging).
+        Idempotent: deleting a non-existent branch is a no-op.
+        """
+        await self._run_git("branch", "-D", self.branch, check=False)
 
     # === helpers ===
 
@@ -231,6 +260,13 @@ class WorktreeSession:
         we see a matching ``branch`` line. (Branches are listed AFTER their
         worktree line, so a single-pass forward scan works: remember the
         path, then check the branch on the next line.)
+
+        **Important:** if no worktree is found, but the branch ``harness/<id>``
+        EXISTS as an orphan (e.g. left over from a previous session that
+        crashed mid-cleanup), we return None — the caller will then try
+        ``git worktree add -b <branch> <path>`` and git will fail with
+        "branch already exists". The cleanup hook in :meth:`__aenter__`
+        (see below) handles this by deleting the orphan branch first.
         """
         try:
             out = await self._run_git("worktree", "list", "--porcelain")
@@ -249,6 +285,16 @@ class WorktreeSession:
                     return pending_path
                 pending_path = None
         return None
+
+    async def _delete_orphan_branch_if_exists(self) -> None:
+        """If ``harness/<id>`` exists as an orphan branch (no worktree),
+        delete it so a fresh ``git worktree add -b`` can proceed.
+
+        Called at the start of :meth:`__aenter__` to recover from prior
+        crashes. ``-D`` (not ``-d``) so it works even if HEAD~1 doesn't
+        have the merge base resolved.
+        """
+        await self._run_git("branch", "-D", self.branch, check=False)
 
     async def _cleanup_partial(self) -> None:
         """Best-effort cleanup if __aenter__ raised mid-init."""

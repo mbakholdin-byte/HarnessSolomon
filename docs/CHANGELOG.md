@@ -1,5 +1,65 @@
 # Changelog — Solomon Harness
 
+## Phase 2.0 — Sub-agents v1.0 (2026-06-14)
+
+### 8 шагов / 8 коммитов за ~3 часа (post-Phase 1, единая сессия)
+
+| # | Шаг | Коммит | Что |
+|---|-----|--------|-----|
+| 0 | Prerequisites | `fcff4d9` | `harness/cli.py` (заполняет dead `harness = "harness.cli:main"` скрипт), `__main__.py` shim, `.harness/agents/` scaffold, Phase 1 retrospective в CHANGELOG, Settings.subagent_* поля |
+| 1 | AgentSpec + frontmatter | `?` | `harness/agents/spec.py` — Pydantic schema + hand-rolled YAML reader, `extra="forbid"`, no PyYAML dep — 46 tests |
+| 2 | Built-in agents + registry | `?` | `harness/agents/builtin/{explore,plan,code,review}.md` + `registry.py` с importlib.resources + override-логика — 25 tests |
+| 3 | WorktreeSession | `?` | `harness/agents/worktree.py` — async ctx mgr, crash-safe, idempotency, branch orphan recovery + delete_branch() — 17 tests + 2 conftest fixtures |
+| 4 | AgentRunner | `?` | `harness/agents/runner.py` — composition point, TOOL_SCHEMAS filter, perms denylist proxy, `external_worktree=` для merge queue — 28 tests |
+| 5 | conftest fixtures | (в Step 3) | `git_repo`, `agents_dir` |
+| 6 | Router + adversarial verify | `?` | `harness/agents/router.py` (LLM-as-router, fallback chain) + `verify.py` (N-judge majority, 2-judge unanimous) — 19 + 26 = 45 tests |
+| 7 | Merge queue + docs | `?` | `harness/agents/merge_queue.py` (code → review → verify → ff-merge, asyncio.Lock, timeout), `docs/subagents.md` — 9 tests |
+
+### Метрики (на 14.06.2026, end of Phase 2.0)
+
+- **Tests:** 200 (Phase 1 end) + 46 + 25 + 17 + 28 + 0 + 45 + 9 = **370 mock** + 5 real_llm (no change)
+- **Production:** 8 новых файлов в `harness/agents/` (spec, registry, worktree, runner, router, verify, merge_queue + 4 builtin .md) + 1 doc — ~2200 LoC
+- **Settings:** добавлено 4 sub-agent поля (agents_dir, subagent_default_model, subagent_judges, subagent_timeout_s)
+- **Build deps:** 0 (no gitpython, no pyyaml, no python-frontmatter)
+- **Static guarantee (verified by tests):** runner.py не импортирует LLMRouterClassifier / MergeQueue / AdversarialVerify / registry
+
+### Architecture decisions
+
+- **MiniMax M2.7 для всех 4 built-in** — quality first, cost cascade в Phase 2.1
+- **Реальный `git worktree`** для всех 4 (на Windows 11 + Git 2.53 поддерживается нативно)
+- **WorktreeSession lifecycle**: branch удаляется **только** explicit через `delete_branch()`; merge queue делает это после успешного merge. На crash — orphan branch восстанавливается через `_delete_orphan_branch_if_exists()` в `__aenter__`.
+- **Permissions enforcement** на 2 уровнях: schema-level (`read-only` + write tools → reject) + runtime-level (denied proxy short-circuits tool execution).
+- **2/3 majority** с relaxation для even panel: 2-judge → unanimous, 3+ → majority.
+
+### Готово (Phase 2.0)
+
+- [x] 4 built-in agents: explore / plan / code / review
+- [x] Custom agents через `.harness/agents/<name>.md`
+- [x] Real `git worktree` isolation, crash-safe
+- [x] LLM-as-router (LLMRouterClassifier) + fallback chain
+- [x] Adversarial verify (2/3 majority, 1-5 judges)
+- [x] In-process merge queue (code → review → verify → ff-merge)
+- [x] `docs/subagents.md` с 4 секциями (built-ins, custom, worktrees, verify)
+- [x] `python -m harness agents list / run` functional
+- [x] CLI `agents run` с `--no-worktree`, `--repo`, `--worktree-id` опциями
+
+### Что осталось до Фазы 2.1
+
+- Cost-aware T1→T2→T3 cascade (роутер уже возвращает confidence)
+- Persistent background mode + progress reporting
+- Per-agent memory namespacing в UnifiedMemory
+- Hot-reload `.harness/agents/*.md` через file-watcher (Phase 4)
+- MemPalaceAdapter for L2.5 (отдельный трек)
+
+### Известные ограничения (Phase 2.0)
+
+- T1→T3 cascade = stub (всегда MiniMax M2.7)
+- Background mode = await-to-completion
+- Merge queue = single-repo, serialised by Lock
+- Нет GitHub PR integration (только in-process ff-merge)
+
+---
+
 ## Phase 1 — 4-layer memory (2026-06-14)
 
 ### 7 шагов за ~1 день (вторая половина 14.06.2026, post-compact)

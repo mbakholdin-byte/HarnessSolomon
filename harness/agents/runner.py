@@ -160,17 +160,27 @@ class AgentRunner:
         *,
         worktree_id: str | None = None,
         stream: bool = False,
+        external_worktree: "WorktreeInfo | None" = None,
     ) -> RunResult:
         """Run ``spec`` against ``prompt`` and return the final result.
 
         The worktree is created if ``spec.worktree_required`` (default),
         otherwise we run in ``self.repo`` directly.
 
+        When ``external_worktree`` is supplied, the runner uses that
+        worktree INSTEAD of opening its own. This is how the merge
+        queue coordinates lifetime: it opens the worktree, calls
+        ``runner.run(external_worktree=wt)`` for the code + review agents,
+        and decides whether to clean up the worktree based on the
+        result (success = clean up, failure = preserve for human review).
+
         ``stream`` controls whether the underlying AgentLoop yields
         token-level events; when ``False`` (the default — useful for
         programmatic callers) the loop emits a single ``assistant_message``
         per iteration. Streaming is intended for the WebSocket path.
         """
+        if external_worktree is not None:
+            return await self._drive(spec, prompt, external_worktree, stream=stream)
         if spec.worktree_required:
             async with WorktreeSession(self.repo, worktree_id=worktree_id) as wt:
                 return await self._drive(spec, prompt, wt, stream=stream)

@@ -139,7 +139,12 @@ async def test_non_git_repo_raises(tmp_path: Path) -> None:
 # === Crash safety ===
 
 async def test_exception_in_body_does_not_leak_worktree(git_repo: Path) -> None:
-    """If the body raises, the worktree is still removed on exit."""
+    """If the body raises, the worktree is still removed on exit.
+
+    Note: the branch is preserved (orphan) by design — downstream code
+    (e.g. the merge queue) decides whether to merge or delete it
+    explicitly via :meth:`WorktreeSession.delete_branch`.
+    """
     sess = WorktreeSession(git_repo, worktree_id="boom")
     with pytest.raises(RuntimeError, match="simulated failure"):
         async with sess:
@@ -148,7 +153,14 @@ async def test_exception_in_body_does_not_leak_worktree(git_repo: Path) -> None:
             raise RuntimeError("simulated failure")
     # The worktree was cleaned up.
     assert not (git_repo / WORKTREE_PARENT / "boom").exists()
-    # And the branch is gone.
+    # The branch REMAINS (orphaned) — caller decides its fate.
+    proc = subprocess.run(
+        ["git", "branch", "--list", "harness/boom"],
+        cwd=git_repo, capture_output=True, text=True,
+    )
+    assert "harness/boom" in proc.stdout
+    # Explicitly delete the orphan branch.
+    await sess.delete_branch()
     proc = subprocess.run(
         ["git", "branch", "--list", "harness/boom"],
         cwd=git_repo, capture_output=True, text=True,
