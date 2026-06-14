@@ -161,6 +161,7 @@ class AgentRunner:
         worktree_id: str | None = None,
         stream: bool = False,
         external_worktree: "WorktreeInfo | None" = None,
+        model_override: str | None = None,
     ) -> RunResult:
         """Run ``spec`` against ``prompt`` and return the final result.
 
@@ -178,18 +179,33 @@ class AgentRunner:
         token-level events; when ``False`` (the default — useful for
         programmatic callers) the loop emits a single ``assistant_message``
         per iteration. Streaming is intended for the WebSocket path.
+
+        ``model_override`` (Phase 2.1): when supplied, used INSTEAD of
+        ``spec.model`` for this single call. This is how the
+        :class:`~harness.agents.cascade.TierSelector` injects a
+        cost-aware tier choice without mutating the (frozen) spec.
+        Passing ``None`` preserves the spec's model (default).
         """
         if external_worktree is not None:
-            return await self._drive(spec, prompt, external_worktree, stream=stream)
+            return await self._drive(
+                spec, prompt, external_worktree,
+                stream=stream, model_override=model_override,
+            )
         if spec.worktree_required:
             async with WorktreeSession(self.repo, worktree_id=worktree_id) as wt:
-                return await self._drive(spec, prompt, wt, stream=stream)
+                return await self._drive(
+                    spec, prompt, wt,
+                    stream=stream, model_override=model_override,
+                )
         # No-worktree path: synthesize a WorktreeInfo pointing at self.repo.
         wt = WorktreeInfo(
             path=self.repo, branch="(no worktree)",
             worktree_id=worktree_id or "no-wt", reused=False,
         )
-        return await self._drive(spec, prompt, wt, stream=stream)
+        return await self._drive(
+            spec, prompt, wt,
+            stream=stream, model_override=model_override,
+        )
 
     # --- core loop ---
 
@@ -200,6 +216,7 @@ class AgentRunner:
         wt: WorktreeInfo,
         *,
         stream: bool,
+        model_override: str | None = None,
     ) -> RunResult:
         runtime = ToolRuntime(project_root=wt.path)
         wrapped = filter_runtime(spec, runtime)
@@ -215,6 +232,10 @@ class AgentRunner:
             {"role": "user", "content": prompt},
         ]
 
+        # Phase 2.1: cascade override. We pass the override (or
+        # ``spec.model`` when None) into AgentLoop. Spec stays frozen.
+        effective_model = model_override if model_override else spec.model
+
         last_text = ""
         iterations = 0
         total_cost = 0.0
@@ -224,7 +245,7 @@ class AgentRunner:
         error: str | None = None
 
         try:
-            async for event in loop.run(messages, model=spec.model, stream=stream):
+            async for event in loop.run(messages, model=effective_model, stream=stream):
                 if event.type == "assistant_message":
                     iterations += 1
                     if event.content:
@@ -269,26 +290,34 @@ class AgentRunner:
         prompt: str,
         *,
         worktree_id: str | None = None,
+        model_override: str | None = None,
     ) -> AsyncIterator[StreamEvent]:
         """Like :meth:`run` but yields ``StreamEvent``s live.
 
         Use this for WebSocket or CLI streaming output. The final event is
         ``done`` (from AgentLoop); consumers should stop after that.
+
+        ``model_override`` (Phase 2.1): same semantics as in :meth:`run`.
         """
         if spec.worktree_required:
             async with WorktreeSession(self.repo, worktree_id=worktree_id) as wt:
-                async for e in self._stream_drive(spec, prompt, wt):
+                async for e in self._stream_drive(spec, prompt, wt, model_override=model_override):
                     yield e
         else:
             wt = WorktreeInfo(
                 path=self.repo, branch="(no worktree)",
                 worktree_id=worktree_id or "no-wt", reused=False,
             )
-            async for e in self._stream_drive(spec, prompt, wt):
+            async for e in self._stream_drive(spec, prompt, wt, model_override=model_override):
                 yield e
 
     async def _stream_drive(
-        self, spec: AgentSpec, prompt: str, wt: WorktreeInfo,
+        self,
+        spec: AgentSpec,
+        prompt: str,
+        wt: WorktreeInfo,
+        *,
+        model_override: str | None = None,
     ) -> AsyncIterator[StreamEvent]:
         runtime = ToolRuntime(project_root=wt.path)
         wrapped = filter_runtime(spec, runtime)
@@ -302,5 +331,6 @@ class AgentRunner:
             {"role": "system", "content": build_system_prompt_for(spec, wt.path, tools)},
             {"role": "user", "content": prompt},
         ]
-        async for event in loop.run(messages, model=spec.model, stream=True):
+        effective_model = model_override if model_override else spec.model
+        async for event in loop.run(messages, model=effective_model, stream=True):
             yield event

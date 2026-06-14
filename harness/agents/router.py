@@ -69,6 +69,13 @@ class RouterDecision(BaseModel):
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     fallback: bool = False
     raw_response: str = ""  # the model's full reply (for debugging)
+    #: Optional tier name (``T1``/``T2``/``T3``) attached by the
+    #: cascade after the fact (Phase 2.1). The router itself does
+    #: NOT set this — it's filled in by
+    #: :class:`~harness.agents.cascade.TierSelector` and is purely
+    #: for observability / logging. Kept optional to preserve
+    #: Phase 2.0 callers that construct ``RouterDecision`` directly.
+    tier: str | None = None
 
 
 # === Classifier ===

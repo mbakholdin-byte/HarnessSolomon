@@ -1,4 +1,4 @@
-"""Solomon Harness sub-agents (Phase 2.0).
+"""Solomon Harness sub-agents (Phase 2.0 + 2.1).
 
 Sub-agents are isolated, role-specific LLM loops that run inside their own
 ``git worktree`` and are dispatched by an LLM-as-router. Four built-in agents
@@ -21,6 +21,8 @@ Public API (re-exported for convenience):
 - :class:`LLMRouterClassifier` — ``harness.agents.router``
 - :class:`AdversarialVerify` — ``harness.agents.verify``
 - :class:`MergeQueue`        — ``harness.agents.merge_queue``
+- :class:`TierSelector`      — ``harness.agents.cascade``  (Phase 2.1)
+- :class:`CascadeDecision`   — ``harness.agents.cascade``  (Phase 2.1)
 """
 from __future__ import annotations
 
@@ -39,4 +41,7 @@ __all__ = [
     "MergeQueue",
     "MergeJob",
     "MergeResult",
+    # Phase 2.1 — cost-aware cascade
+    "TierSelector",
+    "CascadeDecision",
 ]
