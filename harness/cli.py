@@ -150,6 +150,31 @@ def _cmd_agents_run(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return 2
+        # Phase 2.5: --stack-repos (cross-repo stacks). Comma-
+        # separated absolute paths, one per slice. The list
+        # length must match --split-into. Default: None (single-
+        # repo, Phase 2.4 behaviour).
+        stack_repos: list[Path] | None = None
+        if args.stack_repos is not None:
+            stack_repos = [
+                Path(p.strip()) for p in args.stack_repos.split(",")
+                if p.strip()
+            ]
+            if len(stack_repos) != (args.split_into or 0):
+                print(
+                    f"error: --stack-repos has {len(stack_repos)} entries "
+                    f"but --split-into is {args.split_into or 0}; "
+                    f"they must match",
+                    file=sys.stderr,
+                )
+                return 2
+            for p in stack_repos:
+                if not p.exists():
+                    print(
+                        f"error: --stack-repos path does not exist: {p}",
+                        file=sys.stderr,
+                    )
+                    return 2
         # Read --stack-files (path list override) into a list. The
         # planner uses this in place of the auto-computed diff.
         slice_files_list: list[str] | None = None
@@ -212,6 +237,7 @@ def _cmd_agents_run(args: argparse.Namespace) -> int:
             stack_size=args.stack_size,
             depends_on_pr_number=args.depends_on_pr_number,
             slice_files=slice_files_list,
+            stack_repos=stack_repos,
         )
         job_id = asyncio.run(queue.enqueue_async(job))
         print(f"job_id={job_id}")
@@ -881,6 +907,20 @@ def _build_parser() -> argparse.ArgumentParser:
             "the split (overrides the planner's grouping). Only the "
             "listed files are split; unlisted files are ignored. "
             "Useful for ops: 'git diff --name-only main > stack.txt'."
+        ),
+    )
+    run.add_argument(
+        "--stack-repos",
+        default=None,
+        help=(
+            "Phase 2.5: comma-separated absolute paths to git "
+            "repos, ONE PER SLICE. Cross-repo stacks: each slice "
+            "lives in its own repo, opens its own PR, and is "
+            "merged independently. The list length MUST match "
+            "--split-into (validated). Example: "
+            "--split-into 2 --stack-repos /repo/a,/repo/b. "
+            "Default: None (single-repo, all slices in the "
+            "current worktree repo — Phase 2.4 behaviour)."
         ),
     )
     # Internal: stack_id / stack_position / stack_size /

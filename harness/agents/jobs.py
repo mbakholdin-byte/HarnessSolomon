@@ -159,6 +159,15 @@ class JobRecord:
     #: row). The first slice's PR becomes the base branch for the
     #: second slice's PR, etc.
     depends_on_pr_number: int | None = None
+    # === Phase 2.5: cross-repo stacks ===
+    #: For cross-repo stacks: JSON-encoded list of absolute
+    #: repo paths (``[str, ...]``), one per slice. ``None`` for
+    #: single-repo jobs (the common case) — those use ``repo``
+    #: instead. When set, the stack has one PR per repo and
+    #: each slice uses its own ``WorktreeSession``.
+    #: Serialized as ``json.dumps(list)`` on write and
+    #: ``json.loads(str) or []`` on read.
+    stack_repos: list[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -214,7 +223,8 @@ CREATE TABLE IF NOT EXISTS merge_jobs (
     pr_stack_id   TEXT,
     stack_position INTEGER NOT NULL DEFAULT 0,
     stack_size    INTEGER NOT NULL DEFAULT 1,
-    depends_on_pr_number INTEGER
+    depends_on_pr_number INTEGER,
+    stack_repos   TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_merge_jobs_status ON merge_jobs(status);
 CREATE INDEX IF NOT EXISTS idx_merge_jobs_started ON merge_jobs(started_at DESC);
@@ -268,6 +278,9 @@ _PR24_ALTER_COLUMNS: tuple[tuple[str, str], ...] = (
     ("stack_position", "INTEGER NOT NULL DEFAULT 0"),
     ("stack_size", "INTEGER NOT NULL DEFAULT 1"),
     ("depends_on_pr_number", "INTEGER"),
+    # Phase 2.5: cross-repo stacks. JSON list of absolute paths
+    # (one per slice), NULL for single-repo jobs.
+    ("stack_repos", "TEXT"),
 )
 
 
@@ -319,7 +332,34 @@ def _row_to_record(row: aiosqlite.Row) -> JobRecord:
             row["depends_on_pr_number"]
             if "depends_on_pr_number" in row.keys() else None
         ),
+        stack_repos=_parse_stack_repos(
+            row["stack_repos"] if "stack_repos" in row.keys() else None,
+        ),
     )
+
+
+def _parse_stack_repos(raw: str | None) -> list[str] | None:
+    """Decode the ``stack_repos`` JSON column.
+
+    Empty string or NULL → ``None`` (single-repo job). A JSON
+    list string → parsed list. Anything else → ``None`` (we
+    don't want to crash a read on a malformed row — the
+    operator can clean it up manually).
+
+    Phase 2.5.
+    """
+    if raw is None or raw == "" or raw == "null":
+        return None
+    import json
+    try:
+        decoded = json.loads(raw)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(decoded, list):
+        return None
+    if not all(isinstance(s, str) for s in decoded):
+        return None
+    return decoded
 
 
 # === Store ===
@@ -425,6 +465,7 @@ class JobStore:
         stack_position: int = 0,
         stack_size: int = 1,
         depends_on_pr_number: int | None = None,
+        stack_repos: list[str] | None = None,
     ) -> str:
         """Insert a new job row and return its id.
 
@@ -440,10 +481,21 @@ class JobStore:
         ``stack_position``, ``stack_size``, ``depends_on_pr_number``
         for stacked / multi-PR jobs. All default to ``None``/``0``/
         ``1`` for backward compat with Phase 2.1/2.2/2.3 callers.
+
+        Phase 2.5: accepts ``stack_repos`` for cross-repo stacks
+        (one repo per slice). ``None`` (default) means single-repo,
+        which is the common case — back-compat preserved.
         """
         await self._ensure_schema()
         job_id = _new_job_id()
         now = _utcnow().isoformat()
+        # Phase 2.5: JSON-encode the list. ``None`` is stored as NULL
+        # (NOT as the JSON string ``"null"``) so a SELECT can use
+        # ``stack_repos IS NULL`` cleanly.
+        import json
+        stack_repos_json: str | None = (
+            json.dumps(stack_repos) if stack_repos is not None else None
+        )
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
                 """
@@ -452,16 +504,16 @@ class JobStore:
                      prompt, repo, pr_mode, target_branch,
                      pr_url, pr_number,
                      pr_stack_id, stack_position, stack_size,
-                     depends_on_pr_number)
+                     depends_on_pr_number, stack_repos)
                 VALUES (?, ?, ?, ?, 0.0, ?, ?, ?, ?, ?,
                         ?, ?,
-                        ?, ?, ?, ?)
+                        ?, ?, ?, ?, ?)
                 """,
                 (job_id, worktree_id, status, now, model, prompt,
                  repo, pr_mode, target_branch,
                  pr_url, pr_number,
                  pr_stack_id, stack_position, stack_size,
-                 depends_on_pr_number),
+                 depends_on_pr_number, stack_repos_json),
             )
             await db.commit()
         return job_id
@@ -564,7 +616,7 @@ class JobStore:
                        cost, error, model, prompt,
                        repo, pr_url, pr_number, target_branch, pr_mode,
                        pr_stack_id, stack_position, stack_size,
-                       depends_on_pr_number
+                       depends_on_pr_number, stack_repos
                 FROM merge_jobs WHERE id = ?
                 """,
                 (job_id,),
@@ -600,7 +652,7 @@ class JobStore:
                        cost, error, model, prompt,
                        repo, pr_url, pr_number, target_branch, pr_mode,
                        pr_stack_id, stack_position, stack_size,
-                       depends_on_pr_number
+                       depends_on_pr_number, stack_repos
                 FROM merge_jobs
                 WHERE pr_number = ?
                 ORDER BY started_at DESC
@@ -639,7 +691,7 @@ class JobStore:
                        cost, error, model, prompt,
                        repo, pr_url, pr_number, target_branch, pr_mode,
                        pr_stack_id, stack_position, stack_size,
-                       depends_on_pr_number
+                       depends_on_pr_number, stack_repos
                 FROM merge_jobs
                 WHERE pr_stack_id = ?
                 ORDER BY stack_position ASC, started_at ASC
@@ -738,7 +790,7 @@ class JobStore:
                        cost, error, model, prompt,
                        repo, pr_url, pr_number, target_branch, pr_mode,
                        pr_stack_id, stack_position, stack_size,
-                       depends_on_pr_number
+                       depends_on_pr_number, stack_repos
                 FROM merge_jobs ORDER BY started_at DESC LIMIT ?
                 """,
                 (int(n),),

@@ -55,6 +55,9 @@ class _JobRecordSchema(BaseModel):
     stack_position: int = 0
     stack_size: int = 1
     depends_on_pr_number: int | None = None
+    # Phase 2.5: cross-repo stacks. JSON list of absolute repo
+    # paths, one per slice. ``None`` for single-repo jobs.
+    stack_repos: list[str] | None = None
 
     @classmethod
     def from_record(cls, rec: Any) -> "_JobRecordSchema":
@@ -68,6 +71,7 @@ class _JobRecordSchema(BaseModel):
             stack_position=rec.stack_position,
             stack_size=rec.stack_size,
             depends_on_pr_number=rec.depends_on_pr_number,
+            stack_repos=getattr(rec, "stack_repos", None),
         )
 
 
@@ -285,6 +289,17 @@ class _EnqueueRequest(_BaseModel):
             "generates a new one. Use to re-enqueue an existing "
             "stack with the same id (rare; usually managed by the "
             "orchestrator)."
+        ),
+    )
+    # Phase 2.5: cross-repo stacks
+    stack_repos: list[str] | None = _Field(
+        default=None,
+        description=(
+            "Phase 2.5: one absolute repo path per slice, for "
+            "cross-repo stacks. ``len(stack_repos)`` MUST equal "
+            "``split_into`` when both are set. Default: null "
+            "(single-repo stack — all slices live in the "
+            "worktree repo, Phase 2.4 behaviour)."
         ),
     )
 

@@ -30,7 +30,7 @@ from harness.server.llm.router import CompletionResult
 def code_spec() -> AgentSpec:
     return AgentSpec(
         name="code",
-        model="m", tools=["read_file", "write_file", "bash"],
+        model="MiniMax-M2.7", tools=["read_file", "write_file", "bash"],
         permissions="full", max_iterations=2,
         system_prompt="Make the smallest change.",
     )
@@ -40,7 +40,7 @@ def code_spec() -> AgentSpec:
 def review_spec() -> AgentSpec:
     return AgentSpec(
         name="review",
-        model="m", tools=["read_file", "grep"],
+        model="MiniMax-M2.7", tools=["read_file", "grep"],
         permissions="read-only", max_iterations=2,
         system_prompt="Review.",
     )
@@ -390,3 +390,234 @@ class TestCLIStackFlags:
         content = ns.stack_files.read()
         lines = [ln.strip() for ln in content.splitlines() if ln.strip()]
         assert lines == ["a.py", "b.py", "c.py"]
+
+    def test_stack_repos_flag_parses(
+        self, tmp_path: Path,
+    ) -> None:
+        """`--stack-repos a,b,c` parses into a comma-separated
+        string passed through to the orchestrator."""
+        from harness.cli import _build_parser
+        p = _build_parser()
+        ns = p.parse_args([
+            "agents", "run", "code", "t",
+            "--stack-repos", f"{tmp_path}/a,{tmp_path}/b",
+            "--split-into", "2",
+            "--pr", "--background",
+        ])
+        # The parser doesn't split on comma — _cmd_agents_run does.
+        # The flag value is the raw string.
+        assert ns.stack_repos == f"{tmp_path}/a,{tmp_path}/b"
+
+
+# === Phase 2.5: cross-repo stacks ===
+
+class TestCrossRepoStacks:
+    """Cross-repo stacks: 1 task = N PRs in N repos.
+
+    These tests exercise the ``stack_repos`` path in
+    :meth:`_run_stack_phase`. The orchestrator row's
+    ``stack_repos`` column gets a JSON list of paths; each
+    slice's ``_commit_slice`` / ``_push_branch`` / ``create_pr``
+    / child-row ``repo`` all use the per-slice repo path.
+    """
+
+    async def test_cross_repo_two_repos_two_slices(
+        self, git_repo: Path, tmp_path: Path,
+    ) -> None:
+        """2 repos × 2 slices → orchestrator row has
+        ``stack_repos`` JSON, 2 child rows each with their
+        own ``repo``."""
+        # Two real git repos (so WorktreeSession.__init__ doesn't
+        # blow up on the path validation it does internally).
+        repo_a = git_repo  # reused fixture
+        repo_b = tmp_path / "repo_b"
+        repo_b.mkdir()
+        await _git_init(repo_b)
+
+        # Create a JobStore + queue.
+        from harness.agents.merge_queue import MergeQueue
+        from harness.agents.runner import AgentRunner
+        from harness.agents.verify import AdversarialVerify
+
+        store = JobStore(tmp_path / "jobs.db")
+        runner = AgentRunner.__new__(AgentRunner)
+        runner.repo = repo_a
+        runner.completion_calls = 0
+        queue = MergeQueue(
+            runner=runner,
+            verifier=AdversarialVerify.__new__(AdversarialVerify),
+            store=store,
+        )
+
+        # Mock all I/O at the queue level. The orchestrator's
+        # planner is patched directly so we get a deterministic
+        # 2-slice plan regardless of strategy settings.
+        from harness.agents import merge_queue as mq_mod
+        from harness.agents.pr_split import SplitSlice
+        real_plan = mq_mod.plan_splits
+
+        def fake_plan(*args, **kwargs):
+            return [
+                SplitSlice(
+                    position=0, files=["a.py"],
+                    branch_name="harness/wt-cross/step-0",
+                    title="step 1/2",
+                ),
+                SplitSlice(
+                    position=1, files=["b.py"],
+                    branch_name="harness/wt-cross/step-1",
+                    title="step 2/2",
+                ),
+            ]
+        # Module-level attribute assignment — same effect as a
+        # module-level import lookup. Restored in finally.
+        mq_mod.plan_splits = fake_plan  # type: ignore[assignment]
+
+        # 2 files in 2 different "directory roots" — the files
+        # strategy round-robins by file count, so 2 files ×
+        # max_per_slice=1 = 2 slices.
+        async def fake_get_diff(repo: Path, base: str) -> list[str]:
+            if repo == repo_b:
+                return ["b.py"]
+            return ["a.py"]
+
+        # Track per-slice repo and use ``MagicMock`` for the
+        # spec (same as the existing ``test_three_slices`` —
+        # the orchestrator never invokes the spec here).
+        slice_calls: list[tuple[int, Path]] = []
+
+        async def fake_commit(
+            repo: Path, branch: str, files: list[str], msg: str,
+        ) -> bool:
+            slice_calls.append((len(slice_calls), repo))
+            return True
+
+        async def fake_push(repo: Path, branch: str) -> bool:
+            return True
+
+        created_numbers = iter([10, 11])
+        async def fake_create_pr(
+            *, repo: Path, head_branch: str, base_branch: str,
+            title: str, body: str, draft: bool, env_var: str = "GITHUB_TOKEN",
+        ) -> PRCreateResult:
+            n = next(created_numbers)
+            return PRCreateResult(
+                url=f"https://gh/x/pull/{n}", number=n, branch=head_branch,
+            )
+
+        queue._get_diff_files = fake_get_diff  # type: ignore[method-assign]
+        queue._commit_slice = fake_commit  # type: ignore[method-assign]
+        queue._push_branch = fake_push  # type: ignore[method-assign]
+        original_create_pr = mq_mod.create_pr
+        mq_mod.create_pr = fake_create_pr  # type: ignore[assignment]
+        mq_mod.add_pr_label = AsyncMock(return_value=None)  # type: ignore[assignment]
+
+        try:
+            job = MergeJob(
+                code_spec=MagicMock(), review_spec=MagicMock(),
+                task="refactor X", worktree_id="wt-cross",
+                pr_mode="draft", split_into=2,
+                stack_repos=[repo_a, repo_b],
+            )
+            job_id = await store.create(
+                worktree_id=job.worktree_id, model="m", prompt=job.task,
+                status="running_code",
+            )
+            result = await queue._run_stack_phase(
+                job, job_id, repo_a, worktree_branch="harness/wt-cross",
+                cost_so_far=0.0,
+            )
+            # Orchestrator row is not yet merged (waits for
+            # children via webhook).
+            assert result == (False, None, None, False)
+        finally:
+            mq_mod.create_pr = original_create_pr  # type: ignore[assignment]
+            mq_mod.plan_splits = real_plan  # type: ignore[assignment]
+
+        # 2 slices were committed, each in its own repo.
+        assert len(slice_calls) == 2
+        repos_seen = {r for _, r in slice_calls}
+        assert repo_a in repos_seen
+        assert repo_b in repos_seen
+        # 1 orchestrator + 2 children.
+        children = await store.find_jobs_by_stack_id(
+            (await store.load(job_id)).pr_stack_id,  # type: ignore[union-attr]
+        )
+        assert len(children) == 3
+        child_repos = {c.repo for c in children if c.stack_position >= 1}
+        assert str(repo_a) in child_repos
+        assert str(repo_b) in child_repos
+        # Orchestrator row has stack_repos JSON-encoded.
+        orch = next(c for c in children if c.stack_position == 0)
+        assert orch.stack_repos is not None
+        assert len(orch.stack_repos) == 2
+
+    async def test_cross_repo_validation_mismatch(
+        self, git_repo: Path, tmp_path: Path,
+    ) -> None:
+        """``len(stack_repos) != split_into`` → job fails
+        with a clear error (no PRs created)."""
+        from harness.agents.merge_queue import MergeQueue
+        from harness.agents.runner import AgentRunner
+        from harness.agents.verify import AdversarialVerify
+        store = JobStore(tmp_path / "jobs.db")
+        runner = AgentRunner.__new__(AgentRunner)
+        runner.repo = git_repo
+        runner.completion_calls = 0
+        queue = MergeQueue(
+            runner=runner,
+            verifier=AdversarialVerify.__new__(AdversarialVerify),
+            store=store,
+        )
+
+        async def fake_get_diff(repo: Path, base: str) -> list[str]:
+            # Planner produces 2 slices (1 file each).
+            return ["a.py", "b.py"]
+
+        queue._get_diff_files = fake_get_diff  # type: ignore[method-assign]
+
+        job = MergeJob(
+            code_spec=MagicMock(), review_spec=MagicMock(),
+            task="t", worktree_id="wt-mismatch",
+            pr_mode="draft", split_into=2,
+            # 3 paths, planner will produce 2 slices → mismatch.
+            stack_repos=[git_repo, git_repo, git_repo],
+        )
+        job_id = await store.create(
+            worktree_id=job.worktree_id, model="m", prompt=job.task,
+            status="running_code",
+        )
+        result = await queue._run_stack_phase(
+            job, job_id, git_repo, worktree_branch="h",
+            cost_so_far=0.0,
+        )
+        assert result == (False, None, None, False)
+        rec = await store.load(job_id)
+        assert rec is not None
+        assert rec.status == "failed"
+        assert "mismatch" in (rec.error or "").lower()
+
+
+async def _git_init(repo: Path) -> None:
+    """Run ``git init`` in a temp dir for the test fixture."""
+    import subprocess
+    subprocess.run(
+        ["git", "init", "--initial-branch=main"],
+        cwd=str(repo), check=True, capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "harness@example.com"],
+        cwd=str(repo), check=True, capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Harness"],
+        cwd=str(repo), check=True, capture_output=True,
+    )
+    (repo / "README.md").write_text("# Test\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "add", "-A"], cwd=str(repo), check=True, capture_output=True,
+    )
+    subprocess.run(
+        ["git", "commit", "-m", "init"],
+        cwd=str(repo), check=True, capture_output=True,
+    )

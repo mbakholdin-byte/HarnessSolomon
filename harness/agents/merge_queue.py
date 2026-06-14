@@ -154,6 +154,17 @@ class MergeJob:
     #: planner only groups the listed files; unlisted files are
     #: ignored. ``None`` = use the planner on the full diff.
     slice_files: list[str] | None = None
+    # === Phase 2.5: cross-repo stacks ===
+    #: One repo path per slice, for cross-repo stacks. ``None``
+    #: (default) = single-repo stack (Phase 2.4 behavior — all
+    #: slices use ``repo_override`` or ``self.runner.repo``).
+    #: When set, validation in :meth:`MergeQueue.enqueue`
+    #: (and CLI/API entry points) requires
+    #: ``len(stack_repos) == split_into`` AND every path to
+    #: exist on disk AND be a git repo. Each slice gets its own
+    #: ``WorktreeSession`` (1 worktree per repo); per-repo
+    #: ``RepoLockRegistry`` lock acquired sequentially.
+    stack_repos: list[Path] | None = None
 
 
 @dataclass
@@ -1369,6 +1380,24 @@ class MergeQueue:
         # Assign the stack_id if not set (the orchestrator row was
         # created with stack_id=None; the children get the same id).
         stack_id = job.stack_id or uuid4().hex[:12]
+        # Phase 2.5: cross-repo validation. If the user supplied
+        # ``stack_repos``, ``len(stack_repos)`` must match the
+        # planner's slice count (1 slice = 1 repo).
+        is_cross_repo = bool(job.stack_repos)
+        if is_cross_repo and len(job.stack_repos) != len(plan):  # type: ignore[arg-type]
+            err = (
+                f"cross-repo stack mismatch: stack_repos has "
+                f"{len(job.stack_repos)} entries, planner produced "
+                f"{len(plan)} slices"
+            )
+            await self.store.update_status(
+                job_id, "failed", finished=True,
+                cost=cost_so_far, error=err,
+            )
+            await self._emit(
+                job_id, "failed", reason=err,
+            )
+            return (False, None, None, False)
         # Persist the orchestrator's stack_id + size BEFORE creating
         # children, so the child ``pr_stack_id`` foreign-key-style
         # lookup works. We bypass ``update_status`` (which only
@@ -1376,14 +1405,20 @@ class MergeQueue:
         # do a direct UPDATE — this is the one place we need to
         # touch stack columns.
         import aiosqlite
+        import json
         async with aiosqlite.connect(self.store.db_path) as db:
             await db.execute(
                 """
                 UPDATE merge_jobs
-                SET pr_stack_id = ?, stack_size = ?
+                SET pr_stack_id = ?, stack_size = ?, stack_repos = ?
                 WHERE id = ?
                 """,
-                (stack_id, len(plan), job_id),
+                (
+                    stack_id, len(plan),
+                    json.dumps([str(p) for p in job.stack_repos])
+                    if job.stack_repos else None,
+                    job_id,
+                ),
             )
             await db.commit()
         await self.store.update_status(job_id, "pr_creating")
@@ -1391,12 +1426,24 @@ class MergeQueue:
             job_id, "pr_creating",
             target=target_branch, stack_id=stack_id,
             stack_size=len(plan),
+            cross_repo=is_cross_repo,
         )
 
         # 2. Create each slice: branch + commit + push + open PR.
         opened_prs: list[tuple[int, int]] = []  # (position, pr_number)
         prev_pr_number: int | None = None
         for i, slice in enumerate(plan):
+            # Phase 2.5: per-slice repo. For single-repo stacks
+            # ``job.stack_repos is None`` and we keep using ``repo``
+            # (the worktree repo). For cross-repo stacks, we use
+            # ``stack_repos[i]`` — each slice lives in its own
+            # repo (Phase 2.4 reused 1 worktree for N slices; that
+            # only works inside one repo).
+            repo_slice: Path = (
+                Path(job.stack_repos[i])  # type: ignore[index]
+                if is_cross_repo
+                else repo
+            )
             slice_branch = slice.branch_name
             base = (
                 target_branch
@@ -1411,7 +1458,9 @@ class MergeQueue:
                 f"harness: stack slice {i + 1}/{len(plan)}\n\n"
                 f"Task: {job.task[:200]}"
             )
-            ok = await self._commit_slice(repo, slice_branch, slice_files, commit_msg)
+            ok = await self._commit_slice(
+                repo_slice, slice_branch, slice_files, commit_msg,
+            )
             if not ok:
                 # Cascade cancel siblings.
                 await self._emit(
@@ -1419,18 +1468,18 @@ class MergeQueue:
                     reason=f"slice {i + 1} commit failed",
                 )
                 return await self._cancel_stack(
-                    job_id, stack_id, opened_prs, repo,
+                    job_id, stack_id, opened_prs, repo_slice,
                     cost_so_far=cost_so_far,
                     error=f"slice {i + 1} commit failed",
                 )
-            pushed = await self._push_branch(repo, slice_branch)
+            pushed = await self._push_branch(repo_slice, slice_branch)
             if not pushed:
                 await self._emit(
                     job_id, "failed",
                     reason=f"slice {i + 1} push failed",
                 )
                 return await self._cancel_stack(
-                    job_id, stack_id, opened_prs, repo,
+                    job_id, stack_id, opened_prs, repo_slice,
                     cost_so_far=cost_so_far,
                     error=f"slice {i + 1} push failed",
                 )
@@ -1459,7 +1508,7 @@ class MergeQueue:
                     issue_numbers=issues,
                 )
                 created = await create_pr(
-                    repo=repo,
+                    repo=repo_slice,
                     head_branch=slice_branch,
                     base_branch=base,
                     title=slice.title,
@@ -1475,7 +1524,7 @@ class MergeQueue:
                     )
                     try:
                         await add_pr_label(
-                            repo=repo, pr_number=created.number,
+                            repo=repo_slice, pr_number=created.number,
                             label=label,
                             env_var=settings.github_token_env,
                         )
@@ -1497,7 +1546,7 @@ class MergeQueue:
                     reason="gh unavailable (stacks require gh)",
                 )
                 return await self._cancel_stack(
-                    job_id, stack_id, opened_prs, repo,
+                    job_id, stack_id, opened_prs, repo_slice,
                     cost_so_far=cost_so_far,
                     error=f"gh unavailable: {e}",
                 )
@@ -1512,19 +1561,23 @@ class MergeQueue:
                     reason=f"slice {i + 1} create_pr failed",
                 )
                 return await self._cancel_stack(
-                    job_id, stack_id, opened_prs, repo,
+                    job_id, stack_id, opened_prs, repo_slice,
                     cost_so_far=cost_so_far,
                     error=str(e),
                 )
 
             # 4. Persist a child row in merge_jobs. The orchestrator
             # row is the parent's job_id; children get fresh ids.
+            # Phase 2.5: for cross-repo stacks, persist the
+            # child row's ``repo`` as ``str(repo_slice)`` so the
+            # webhook handler's ``find_job_by_pr_number`` returns
+            # the right repo for the merge step.
             child_id = await self.store.create(
                 worktree_id=f"{job.worktree_id}-step-{i}",
                 model=job.model or "stack-child",
                 prompt=f"slice {i + 1}/{len(plan)}: {job.task}",
                 status="pr_open",
-                repo=str(repo),
+                repo=str(repo_slice),
                 pr_mode=job.pr_mode,
                 target_branch=base,
                 pr_url=created.url,
