@@ -19,7 +19,7 @@ from typing import Any, AsyncIterator
 
 from pydantic import BaseModel
 
-from harness.server.llm.models import get_model
+from harness.server.llm.models import DEFAULT_MAX_TOOLS, get_model
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +127,11 @@ class LLMRouter:
         import inspect
 
         litellm_model = self._to_litellm_model_id(model)
+        # Apply per-model tool limit (e.g. MiniMax rejects >4 with code 2013)
+        if "tools" in call_kwargs:
+            call_kwargs["tools"] = self._limit_tools_for_model(
+                model, call_kwargs["tools"]
+            )
         # Normalize tool schemas to OpenAI's wrapped form
         # (litellm's minimax provider doesn't auto-wrap; MiniMax API
         # rejects unwrapped tools with "invalid tool type:").
@@ -159,6 +164,38 @@ class LLMRouter:
             # caller sees the original message
             return model
         return f"{spec.provider}/{spec.id}"
+
+    @staticmethod
+    def _limit_tools_for_model(
+        model: str, tools: list[dict] | None
+    ) -> list[dict] | None:
+        """Cap the number of tools sent to the model at its per-spec limit.
+
+        Different providers have different per-request tool limits. MiniMax
+        rejects >4 tools with "invalid tool type:" (code 2013). Looking up
+        the model spec gives us the cap. If the model is unknown, we use
+        ``models.DEFAULT_MAX_TOOLS`` (4) which is a safe default.
+
+        A ``logger.warning`` is emitted when truncation happens so the caller
+        can react (e.g. reduce TOOL_SCHEMAS or split into sub-agents).
+        """
+        if not tools:
+            return tools
+        spec = get_model(model)
+        max_tools = spec.max_tools if spec is not None else DEFAULT_MAX_TOOLS
+        if len(tools) <= max_tools:
+            return tools
+        truncated = tools[:max_tools]
+        logger.warning(
+            "tools truncated for model=%s: sent %d, model max=%d. "
+            "Dropped tools: %s",
+            model,
+            max_tools,
+            max_tools,
+            [t.get("name", "?") if isinstance(t, dict) else "?"
+             for t in tools[max_tools:]],
+        )
+        return truncated
 
     @staticmethod
     def _wrap_tools_for_litellm(tools: list[dict] | None) -> list[dict] | None:
@@ -222,6 +259,9 @@ class LLMRouter:
 
         litellm_model = self._to_litellm_model_id(model)
         if "tools" in call_kwargs:
+            call_kwargs["tools"] = self._limit_tools_for_model(
+                model, call_kwargs["tools"]
+            )
             call_kwargs["tools"] = self._wrap_tools_for_litellm(call_kwargs["tools"])
         try:
             response = litellm.completion(

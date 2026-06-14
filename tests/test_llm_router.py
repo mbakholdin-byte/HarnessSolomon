@@ -296,6 +296,80 @@ async def test_completion_wraps_unwrapped_tools() -> None:
         assert sent_tools[0]["function"]["parameters"] == unwrapped_tools[0]["parameters"]
 
 
+# === per-model tool limit ===
+
+def test_limit_tools_passes_through_under_cap() -> None:
+    """When tool count <= max_tools, all tools are passed through."""
+    tools = [{"name": f"t_{i}", "description": "x", "parameters": {"type": "object"}} for i in range(3)]
+    out = LLMRouter._limit_tools_for_model("MiniMax-M2.7", tools)
+    assert out == tools
+    assert len(out) == 3
+
+
+def test_limit_tools_truncates_at_cap() -> None:
+    """When tool count > max_tools, only the first N are kept."""
+    tools = [{"name": f"t_{i}", "description": "x", "parameters": {"type": "object"}} for i in range(6)]
+    out = LLMRouter._limit_tools_for_model("MiniMax-M2.7", tools)
+    assert len(out) == 4
+    assert [t["name"] for t in out] == ["t_0", "t_1", "t_2", "t_3"]
+
+
+def test_limit_tools_unknown_model_uses_default() -> None:
+    """Unknown model id falls back to DEFAULT_MAX_TOOLS (4)."""
+    tools = [{"name": f"t_{i}", "description": "x", "parameters": {"type": "object"}} for i in range(6)]
+    out = LLMRouter._limit_tools_for_model("unknown-xyz-model", tools)
+    assert len(out) == 4
+
+
+def test_limit_tools_none_and_empty() -> None:
+    """None and empty list are passed through unchanged."""
+    assert LLMRouter._limit_tools_for_model("MiniMax-M2.7", None) is None
+    assert LLMRouter._limit_tools_for_model("MiniMax-M2.7", []) == []
+
+
+def test_limit_tools_logs_warning_on_truncation(caplog) -> None:
+    """Truncation emits a warning naming the dropped tools."""
+    import logging
+    tools = [{"name": f"t_{i}", "description": "x", "parameters": {"type": "object"}} for i in range(6)]
+    with caplog.at_level(logging.WARNING, logger="harness.server.llm.router"):
+        LLMRouter._limit_tools_for_model("MiniMax-M2.7", tools)
+    warnings = [r for r in caplog.records if "truncated" in r.getMessage()]
+    assert len(warnings) == 1
+    msg = warnings[0].getMessage()
+    assert "t_4" in msg and "t_5" in msg  # dropped tool names mentioned
+
+
+async def test_completion_truncates_tools_per_model() -> None:
+    """completion() truncates tools to the model's max_tools limit.
+
+    Integration test: send 6 tools to MiniMax (max=4), verify litellm
+    receives only 4.
+    """
+    with patch("harness.server.llm.router.litellm") as mock_litellm:
+        mock_litellm.completion = AsyncMock(
+            return_value=_make_completion_response("ok", 1, 1)
+        )
+        router = LLMRouter()
+        tools = [
+            {"name": f"t_{i}", "description": "x",
+             "parameters": {"type": "object", "properties": {}}}
+            for i in range(6)
+        ]
+        await router.completion(
+            messages=[{"role": "user", "content": "x"}],
+            model="MiniMax-M2.7",
+            tools=tools,
+        )
+        sent_tools = mock_litellm.completion.call_args.kwargs["tools"]
+        # MiniMax max_tools=4 → only first 4 reach litellm
+        assert len(sent_tools) == 4
+        assert all(t.get("type") == "function" for t in sent_tools)
+        # And they're wrapped (truncation + wrapping both applied)
+        assert [t["function"]["name"] for t in sent_tools] == [
+            "t_0", "t_1", "t_2", "t_3"
+        ]
+
+
 # === import-time error ===
 
 def test_router_handles_missing_litellm(monkeypatch: pytest.MonkeyPatch) -> None:
