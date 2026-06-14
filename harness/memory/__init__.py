@@ -9,6 +9,14 @@ Sub-packages:
                   adapters, with dual-write and search.
   - ``retrieval``: hybrid (BM25+vector) → rerank → assembly pipeline.
 """
+from harness.memory.retrieval import (
+    BM25Retriever,
+    ContextAssembler,
+    DEFAULT_CANDIDATE_K,
+    DEFAULT_TOP_K,
+    IdentityReranker,
+    RetrievalPipeline,
+)
 from harness.memory.schema import (
     ALL_LAYERS,
     PROVENANCE_CHAIN_MAX,
@@ -33,4 +41,10 @@ __all__ = [
     "UnifiedMemory",
     "DEFAULT_DUAL_WRITE_POLICY",
     "L1_OVERRIDE_TARGET",
+    "BM25Retriever",
+    "ContextAssembler",
+    "IdentityReranker",
+    "RetrievalPipeline",
+    "DEFAULT_CANDIDATE_K",
+    "DEFAULT_TOP_K",
 ]
