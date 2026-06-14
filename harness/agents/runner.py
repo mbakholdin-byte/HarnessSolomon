@@ -1,0 +1,296 @@
+"""Sub-agent runner — composes WorktreeSession + AgentLoop (Phase 2.0, Step 4).
+
+The runner is intentionally thin: it instantiates a per-run
+:class:`~harness.server.agent.runtime.ToolRuntime` bound to the worktree's
+``project_root``, filters :data:`~harness.server.agent.tools.TOOL_SCHEMAS`
+by the spec's ``tools`` allowlist and ``permissions`` denylist, and
+delegates the LLM↔tool loop to
+:class:`~harness.server.agent.loop.AgentLoop`.
+
+**Trust boundary:** the runner does NOT import
+:class:`LLMRouterClassifier`, :class:`MergeQueue`, or
+:class:`AdversarialVerify`. A code review pass should ``grep`` for cross
+imports in this file to enforce the design constraint
+(``architecture.md:86``) that sub-agents cannot spawn sub-agents.
+"""
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, AsyncIterator
+
+from harness.agents.spec import AgentSpec
+from harness.agents.worktree import WorktreeInfo, WorktreeSession
+from harness.server.agent.loop import AgentLoop, DEFAULT_MAX_ITERATIONS
+from harness.server.agent.prompts import build_system_prompt
+from harness.server.agent.runtime import ToolResult, ToolRuntime
+from harness.server.agent.tools import TOOL_SCHEMAS
+from harness.server.llm.router import LLMRouter, StreamEvent
+
+logger = logging.getLogger(__name__)
+
+
+# === Permissions → denylist ===
+
+#: Tools stripped from the tool list when the agent has ``read-only`` perms,
+#: regardless of whether they appear in ``spec.tools``. This is defence in
+#: depth: a typo or hallucination cannot enable write access for an
+#: agent declared as read-only.
+_READ_ONLY_DENY: frozenset[str] = frozenset({"write_file", "edit_file"})
+
+
+def permissions_denylist(permissions: str) -> frozenset[str]:
+    """Return the set of tool names that are unconditionally denied for a
+    given ``permissions`` level. ``scoped-write`` and ``full`` do not
+    strip any tools at this layer — enforcement happens in the runtime
+    via ``allowed_paths`` (Phase 2.1) and the existing path sandbox."""
+    if permissions == "read-only":
+        return _READ_ONLY_DENY
+    if permissions in ("scoped-write", "full"):
+        return frozenset()
+    raise ValueError(f"unknown permissions level: {permissions!r}")
+
+
+# === Filter helpers ===
+
+def filter_tools(spec: AgentSpec) -> list[dict[str, Any]]:
+    """Return the TOOL_SCHEMAS filtered by ``spec.tools`` and the perms denylist."""
+    deny = permissions_denylist(spec.permissions)
+    return [t for t in TOOL_SCHEMAS if t["name"] in spec.tools and t["name"] not in deny]
+
+
+def build_system_prompt_for(
+    spec: AgentSpec, project_root: Path, tools: list[dict[str, Any]],
+) -> str:
+    """Compose ``spec.system_prompt`` + the standard system prompt.
+
+    The spec's prompt is the role description; the standard prompt adds
+    the project_root and tool catalogue. We put the role description FIRST
+    so it sets the tone before the LLM sees the tool list.
+    """
+    if spec.system_prompt:
+        return f"{spec.system_prompt}\n\n{build_system_prompt(project_root, tools)}"
+    return build_system_prompt(project_root, tools)
+
+
+# === Proxy runtime (defence in depth) ===
+
+class _DeniedToolRuntime:
+    """A ``ToolRuntime``-shaped proxy that short-circuits denied tools.
+
+    Why a proxy, not a subclass: ``ToolRuntime`` has many private methods
+    and we want zero risk of breaking them. The proxy is duck-compatible:
+    anything that calls ``await runtime.execute(name, args)`` works the
+    same; calls to other ToolRuntime methods fall through to the wrapped
+    instance.
+    """
+
+    __slots__ = ("_inner", "_denied")
+
+    def __init__(self, inner: ToolRuntime, denied: frozenset[str]) -> None:
+        self._inner = inner
+        self._denied = denied
+
+    async def execute(self, name: str, args: dict[str, Any]) -> ToolResult:
+        if name in self._denied:
+            return ToolResult(
+                ok=False,
+                error=f"tool denied by agent permissions: {name!r}",
+            )
+        return await self._inner.execute(name, args)
+
+    def __getattr__(self, item: str) -> Any:
+        """Forward any other attribute access to the wrapped runtime."""
+        return getattr(self._inner, item)
+
+
+def filter_runtime(spec: AgentSpec, runtime: ToolRuntime) -> ToolRuntime:
+    """Wrap ``runtime`` in a denylist-enforcing proxy when needed.
+
+    Returns the original runtime unchanged when the denylist is empty
+    (avoids a needless wrapper layer for ``full`` and ``scoped-write``
+    agents that can use any tool).
+    """
+    deny = permissions_denylist(spec.permissions)
+    if not deny:
+        return runtime
+    # The proxy is duck-compatible with ToolRuntime. We type-annotate as
+    # ToolRuntime for the caller's convenience; runtime checkers like
+    # mypy can't tell the difference.
+    return _DeniedToolRuntime(runtime, deny)  # type: ignore[return-value]
+
+
+# === Runner ===
+
+@dataclass
+class RunResult:
+    """Summary of a single sub-agent run."""
+
+    spec: AgentSpec
+    worktree: WorktreeInfo  # the worktree the agent ran in (or self.repo if no-worktree)
+    final_text: str
+    iterations: int
+    total_cost: float
+    usage: dict[str, int] = field(default_factory=dict)
+    denied_tool_calls: int = 0
+    error: str | None = None
+
+
+class AgentRunner:
+    """Run a sub-agent end-to-end inside a worktree.
+
+    Args:
+        router: An :class:`LLMRouter` (reuse the harness's main router —
+                all sub-agents hit the same model catalog).
+        repo:   The main git repo dir. Sub-agents branch off this and run
+                in a worktree under ``.harness/worktrees/<id>/``.
+    """
+
+    def __init__(self, router: LLMRouter, repo: Path) -> None:
+        self.router = router
+        self.repo = Path(repo).resolve(strict=False)
+
+    # --- public API ---
+
+    async def run(
+        self,
+        spec: AgentSpec,
+        prompt: str,
+        *,
+        worktree_id: str | None = None,
+        stream: bool = False,
+    ) -> RunResult:
+        """Run ``spec`` against ``prompt`` and return the final result.
+
+        The worktree is created if ``spec.worktree_required`` (default),
+        otherwise we run in ``self.repo`` directly.
+
+        ``stream`` controls whether the underlying AgentLoop yields
+        token-level events; when ``False`` (the default — useful for
+        programmatic callers) the loop emits a single ``assistant_message``
+        per iteration. Streaming is intended for the WebSocket path.
+        """
+        if spec.worktree_required:
+            async with WorktreeSession(self.repo, worktree_id=worktree_id) as wt:
+                return await self._drive(spec, prompt, wt, stream=stream)
+        # No-worktree path: synthesize a WorktreeInfo pointing at self.repo.
+        wt = WorktreeInfo(
+            path=self.repo, branch="(no worktree)",
+            worktree_id=worktree_id or "no-wt", reused=False,
+        )
+        return await self._drive(spec, prompt, wt, stream=stream)
+
+    # --- core loop ---
+
+    async def _drive(
+        self,
+        spec: AgentSpec,
+        prompt: str,
+        wt: WorktreeInfo,
+        *,
+        stream: bool,
+    ) -> RunResult:
+        runtime = ToolRuntime(project_root=wt.path)
+        wrapped = filter_runtime(spec, runtime)
+        tools = filter_tools(spec)
+        loop = AgentLoop(
+            runtime=wrapped,  # type: ignore[arg-type]
+            router=self.router,
+            max_iterations=spec.max_iterations or DEFAULT_MAX_ITERATIONS,
+        )
+
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": build_system_prompt_for(spec, wt.path, tools)},
+            {"role": "user", "content": prompt},
+        ]
+
+        last_text = ""
+        iterations = 0
+        total_cost = 0.0
+        total_usage: dict[str, int] = {}
+        denied_count = 0
+        deny_set = permissions_denylist(spec.permissions)
+        error: str | None = None
+
+        try:
+            async for event in loop.run(messages, model=spec.model, stream=stream):
+                if event.type == "assistant_message":
+                    iterations += 1
+                    if event.content:
+                        last_text = event.content
+                    if event.cost:
+                        total_cost += event.cost
+                    if event.usage:
+                        for k, v in event.usage.items():
+                            total_usage[k] = total_usage.get(k, 0) + int(v)
+                elif event.type == "tool_result":
+                    # A tool result with ok=False from a denied tool
+                    # indicates the perms proxy short-circuited the call.
+                    if event.tool_call and event.tool_call.get("ok") is False:
+                        name = event.tool_call.get("name", "")
+                        if name in deny_set:
+                            denied_count += 1
+                elif event.type == "error":
+                    error = event.content or "unknown error"
+                    if event.cost:
+                        total_cost += event.cost
+                elif event.type == "done":
+                    if event.cost:
+                        total_cost += event.cost
+                    if event.usage:
+                        for k, v in event.usage.items():
+                            total_usage[k] = total_usage.get(k, 0) + int(v)
+        except Exception as e:
+            error = f"{type(e).__name__}: {e}"
+            logger.exception("sub-agent %r failed", spec.name)
+
+        return RunResult(
+            spec=spec, worktree=wt, final_text=last_text,
+            iterations=iterations, total_cost=total_cost,
+            usage=total_usage, denied_tool_calls=denied_count, error=error,
+        )
+
+    # --- streaming variant ---
+
+    async def stream(
+        self,
+        spec: AgentSpec,
+        prompt: str,
+        *,
+        worktree_id: str | None = None,
+    ) -> AsyncIterator[StreamEvent]:
+        """Like :meth:`run` but yields ``StreamEvent``s live.
+
+        Use this for WebSocket or CLI streaming output. The final event is
+        ``done`` (from AgentLoop); consumers should stop after that.
+        """
+        if spec.worktree_required:
+            async with WorktreeSession(self.repo, worktree_id=worktree_id) as wt:
+                async for e in self._stream_drive(spec, prompt, wt):
+                    yield e
+        else:
+            wt = WorktreeInfo(
+                path=self.repo, branch="(no worktree)",
+                worktree_id=worktree_id or "no-wt", reused=False,
+            )
+            async for e in self._stream_drive(spec, prompt, wt):
+                yield e
+
+    async def _stream_drive(
+        self, spec: AgentSpec, prompt: str, wt: WorktreeInfo,
+    ) -> AsyncIterator[StreamEvent]:
+        runtime = ToolRuntime(project_root=wt.path)
+        wrapped = filter_runtime(spec, runtime)
+        tools = filter_tools(spec)
+        loop = AgentLoop(
+            runtime=wrapped,  # type: ignore[arg-type]
+            router=self.router,
+            max_iterations=spec.max_iterations or DEFAULT_MAX_ITERATIONS,
+        )
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": build_system_prompt_for(spec, wt.path, tools)},
+            {"role": "user", "content": prompt},
+        ]
+        async for event in loop.run(messages, model=spec.model, stream=True):
+            yield event
