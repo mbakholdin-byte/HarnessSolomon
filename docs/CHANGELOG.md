@@ -1,5 +1,49 @@
 # Changelog — Solomon Harness
 
+## Phase 1 — 4-layer memory (2026-06-14)
+
+### 7 шагов за ~1 день (вторая половина 14.06.2026, post-compact)
+
+| # | Шаг | Коммит | Что |
+|---|-----|--------|-----|
+| 1 | Memory schema (Pydantic) | `4ac2c64` | `Memory` + 5 layers (L1–L2.5–L3–L4) + 6 sources + provenance chain (FIFO 8) — 21 tests |
+| 2 | hmem adapter (L1) | `f6a25b3` | JSONL per agent, prefix-coded — 14 tests |
+| 3 | mem0 adapter (L2) | `8a71a50` | per-user semantic, upsert + scored search — 14 tests |
+| 4 | hybrid adapter (L3) | `dbea05b` | SQLite per project, recent/tail + delete — 15 tests |
+| 5 | file adapter (L4) | `9c29e22` | Markdown + INDEX.md, hidden HTML-коммент для metadata — 16 tests |
+| 6 | UnifiedMemory facade | `6f9f1fb` | dual-write policy, `_safe_write` для mirrors — 14 tests |
+| 7 | retrieval pipeline | `e3424d3` | BM25 (pure-Python) + IdentityReranker + ContextAssembler — 16 tests |
+
+### Метрики (на 14.06.2026, end of Phase 1)
+
+- **Tests:** 110 новых (200 mock total + 5 real_llm = 205/205) — 7 новых test-файлов
+- **Production:** 9 файлов в `harness/memory/` (schema, unified, 4 adapters, 4 retrieval) — ~1900 LoC
+- **Pluggable:** BM25 retriever + IdentityReranker — Phase 2 swap-in для Qdrant + bge-reranker-v2-m3
+- **Dual-write policy default:** primary=L2 (mem0), mirrors=[L3, L4], L1 — отдельный override
+- **Tag:** `v0.2.0` (annotated, pushed)
+
+### Решения (Phase 1)
+
+- **2026-06-14** — Pure-Python BM25 (k1=1.5, b=0.75) вместо rank_bm25: меньше deps, корректный unicode tokeniser (`re.findall(r"[\w]+", text, re.UNICODE)`).
+- **2026-06-14** — L2.5 (mempalace KG) = placeholder → fallback на mem0. TODO Phase 2.1+.
+- **2026-06-14** — File adapter metadata через hidden HTML-коммент `<!-- memory-metadata: {...} -->`: hand-rolled YAML не справлялся с nested JSON.
+- **2026-06-14** — Sub-agent-of-sub-agent ЗАПРЕЩЁН на уровне design (architecture.md:86). Реализуется в Phase 2 через import-level trust boundary.
+
+### Что готово (Phase 1)
+
+- [x] 4-слойная память: hmem, mem0, hybrid (SQLite), file (Markdown)
+- [x] Unified facade с dual-write policy
+- [x] Pluggable retrieval: BM25 → rerank → assemble
+- [x] ContextAssembler с char-budget (default 4KB) + truncation marker
+- [x] Provenance chain (FIFO 8 hops)
+- [x] v0.2.0 published
+
+### Что осталось до Фазы 2
+
+- [ ] Sub-agent system (Step 1–7) — **текущая фаза**
+
+---
+
 ## Phase 0 — Web MVP (2026-06-14)
 
 ### 11 шагов за ~3 дня (12–14.06.2026)

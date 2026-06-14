@@ -70,5 +70,29 @@ class Settings(BaseSettings):
         description="Max agent loop iterations per task (safety cap)",
     )
 
+    # === Sub-agents (Phase 2) ===
+    agents_dir: Path = Field(
+        default=Path(".harness/agents"),
+        description=(
+            "Directory for user-editable sub-agent .md files (overrides built-ins). "
+            "Resolved relative to settings.project_root."
+        ),
+    )
+    subagent_default_model: str = Field(
+        default="MiniMax-M2.7",
+        description="Default LLM model id for built-in sub-agents (must be in catalog)",
+    )
+    subagent_judges: int = Field(
+        default=2,
+        ge=1,
+        le=5,
+        description="Number of adversarial judges (used by AdversarialVerify).",
+    )
+    subagent_timeout_s: float = Field(
+        default=300.0,
+        gt=0,
+        description="Wall-clock cap (seconds) for a single sub-agent run (used by MergeQueue).",
+    )
+
 
 settings = Settings()
