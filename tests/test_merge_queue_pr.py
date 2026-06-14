@@ -697,3 +697,287 @@ class TestEdgeCases:
         assert rec.pr_url == "https://github.com/owner/repo/pull/42"
         assert rec.pr_number == 42
         assert "merge" in (rec.error or "").lower()
+
+
+# === Phase 2.3: auto-merge phase ===
+
+class TestAutoMergePhase:
+    """Phase 2.3: ``auto_merge=True`` uses ``gh pr merge --auto``."""
+
+    @staticmethod
+    def _stub_code_review_verifier(
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Stub the AgentRunner + AdversarialVerify so the code /
+        review / verify steps succeed without an LLM.
+
+        Mirrors the setup in
+        :class:`TestPRModeDraftHappyPath` — see the comment there
+        for the full rationale. Phase 2.3 auto-merge tests reuse
+        this exact pattern (the auto-merge logic only kicks in
+        AFTER verify passes, so we need the upstream path to
+        complete end-to-end first).
+        """
+        from harness.agents import merge_queue as mq
+        from harness.agents import runner as runner_mod
+        from harness.agents.runner import RunResult
+
+        async def stub_run(self, spec, prompt, **kwargs):
+            return RunResult(
+                spec=spec, worktree=kwargs.get("external_worktree"),
+                final_text="looks good", iterations=1, total_cost=0.001,
+                usage={}, denied_tool_calls=[], error=None,
+            )
+        monkeypatch.setattr(runner_mod.AgentRunner, "run", stub_run)
+
+        def passthrough_init(self, *args, **kwargs):
+            self.judges = 2
+        async def passthrough_run(self, *, prompt, answer, model=""):
+            return True
+        monkeypatch.setattr(mq.AdversarialVerify, "__init__", passthrough_init)
+        monkeypatch.setattr(mq.AdversarialVerify, "run", passthrough_run)
+
+    async def test_auto_merge_happy_path_status_sequence(
+        self, gh_subprocess_stub, git_repo: Path, tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """With auto_merge=True and successful enable_auto_merge,
+        the job terminates at ``pr_auto_merge_enabled`` (waiting
+        for the inbound webhook). The actual ``merged`` transition
+        is delivered by the webhook handler, NOT by the queue.
+        """
+        self._stub_code_review_verifier(monkeypatch)
+        from harness.config import settings
+        monkeypatch.setattr(settings, "pr_poll_interval_s", 0.01)
+        monkeypatch.setattr(settings, "pr_wait_timeout_s", 5.0)
+        store = JobStore(tmp_path / "jobs.db")
+        # Stub: auth status + create_pr + wait_for_checks (success) +
+        # enable_auto_merge. The merge_pr call should NOT happen.
+        gh_subprocess_stub(
+            _gh_stub_success(pr_number=42) +
+            [(("pr", "merge", "42", "--auto", "--squash", "--delete-branch"),
+              0, "Auto-merge enabled", "")]
+        )
+        queue = _make_queue_with_store(git_repo, store)
+        job = MergeJob(
+            code_spec=AgentSpec(name="code", tools=[], model="MiniMax-M2.7"),
+            review_spec=AgentSpec(name="review", tools=[], model="MiniMax-M2.7"),
+            task="x", worktree_id="wt-am-happy",
+            pr_mode="draft",
+            auto_merge=True,
+        )
+        jid = await queue.enqueue_async(job)
+        # Poll for terminal status (should be pr_auto_merge_enabled).
+        for _ in range(50):
+            await asyncio.sleep(0.05)
+            rec = await store.load(jid)
+            if rec and rec.status in (
+                "pr_auto_merge_enabled", "merged", "failed",
+                "timeout", "cancelled",
+            ):
+                break
+        rec = await store.load(jid)
+        assert rec is not None
+        # The auto-merge is enabled, NOT merged (Phase 2.3: the
+        # queue waits for the inbound webhook).
+        assert rec.status == "pr_auto_merge_enabled", (
+            f"expected pr_auto_merge_enabled, got {rec.status!r}"
+        )
+        assert rec.pr_url == "https://github.com/owner/repo/pull/42"
+        assert rec.pr_number == 42
+        # The job is NOT finished — it has not been merged yet.
+        assert rec.finished_at is None
+
+    async def test_auto_merge_branch_protection_fails_falls_back_to_merge(
+        self, gh_subprocess_stub, git_repo: Path, tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """If enable_auto_merge fails (branch protection not
+        configured), the queue falls back to direct ``gh pr merge``
+        (Phase 2.2 behaviour). The job ends up ``merged``.
+        """
+        self._stub_code_review_verifier(monkeypatch)
+        from harness.config import settings
+        monkeypatch.setattr(settings, "pr_poll_interval_s", 0.01)
+        monkeypatch.setattr(settings, "pr_wait_timeout_s", 5.0)
+        store = JobStore(tmp_path / "jobs.db")
+        # Stub: auth + create_pr + wait_for_checks (success) +
+        # enable_auto_merge FAILS (rc=1) + fallback merge_pr succeeds.
+        gh_subprocess_stub(
+            _gh_stub_success(pr_number=42) +
+            [
+                # enable_auto_merge fails
+                (("pr", "merge", "42", "--auto", "--squash", "--delete-branch"),
+                 1, "", "auto-merge is not allowed for this branch"),
+                # Fallback merge_pr (squash) — but the actual method
+                # depends on settings.auto_merge_method. In tests,
+                # the default is "squash" so we expect --squash.
+                # Note: merge_pr is called WITHOUT --auto.
+                (("pr", "merge", "42", "--squash", "--delete-branch"),
+                 0, "merged abc1234", ""),
+            ]
+        )
+        queue = _make_queue_with_store(git_repo, store)
+        job = MergeJob(
+            code_spec=AgentSpec(name="code", tools=[], model="MiniMax-M2.7"),
+            review_spec=AgentSpec(name="review", tools=[], model="MiniMax-M2.7"),
+            task="x", worktree_id="wt-am-fallback",
+            pr_mode="draft",
+            auto_merge=True,
+        )
+        jid = await queue.enqueue_async(job)
+        for _ in range(50):
+            await asyncio.sleep(0.05)
+            rec = await store.load(jid)
+            if rec and rec.status in (
+                "merged", "failed", "timeout", "cancelled",
+            ):
+                break
+        rec = await store.load(jid)
+        assert rec is not None
+        # The fallback merge succeeded.
+        assert rec.status == "merged", (
+            f"expected merged after fallback, got {rec.status!r}"
+        )
+        assert rec.finished_at is not None
+
+    async def test_auto_merge_both_fail_marks_failed(
+        self, gh_subprocess_stub, git_repo: Path, tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """If enable_auto_merge AND the fallback merge both fail,
+        the job is marked ``failed``.
+        """
+        self._stub_code_review_verifier(monkeypatch)
+        from harness.config import settings
+        monkeypatch.setattr(settings, "pr_poll_interval_s", 0.01)
+        monkeypatch.setattr(settings, "pr_wait_timeout_s", 5.0)
+        store = JobStore(tmp_path / "jobs.db")
+        # IMPORTANT: do NOT reuse _gh_stub_success here — it includes
+        # a successful (pr, merge, ..., --squash) entry which the
+        # fallback path would match against (its `all-in` predicate
+        # would catch it). Build a minimal stub for the both-fail
+        # path: auth + create + wait_for_checks success + BOTH
+        # auto-merge and fallback merge fail.
+        gh_subprocess_stub([
+            (("auth", "status"), 0, "", ""),
+            (("pr", "create"), 0,
+             "https://github.com/owner/repo/pull/42\n", ""),
+            (("auth", "status"), 0, "", ""),
+            (("pr", "view"), 0, json.dumps({
+                "state": "OPEN", "merged": False,
+                "statusCheckRollup": [
+                    {"state": "SUCCESS", "conclusion": "success"},
+                ],
+                "reviewDecision": "APPROVED",
+            }), ""),
+            (("auth", "status"), 0, "", ""),
+            # enable_auto_merge FAILS
+            (("pr", "merge", "42", "--auto", "--squash", "--delete-branch"),
+             1, "", "auto-merge is not allowed for this branch"),
+            # Fallback merge_pr FAILS
+            (("pr", "merge", "42", "--squash", "--delete-branch"),
+             1, "", "Pull Request is not mergeable"),
+        ])
+        queue = _make_queue_with_store(git_repo, store)
+        job = MergeJob(
+            code_spec=AgentSpec(name="code", tools=[], model="MiniMax-M2.7"),
+            review_spec=AgentSpec(name="review", tools=[], model="MiniMax-M2.7"),
+            task="x", worktree_id="wt-am-bothfail",
+            pr_mode="draft",
+            auto_merge=True,
+        )
+        jid = await queue.enqueue_async(job)
+        for _ in range(50):
+            await asyncio.sleep(0.05)
+            rec = await store.load(jid)
+            if rec and rec.status in (
+                "merged", "failed", "timeout", "cancelled",
+            ):
+                break
+        rec = await store.load(jid)
+        assert rec is not None
+        assert rec.status == "failed"
+        assert "auto-merge" in (rec.error or "").lower()
+        assert "fallback" in (rec.error or "").lower()
+
+    async def test_auto_merge_false_keeps_phase_2_2_behaviour(
+        self, gh_subprocess_stub, git_repo: Path, tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Default ``auto_merge=False`` → still uses direct merge
+        after CI (Phase 2.2 behaviour). The ``--auto`` flag is
+        NEVER sent.
+        """
+        self._stub_code_review_verifier(monkeypatch)
+        from harness.config import settings
+        monkeypatch.setattr(settings, "pr_poll_interval_s", 0.01)
+        monkeypatch.setattr(settings, "pr_wait_timeout_s", 5.0)
+        store = JobStore(tmp_path / "jobs.db")
+        gh_subprocess_stub(
+            _gh_stub_success(pr_number=42) +
+            # Phase 2.2 path: direct merge (squash from pr_mode=draft)
+            [(
+                ("pr", "merge", "42", "--squash", "--delete-branch"),
+                0, "merged abc1234", "",
+            )]
+        )
+        queue = _make_queue_with_store(git_repo, store)
+        job = MergeJob(
+            code_spec=AgentSpec(name="code", tools=[], model="MiniMax-M2.7"),
+            review_spec=AgentSpec(name="review", tools=[], model="MiniMax-M2.7"),
+            task="x", worktree_id="wt-am-off",
+            pr_mode="draft",
+            # auto_merge NOT set (default False)
+        )
+        jid = await queue.enqueue_async(job)
+        for _ in range(50):
+            await asyncio.sleep(0.05)
+            rec = await store.load(jid)
+            if rec and rec.status in (
+                "merged", "failed", "timeout", "cancelled",
+            ):
+                break
+        rec = await store.load(jid)
+        assert rec is not None
+        assert rec.status == "merged", (
+            f"expected merged (Phase 2.2), got {rec.status!r}"
+        )
+
+    async def test_auto_merge_uses_override_method(
+        self, gh_subprocess_stub, git_repo: Path, tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """``auto_merge_method='rebase'`` → ``gh pr merge --auto --rebase``."""
+        self._stub_code_review_verifier(monkeypatch)
+        from harness.config import settings
+        monkeypatch.setattr(settings, "pr_poll_interval_s", 0.01)
+        monkeypatch.setattr(settings, "pr_wait_timeout_s", 5.0)
+        store = JobStore(tmp_path / "jobs.db")
+        gh_subprocess_stub(
+            _gh_stub_success(pr_number=42) +
+            # The merge method is "rebase" (not "squash")
+            [(("pr", "merge", "42", "--auto", "--rebase", "--delete-branch"),
+              0, "", "")]
+        )
+        queue = _make_queue_with_store(git_repo, store)
+        job = MergeJob(
+            code_spec=AgentSpec(name="code", tools=[], model="MiniMax-M2.7"),
+            review_spec=AgentSpec(name="review", tools=[], model="MiniMax-M2.7"),
+            task="x", worktree_id="wt-am-rebase",
+            pr_mode="draft",
+            auto_merge=True,
+            auto_merge_method="rebase",
+        )
+        jid = await queue.enqueue_async(job)
+        for _ in range(50):
+            await asyncio.sleep(0.05)
+            rec = await store.load(jid)
+            if rec and rec.status in (
+                "pr_auto_merge_enabled", "merged", "failed",
+                "timeout", "cancelled",
+            ):
+                break
+        rec = await store.load(jid)
+        assert rec is not None
+        assert rec.status == "pr_auto_merge_enabled"

@@ -126,6 +126,12 @@ def _cmd_agents_run(args: argparse.Namespace) -> int:
         # Phase 2.2: --pr flag requires --background. Reject the
         # combination in the non-background path (above) so we can
         # safely assume the user opted in.
+        # Phase 2.3: ``--pr-auto-merge`` is shorthand for
+        # ``--pr --auto-merge`` — apply it BEFORE resolving the
+        # pr_mode / auto_merge flags.
+        if args.pr_auto_merge:
+            args.pr = True
+            args.auto_merge = True
         pr_mode = "off"
         if args.pr_ready:
             pr_mode = "ready"
@@ -160,25 +166,46 @@ def _cmd_agents_run(args: argparse.Namespace) -> int:
             runner=runner, verifier=_CLIStubVerifier(), store=store,  # type: ignore[arg-type]
         )
         worktree_id = args.worktree_id or f"cli-{abs(hash(args.prompt)) % 10000:04d}"
+        # Phase 2.3: --auto-merge implies --pr (or --pr-draft /
+        # --pr-ready). Reject if the user asked for auto-merge
+        # without a PR mode.
+        if args.auto_merge and pr_mode == "off":
+            print(
+                "error: --auto-merge requires --pr / --pr-draft / --pr-ready "
+                "(or use --pr-auto-merge shorthand)",
+                file=sys.stderr,
+            )
+            return 2
         job = MergeJob(
             code_spec=spec, review_spec=review_spec,
             task=args.prompt, worktree_id=worktree_id,
             pr_mode=pr_mode,
             pr_target_branch=pr_target,
             repo_override=Path(args.repo) if args.repo else None,
+            auto_merge=args.auto_merge,
+            auto_merge_method=args.auto_merge_method,
+            auto_merge_label=args.auto_merge_label,
         )
         job_id = asyncio.run(queue.enqueue_async(job))
         print(f"job_id={job_id}")
         print(f"  status: use `harness agents jobs {job_id}` to poll")
         if pr_mode != "off":
             print(f"  pr_mode: {pr_mode} (target={pr_target})")
+            if args.auto_merge:
+                print("  auto_merge: enabled (waiting for branch-protection)")
         return 0
 
     # Phase 2.2: --pr requires --background. Sync path can't
     # ``await`` PR lifecycle events; reject early with a clear error.
-    if args.pr or args.pr_draft or args.pr_ready:
+    # Phase 2.3: ``--pr-auto-merge`` is also a PR flag — same
+    # constraint. We check the unshorthanded flag here too, so
+    # the user gets the same error whether they wrote ``--pr``
+    # or ``--pr-auto-merge`` (the shorthand is only resolved
+    # inside the ``if args.background:`` block above).
+    if args.pr or args.pr_draft or args.pr_ready or args.pr_auto_merge:
         print(
-            "error: --pr / --pr-draft / --pr-ready require --background "
+            "error: --pr / --pr-draft / --pr-ready / --pr-auto-merge "
+            "require --background "
             "(the sync path can't await the PR lifecycle)",
             file=sys.stderr,
         )
@@ -652,6 +679,46 @@ def _build_parser() -> argparse.ArgumentParser:
             "Phase 2.2: target branch for the PR (default: "
             "settings.pr_default_target_branch = 'main'). Only used "
             "with --pr / --pr-draft / --pr-ready."
+        ),
+    )
+    run.add_argument(
+        "--auto-merge",
+        action="store_true",
+        help=(
+            "Phase 2.3: use 'gh pr merge --auto' (branch-protection-aware) "
+            "after CI checks pass. The job transitions to "
+            "pr_auto_merge_enabled and waits for an inbound GitHub "
+            "webhook to mark it merged. Requires --pr / --pr-draft / "
+            "--pr-ready AND --background. Falls back to direct merge "
+            "if branch protection does not allow --auto."
+        ),
+    )
+    run.add_argument(
+        "--pr-auto-merge",
+        action="store_true",
+        help=(
+            "Phase 2.3: shorthand for '--pr --auto-merge' (open a "
+            "draft PR AND enable branch-protection-aware auto-merge). "
+            "Requires --background."
+        ),
+    )
+    run.add_argument(
+        "--auto-merge-method",
+        choices=["squash", "merge", "rebase"], default=None,
+        help=(
+            "Phase 2.3: merge method for 'gh pr merge --auto' "
+            "(default: settings.auto_merge_method = 'squash'). "
+            "Ignored without --auto-merge."
+        ),
+    )
+    run.add_argument(
+        "--auto-merge-label",
+        default=None,
+        help=(
+            "Phase 2.3: override settings.auto_merge_label (default "
+            "'harness-auto-merge'). The queue does NOT add this label "
+            "to the PR — branch protection is expected to require it. "
+            "Ignored without --auto-merge."
         ),
     )
     jobs = agents_sub.add_parser("jobs", help="Inspect background jobs (Phase 2.1)")

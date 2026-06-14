@@ -467,3 +467,140 @@ class TestEndToEnd:
         )
         assert merged.merged is True
         assert merged.sha == "fedcba9"
+
+
+# === Phase 2.3: enable_auto_merge / disable_auto_merge ===
+
+class TestEnableAutoMerge:
+    async def test_happy_path_squash(
+        self, gh_subprocess_stub, tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """``gh pr merge --auto --squash --delete-branch`` → no raise."""
+        from harness.agents.pr_integration import enable_auto_merge
+        # Pretend ``gh`` is on PATH and authenticated.
+        monkeypatch.setattr(
+            "harness.agents.pr_integration.shutil.which",
+            lambda x: "/usr/bin/gh",
+        )
+        gh_subprocess_stub([
+            # 1. auth status (called by check_gh_available)
+            (("auth", "status"), 0, "Logged in to github.com", ""),
+            # 2. pr merge --auto --squash --delete-branch
+            (("pr", "merge", "42", "--auto", "--squash", "--delete-branch"),
+             0, "Auto-merge enabled\n", ""),
+        ])
+        await enable_auto_merge(
+            repo=tmp_path, pr_number=42,
+            merge_method="squash", delete_branch=True,
+        )
+
+    async def test_rebase_method(
+        self, gh_subprocess_stub, tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """``gh pr merge --auto --rebase`` is used when method='rebase'."""
+        from harness.agents.pr_integration import enable_auto_merge
+        monkeypatch.setattr(
+            "harness.agents.pr_integration.shutil.which",
+            lambda x: "/usr/bin/gh",
+        )
+        gh_subprocess_stub([
+            (("auth", "status"), 0, "Logged in", ""),
+            (("pr", "merge", "7", "--auto", "--rebase", "--delete-branch"),
+             0, "", ""),
+        ])
+        await enable_auto_merge(
+            repo=tmp_path, pr_number=7,
+            merge_method="rebase", delete_branch=True,
+        )
+
+    async def test_raises_on_branch_protection_error(
+        self, gh_subprocess_stub, tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """``gh`` returns non-zero → RuntimeError."""
+        from harness.agents.pr_integration import enable_auto_merge
+        monkeypatch.setattr(
+            "harness.agents.pr_integration.shutil.which",
+            lambda x: "/usr/bin/gh",
+        )
+        gh_subprocess_stub([
+            (("auth", "status"), 0, "Logged in", ""),
+            (("pr", "merge", "42", "--auto", "--squash", "--delete-branch"),
+             1, "", "auto-merge is not allowed for this branch"),
+        ])
+        with pytest.raises(RuntimeError, match="auto-merge is not allowed"):
+            await enable_auto_merge(
+                repo=tmp_path, pr_number=42, merge_method="squash",
+            )
+
+    async def test_propagates_gh_unavailable(
+        self, gh_subprocess_stub, tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """If ``gh`` is not on PATH, ``GHUnavailable`` propagates."""
+        from harness.agents.pr_integration import enable_auto_merge
+        monkeypatch.setattr(
+            "harness.agents.pr_integration.shutil.which",
+            lambda x: None,  # gh not installed
+        )
+        with pytest.raises(GHUnavailable):
+            await enable_auto_merge(
+                repo=tmp_path, pr_number=42, merge_method="squash",
+            )
+
+    async def test_no_delete_branch(
+        self, gh_subprocess_stub, tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """When ``delete_branch=False``, the flag is NOT in the cmd."""
+        from harness.agents.pr_integration import enable_auto_merge
+        monkeypatch.setattr(
+            "harness.agents.pr_integration.shutil.which",
+            lambda x: "/usr/bin/gh",
+        )
+        gh_subprocess_stub([
+            (("auth", "status"), 0, "Logged in", ""),
+            (("pr", "merge", "11", "--auto", "--merge"),
+             0, "", ""),
+        ])
+        await enable_auto_merge(
+            repo=tmp_path, pr_number=11,
+            merge_method="merge", delete_branch=False,
+        )
+
+
+class TestDisableAutoMerge:
+    async def test_happy_path(
+        self, gh_subprocess_stub, tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """``gh pr merge --disable-auto`` → no raise."""
+        from harness.agents.pr_integration import disable_auto_merge
+        monkeypatch.setattr(
+            "harness.agents.pr_integration.shutil.which",
+            lambda x: "/usr/bin/gh",
+        )
+        gh_subprocess_stub([
+            (("auth", "status"), 0, "Logged in", ""),
+            (("pr", "merge", "5", "--disable-auto"), 0, "", ""),
+        ])
+        await disable_auto_merge(repo=tmp_path, pr_number=5)
+
+    async def test_raises_on_failure(
+        self, gh_subprocess_stub, tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from harness.agents.pr_integration import disable_auto_merge
+        monkeypatch.setattr(
+            "harness.agents.pr_integration.shutil.which",
+            lambda x: "/usr/bin/gh",
+        )
+        gh_subprocess_stub([
+            (("auth", "status"), 0, "Logged in", ""),
+            (("pr", "merge", "5", "--disable-auto"), 1, "",
+             "no auto-merge in progress"),
+        ])
+        with pytest.raises(RuntimeError, match="no auto-merge"):
+            await disable_auto_merge(repo=tmp_path, pr_number=5)

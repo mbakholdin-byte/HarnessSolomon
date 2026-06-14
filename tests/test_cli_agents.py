@@ -312,3 +312,81 @@ class TestPRFlags:
         assert res.returncode == 0
         out = res.stdout
         assert "pr_mode     :" not in out
+
+
+# === Phase 2.3: --auto-merge / --pr-auto-merge flag tests ===
+
+class TestAutoMergeFlags:
+    def test_auto_merge_flags_appear_in_help(self) -> None:
+        """``--auto-merge`` and ``--pr-auto-merge`` are accepted by argparse."""
+        res = _run_cli("agents", "run", "--help")
+        assert res.returncode == 0
+        for flag in (
+            "--auto-merge", "--pr-auto-merge", "--auto-merge-method",
+            "--auto-merge-label",
+        ):
+            assert flag in res.stdout, f"{flag} missing from --help"
+
+    def test_pr_auto_merge_without_background_exits_2(
+        self, tmp_path: Path,
+    ) -> None:
+        """``--pr-auto-merge`` without ``--background`` exits 2.
+
+        Same constraint as ``--pr`` (sync path can't ``await``
+        the PR lifecycle).
+        """
+        env = {"DB_PATH": str(tmp_path / "unused.db"), "PYTHONIOENCODING": "utf-8"}
+        res = _run_cli(
+            "agents", "run", "explore", "list built-ins",
+            "--no-worktree", "--pr-auto-merge",
+            env_extra=env,
+        )
+        assert res.returncode == 2
+        assert "--background" in res.stderr
+
+    def test_auto_merge_without_pr_exits_2(
+        self, tmp_path: Path,
+    ) -> None:
+        """``--auto-merge`` without ``--pr`` exits 2.
+
+        Auto-merge only makes sense when a PR is being opened
+        (otherwise there's nothing to auto-merge).
+        """
+        env = {"DB_PATH": str(tmp_path / "unused.db"), "PYTHONIOENCODING": "utf-8"}
+        res = _run_cli(
+            "agents", "run", "explore", "list built-ins",
+            "--no-worktree", "--background", "--auto-merge",
+            env_extra=env,
+        )
+        assert res.returncode == 2
+        assert "--auto-merge" in res.stderr
+        assert "--pr" in res.stderr
+
+    def test_pr_auto_merge_shorthand_accepted(
+        self, tmp_path: Path,
+    ) -> None:
+        """``--pr-auto-merge`` is parsed and not rejected as an unknown flag.
+
+        The actual job enqueue would call ``gh pr create`` etc.,
+        which is mocked away by ``--no-worktree`` not being
+        passed here. We just check the CLI doesn't error on the
+        flag itself. (The deeper test of ``--pr-auto-merge``
+        plumbing is in ``test_merge_queue_pr.py::TestAutoMergePhase``.)
+        """
+        env = {"DB_PATH": str(tmp_path / "jobs.db"), "PYTHONIOENCODING": "utf-8"}
+        # ``--background --pr-auto-merge`` should at least reach
+        # the enqueue step (which then needs ``gh``). The exit
+        # code may be non-zero because we don't have a real
+        # worktree, but it should NOT be 2 (which would mean
+        # the flag was rejected by argparse).
+        res = _run_cli(
+            "agents", "run", "explore", "list built-ins",
+            "--background", "--pr-auto-merge",
+            env_extra=env,
+        )
+        # We expect some non-zero code because we don't have
+        # worktrees or gh set up, but the flag should not be
+        # rejected at the argparse level.
+        assert res.returncode != 2, (
+            f"argparse rejected --pr-auto-merge: rc=2 stderr={res.stderr!r}"
+        )

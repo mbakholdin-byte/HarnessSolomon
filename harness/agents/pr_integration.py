@@ -461,6 +461,112 @@ async def merge_pr(
     return PRMergeResult(merged=True, method="squash" if squash else "merge", sha=sha)
 
 
+# === Phase 2.3: auto-merge (branch-protection-aware) ===
+
+async def enable_auto_merge(
+    *,
+    repo: Path,
+    pr_number: int,
+    merge_method: Literal["squash", "merge", "rebase"] = "squash",
+    delete_branch: bool = True,
+    env_var: str = "GITHUB_TOKEN",
+) -> None:
+    """Enable GitHub's branch-protection-aware auto-merge.
+
+    Calls ``gh pr merge <N> --auto --<method> [--delete-branch]``.
+    Unlike :func:`merge_pr`, this does NOT block until the PR is
+    merged — it returns as soon as GitHub accepts the request
+    ("auto-merge enabled"). GitHub then waits for the branch-
+    protection conditions (e.g. outstanding approvals) to clear
+    and performs the actual merge in the background.
+
+    The caller is expected to track the job's status separately
+    (Phase 2.3: ``pr_auto_merge_enabled`` → ``merged`` via the
+    inbound webhook in :mod:`harness.agents.webhook_handler`).
+
+    Args:
+        repo:           Local repo path (used as ``cwd``).
+        pr_number:      PR number.
+        merge_method:   ``"squash"`` (default), ``"merge"`` (merge
+                        commit), or ``"rebase"`` (rebase + ff).
+        delete_branch:  Whether to pass ``--delete-branch`` to clean
+                        up the head branch after GitHub's auto-merge
+                        completes. Default True.
+        env_var:        GitHub token env var.
+
+    Raises:
+        GHUnavailable: ``gh`` missing or not authenticated.
+        RuntimeError:  ``gh pr merge --auto`` returned non-zero. The
+                       two common cases:
+                       - "Pull Request is not mergeable" — branch
+                         protection is misconfigured (no required
+                         status checks / reviewers)
+                       - "auto-merge is not allowed" — branch
+                         protection has not enabled auto-merge for
+                         this branch
+                       The caller is expected to either surface
+                       the error to the user OR fall back to a
+                       direct :func:`merge_pr` (Phase 2.2 path).
+
+    Note:
+        The ``--auto`` flag was added to ``gh`` in v2.19.0. The
+        harness assumes ``gh >= 2.50`` (the same baseline as
+        :func:`merge_pr`).
+    """
+    await check_gh_available(env_var=env_var)
+    cmd = [
+        "pr", "merge", str(pr_number),
+        "--auto",
+        f"--{merge_method}",
+    ]
+    if delete_branch:
+        cmd.append("--delete-branch")
+    env = _env_for_token(env_var)
+    rc, stdout, stderr = await _gh(*cmd, cwd=str(repo), env=env)
+    if rc != 0:
+        raise RuntimeError(
+            f"gh pr merge {pr_number} --auto failed (rc={rc}): "
+            f"{stderr.strip() or stdout.strip()}"
+        )
+    return None
+
+
+async def disable_auto_merge(
+    *,
+    repo: Path,
+    pr_number: int,
+    env_var: str = "GITHUB_TOKEN",
+) -> None:
+    """Cancel a previously enabled auto-merge.
+
+    Calls ``gh pr merge <N> --disable-auto``. Useful when a job
+    is cancelled mid-flight and we want to tell GitHub to stop
+    waiting for branch-protection conditions.
+
+    Args:
+        repo:        Local repo path (used as ``cwd``).
+        pr_number:   PR number.
+        env_var:     GitHub token env var.
+
+    Raises:
+        GHUnavailable: ``gh`` missing or not authenticated.
+        RuntimeError:  ``gh pr merge --disable-auto`` returned
+                       non-zero (rare; usually means the PR
+                       doesn't have auto-merge enabled in the
+                       first place, which is fine to ignore).
+    """
+    await check_gh_available(env_var=env_var)
+    cmd = ["pr", "merge", str(pr_number), "--disable-auto"]
+    env = _env_for_token(env_var)
+    rc, stdout, stderr = await _gh(*cmd, cwd=str(repo), env=env)
+    if rc != 0:
+        raise RuntimeError(
+            f"gh pr merge {pr_number} --disable-auto failed (rc={rc}): "
+            f"{stderr.strip() or stdout.strip()}"
+        )
+    return None
+
+
 __all__ = [
     "GHUnavailable",
     "PRCreateResult",
@@ -471,4 +577,7 @@ __all__ = [
     "get_pr_status",
     "wait_for_checks",
     "merge_pr",
+    # Phase 2.3
+    "enable_auto_merge",
+    "disable_auto_merge",
 ]

@@ -40,6 +40,7 @@ from harness.agents.jobs import JobEvent, JobStore
 from harness.agents.pr_integration import (
     GHUnavailable,
     create_pr,
+    enable_auto_merge,
     get_pr_status,
     merge_pr,
     wait_for_checks,
@@ -98,6 +99,30 @@ class MergeJob:
     #: set, the queue uses this path for the worktree + the cross-repo
     #: lock registry. This is the lever for cross-repo parallelism.
     repo_override: Path | None = None
+    # === Phase 2.3: auto-merge ===
+    #: When True, use ``gh pr merge --auto`` after CI checks pass
+    #: (instead of merging immediately). The job transitions to
+    #: ``pr_auto_merge_enabled`` and waits for an inbound webhook
+    #: to mark it ``merged``. This is the recommended setting for
+    #: repos with branch protection (e.g. "1 approval + green CI"
+    #: rules): the merge happens as soon as all conditions clear,
+    #: without the queue having to poll.
+    #: When False (default), behaviour is identical to Phase 2.2:
+    #: after CI is green, ``gh pr merge`` runs immediately.
+    auto_merge: bool = False
+    #: Override the merge method for ``enable_auto_merge``. When
+    #: ``None`` (default), uses ``settings.auto_merge_method``
+    #: (typically ``"squash"``).
+    auto_merge_method: str | None = None
+    #: Override the auto-merge label required by GitHub branch
+    #: protection. When ``None`` (default), uses
+    #: ``settings.auto_merge_label`` (typically
+    #: ``"harness-auto-merge"``). The queue does NOT currently
+    #: add this label — the operator is expected to configure
+    #: branch protection to require the label, and the label is
+    #: assumed to be already present on the PR. (Future Phase
+    #: 2.4: auto-add the label via ``gh pr edit --add-label``.)
+    auto_merge_label: str | None = None
 
 
 @dataclass
@@ -851,6 +876,77 @@ class MergeQueue:
             return (True, created.url, created.number, False)
 
         # === 3. Merge the PR ===
+        # Phase 2.3: branch on ``job.auto_merge``. When True, use
+        # ``gh pr merge --auto`` (branch-protection-aware) and
+        # transition the job to ``pr_auto_merge_enabled`` — the
+        # actual ``merged`` transition is delivered by an inbound
+        # ``pull_request`` webhook (see
+        # :mod:`harness.agents.webhook_handler`). When False, the
+        # queue merges immediately (Phase 2.2 behaviour).
+        if job.auto_merge:
+            try:
+                merge_method = job.auto_merge_method or settings.auto_merge_method
+                await self.store.update_status(job_id, "merging_pr")
+                await self._emit(job_id, "merging_pr", pr_number=created.number)
+                await enable_auto_merge(
+                    repo=repo, pr_number=created.number,
+                    merge_method=merge_method,
+                    delete_branch=settings.auto_merge_delete_branch,
+                    env_var=settings.github_token_env,
+                )
+            except Exception as e:
+                # Auto-merge could not be enabled (e.g. branch
+                # protection is not configured for this branch).
+                # Fall back to an immediate ``gh pr merge`` so the
+                # user still gets a merge (backward compat with
+                # the Phase 2.2 contract).
+                logger.warning(
+                    "job %s: enable_auto_merge failed (%s); "
+                    "falling back to direct merge_pr",
+                    job_id, e,
+                )
+                try:
+                    await merge_pr(
+                        repo=repo, pr_number=created.number,
+                        squash=(merge_method == "squash"),
+                        delete_branch=settings.auto_merge_delete_branch,
+                        env_var=settings.github_token_env,
+                    )
+                except Exception as merge_err:
+                    await self.store.update_status(
+                        job_id, "failed", finished=True,
+                        cost=cost_so_far,
+                        pr_url=created.url, pr_number=created.number,
+                        error=(
+                            f"auto-merge failed and fallback merge failed: "
+                            f"{merge_err}"
+                        ),
+                    )
+                    await self._emit(
+                        job_id, "failed",
+                        reason="auto-merge and fallback merge failed",
+                        pr_url=created.url,
+                    )
+                    return (False, created.url, created.number, False)
+                # Fallback merge succeeded.
+                return (True, created.url, created.number, False)
+            # Auto-merge enabled — job terminated, waiting for
+            # the inbound ``pull_request`` webhook. We do NOT
+            # call ``update_status('merged', finished=True)``
+            # here: the webhook handler does that when GitHub
+            # actually performs the merge.
+            await self.store.update_status(
+                job_id, "pr_auto_merge_enabled",
+                cost=cost_so_far,
+                pr_url=created.url, pr_number=created.number,
+            )
+            await self._emit(
+                job_id, "pr_auto_merge_enabled",
+                pr_url=created.url, pr_number=created.number,
+            )
+            return (True, created.url, created.number, False)
+
+        # Default (Phase 2.2 path): merge immediately after CI green.
         try:
             await self.store.update_status(job_id, "merging_pr")
             await self._emit(job_id, "merging_pr", pr_number=created.number)
