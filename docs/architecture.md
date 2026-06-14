@@ -358,3 +358,124 @@ Open-source модели часто хуже CC в tool-use. Техники:
 - **Полный контроль** — hot-reload, sandbox, eval, custom tools
 
 Рекомендую **начать с Фазы 0 (MVP) на Qwen3-Coder локально**, чтобы за 2 недели получить работающий прототип. Затем добавлять слои памяти и оркестрации.
+
+---
+
+## Архитектура Solomon Harness — Phase 0 Web MVP
+
+> Раздел добавлен 14.06.2026 (Step 11). Описывает текущую реализацию после 11 шагов Фазы 0 (backend + frontend + WebSocket chat).
+
+### Компоненты
+
+```ascii
+┌─────────────────────┐
+│  Browser (React)    │
+│  harness/web/       │
+│  port 5173          │
+└──────────┬──────────┘
+           │ HTTP/WS
+           ▼
+┌─────────────────────┐
+│  Vite dev proxy     │
+│  /api → :8765       │
+│  ws: true           │
+└──────────┬──────────┘
+           │ HTTP/WS
+           ▼
+┌─────────────────────┐
+│  FastAPI            │
+│  harness/server/    │
+│  port 8765          │
+│  - REST: /api/*     │
+│  - WS: /api/chat/ws │
+└──┬─────────┬─────┬──┘
+   │         │     │
+   ▼         ▼     ▼
+┌──────┐ ┌──────┐ ┌─────────┐
+│SQLite│ │LLM   │ │Tool     │
+│JSONL │ │Router│ │Runtime  │
+│      │ │      │ │(subproc)│
+└──┬───┘ └──┬───┘ └────┬────┘
+   │        │          │
+   ▼        ▼          ▼
+Sessions  3 models   6 tools
+          (cloud)    + safety
+```
+
+### Слои
+
+1. **Frontend** — React 18 + TypeScript + Vite (`harness/web/src/`)
+2. **API Gateway** — FastAPI + Uvicorn + WebSocket (`harness/server/app.py`)
+3. **Agent Loop** — async generator, max 5 iterations (`harness/server/agent/loop.py`)
+4. **Tool Runtime** — async subprocess с safety patterns (`harness/server/agent/runtime.py`)
+5. **LLM Router** — LiteLLM wrapper для 3 cloud провайдеров (`harness/server/llm/router.py`)
+6. **Session Store** — SQLite (index) + JSONL (source of truth) (`harness/server/db/`)
+
+### Endpoints (Phase 0)
+
+| Метод | Путь | Назначение |
+|-------|------|------------|
+| `GET` | `/api/health` | Healthcheck |
+| `GET` | `/api/models` | Каталог моделей + `available` flag |
+| `GET` | `/api/sessions` | Список сессий |
+| `POST` | `/api/sessions` | Создать сессию |
+| `GET` | `/api/sessions/{id}` | Метаданные сессии |
+| `PATCH` | `/api/sessions/{id}` | Переименовать / сменить модель |
+| `DELETE` | `/api/sessions/{id}` | Удалить сессию |
+| `GET` | `/api/sessions/{id}/messages` | История сообщений |
+| `WS` | `/api/chat/ws` | Streaming chat (tool-aware) |
+
+### Storage layout
+
+```
+harness/data/
+├── harness.db              # SQLite — индекс сессий (aiosqlite)
+└── sessions/
+    └── {session_id}.jsonl   # append-only источник истины
+```
+
+На старте, если БД пустая, но в `sessions/*.jsonl` есть данные — вызывается `rebuild_from_jsonl()` (см. `app.py:23-29`).
+
+### Tool runtime
+
+6 встроенных tools (`harness/server/agent/tools.py`):
+
+- `read_file` — прочитать файл (с path-scope под `project_root`)
+- `write_file` — создать/перезаписать
+- `edit_file` — точечный patch (find/replace)
+- `bash` — subprocess с deny-patterns
+- `grep` — ripgrep-обёртка
+- `glob` — pattern-поиск файлов
+
+**Safety** (`safety.py`): deny-patterns (`rm -rf /`, `del /s C:\`, etc.), path-scope под `settings.project_root`, лимит на размер вывода.
+
+### LLM catalog
+
+3 облачные модели (`harness/server/llm/models.py`):
+
+| ID | Provider | Tier | Context | Pricing in/out ($/1M) | Env var |
+|----|----------|------|---------|----------------------|---------|
+| `MiniMax-M2.7` | minimax | T3 | 200K | 0.30 / 0.60 | `MINIMAX_API_KEY` |
+| `glm-4.7` | zhipuai | T3 | 128K | 0.10 / 0.10 | `ZHIPUAI_API_KEY` |
+| `moonshot-v1-128k` | moonshot | T3 | 128K | 0.20 / 0.20 | `MOONSHOT_API_KEY` |
+
+LiteLLM вызывается с префиксом провайдера: `litellm.completion(model="minimax/MiniMax-M2.7", ...)`.
+
+### Frontend ↔ Backend контракт
+
+- REST: `harness/web/src/api/client.ts` (axios-free, `fetch`).
+- WebSocket: `harness/web/src/api/ws.ts` — custom клиент с JSON-сообщениями типа:
+  - клиент → сервер: `{type: "user", content: "..."}`
+  - сервер → клиент: `{type: "token" | "tool_call" | "tool_result" | "done" | "error", ...}`
+
+### Запуск (кратко)
+
+```bash
+# Backend (FastAPI, порт 8765)
+python -m harness
+
+# Frontend (Vite dev, порт 5173)
+cd harness/web && npm install && npm run dev
+```
+
+Подробнее: `docs/quickstart.md`.

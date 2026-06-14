@@ -19,23 +19,28 @@
 - `docs/PHASE-0-PLAN.md` — пошаговый план Фазы 0 (11 шагов)
 - `docs/MODEL_REGISTRY.md` — каталог моделей (T1/T2/T3)
 - `docs/architecture.md` — архитектура
-- `docs/quickstart.md` — быстрый старт (в разработке, появится в конце Фазы 0)
+- `docs/quickstart.md` — быстрый старт (<10 мин до первого ответа)
+- `docs/CHANGELOG.md` — история изменений
 
 ## Статус
 
-**Фаза 0 — Web MVP** (1–2 недели, июнь 2026)
+**Фаза 0 — Web MVP** ✅ (завершено 14.06.2026)
 
-- [ ] Backend: FastAPI + LiteLLM (MiniMax-M2.7 / GLM-4.7 / Kimi K2.6)
-- [ ] Tools: read_file, edit_file, write_file, bash, grep, glob
-- [ ] Agent loop: max 5 итераций
-- [ ] WebSocket streaming
-- [ ] Frontend: Vite + React/TS chat UI
-- [ ] Sessions: SQLite + JSONL
-- [ ] Safety: bash deny, path scope
-- [ ] Quickstart docs
+- [x] Backend: FastAPI + LiteLLM (MiniMax-M2.7 / GLM-4.7 / Moonshot-v1-128k)
+- [x] Tools: read_file, edit_file, write_file, bash, grep, glob
+- [x] Agent loop: max 5 итераций
+- [x] WebSocket chat endpoint с streaming
+- [x] Frontend: Vite + React 18 + TypeScript
+- [x] Chat UI с sessions, models, messages, tool calls
+- [x] 62/62 unit-тестов зелёные (Step 8 e2e smoke идёт параллельно → 67)
+- [x] Quickstart: <10 минут до первого ответа
 
 **Спецификация:** `docs/PHASE-0-SPEC.md` (утверждена 13.06.2026)
 **План:** `docs/PHASE-0-PLAN.md` (11 шагов, 16–26 ч работы)
+**Changelog:** `docs/CHANGELOG.md`
+**Quickstart:** `docs/quickstart.md` ⬅️ **начни отсюда**
+
+**Next:** Фаза 1 — 4-слойная память (см. `docs/roadmap.md`)
 
 ## Стек
 
