@@ -57,10 +57,12 @@ def create_app() -> FastAPI:
     from harness.server.routes.health import router as health_router
     from harness.server.routes.sessions import router as sessions_router
     from harness.server.routes.models import router as models_router
+    from harness.server.routes.chat import router as chat_router
 
     app.include_router(health_router, prefix="/api", tags=["health"])
     app.include_router(sessions_router, prefix="/api", tags=["sessions"])
     app.include_router(models_router, prefix="/api", tags=["models"])
+    app.include_router(chat_router, prefix="/api/chat")  # WebSocket only
 
     return app
 
