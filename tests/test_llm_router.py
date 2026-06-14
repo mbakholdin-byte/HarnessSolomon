@@ -297,28 +297,42 @@ async def test_completion_wraps_unwrapped_tools() -> None:
 
 
 # === per-model tool limit ===
+#
+# Live verification 2026-06-14: MiniMax-M2.7 accepts 32 tools without
+# error when schemas are wrapped in OpenAI shape (the original 2013
+# error was the missing wrap, not the count). We bump the per-model
+# cap from 4 → 16 to fit the Phase 0/0.5 toolset with headroom.
+# DEFAULT_MAX_TOOLS is also 16.
+
+from harness.server.llm.models import DEFAULT_MAX_TOOLS, get_model
+
+_MINIMAX_MAX = get_model("MiniMax-M2.7").max_tools  # 16 in current catalog
+
 
 def test_limit_tools_passes_through_under_cap() -> None:
     """When tool count <= max_tools, all tools are passed through."""
-    tools = [{"name": f"t_{i}", "description": "x", "parameters": {"type": "object"}} for i in range(3)]
+    n = _MINIMAX_MAX  # exactly at the cap → passes through
+    tools = [{"name": f"t_{i}", "description": "x", "parameters": {"type": "object"}} for i in range(n)]
     out = LLMRouter._limit_tools_for_model("MiniMax-M2.7", tools)
     assert out == tools
-    assert len(out) == 3
+    assert len(out) == n
 
 
 def test_limit_tools_truncates_at_cap() -> None:
     """When tool count > max_tools, only the first N are kept."""
-    tools = [{"name": f"t_{i}", "description": "x", "parameters": {"type": "object"}} for i in range(6)]
+    n_over = _MINIMAX_MAX + 4  # 20 tools > cap 16
+    tools = [{"name": f"t_{i}", "description": "x", "parameters": {"type": "object"}} for i in range(n_over)]
     out = LLMRouter._limit_tools_for_model("MiniMax-M2.7", tools)
-    assert len(out) == 4
-    assert [t["name"] for t in out] == ["t_0", "t_1", "t_2", "t_3"]
+    assert len(out) == _MINIMAX_MAX
+    assert [t["name"] for t in out] == [f"t_{i}" for i in range(_MINIMAX_MAX)]
 
 
 def test_limit_tools_unknown_model_uses_default() -> None:
-    """Unknown model id falls back to DEFAULT_MAX_TOOLS (4)."""
-    tools = [{"name": f"t_{i}", "description": "x", "parameters": {"type": "object"}} for i in range(6)]
+    """Unknown model id falls back to DEFAULT_MAX_TOOLS."""
+    n_over = DEFAULT_MAX_TOOLS + 4
+    tools = [{"name": f"t_{i}", "description": "x", "parameters": {"type": "object"}} for i in range(n_over)]
     out = LLMRouter._limit_tools_for_model("unknown-xyz-model", tools)
-    assert len(out) == 4
+    assert len(out) == DEFAULT_MAX_TOOLS
 
 
 def test_limit_tools_none_and_empty() -> None:
@@ -330,21 +344,24 @@ def test_limit_tools_none_and_empty() -> None:
 def test_limit_tools_logs_warning_on_truncation(caplog) -> None:
     """Truncation emits a warning naming the dropped tools."""
     import logging
-    tools = [{"name": f"t_{i}", "description": "x", "parameters": {"type": "object"}} for i in range(6)]
+    n_over = _MINIMAX_MAX + 2
+    tools = [{"name": f"t_{i}", "description": "x", "parameters": {"type": "object"}} for i in range(n_over)]
     with caplog.at_level(logging.WARNING, logger="harness.server.llm.router"):
         LLMRouter._limit_tools_for_model("MiniMax-M2.7", tools)
     warnings = [r for r in caplog.records if "truncated" in r.getMessage()]
     assert len(warnings) == 1
     msg = warnings[0].getMessage()
-    assert "t_4" in msg and "t_5" in msg  # dropped tool names mentioned
+    # The last 2 tool names should appear in the dropped-tools list
+    assert f"t_{n_over - 2}" in msg and f"t_{n_over - 1}" in msg
 
 
 async def test_completion_truncates_tools_per_model() -> None:
     """completion() truncates tools to the model's max_tools limit.
 
-    Integration test: send 6 tools to MiniMax (max=4), verify litellm
-    receives only 4.
+    Integration test: send 20 tools to MiniMax (max=16), verify litellm
+    receives only 16, all in OpenAI-wrapped form.
     """
+    n_over = _MINIMAX_MAX + 4
     with patch("harness.server.llm.router.litellm") as mock_litellm:
         mock_litellm.completion = AsyncMock(
             return_value=_make_completion_response("ok", 1, 1)
@@ -353,7 +370,7 @@ async def test_completion_truncates_tools_per_model() -> None:
         tools = [
             {"name": f"t_{i}", "description": "x",
              "parameters": {"type": "object", "properties": {}}}
-            for i in range(6)
+            for i in range(n_over)
         ]
         await router.completion(
             messages=[{"role": "user", "content": "x"}],
@@ -361,13 +378,83 @@ async def test_completion_truncates_tools_per_model() -> None:
             tools=tools,
         )
         sent_tools = mock_litellm.completion.call_args.kwargs["tools"]
-        # MiniMax max_tools=4 → only first 4 reach litellm
-        assert len(sent_tools) == 4
+        # MiniMax max_tools → only first N reach litellm
+        assert len(sent_tools) == _MINIMAX_MAX
         assert all(t.get("type") == "function" for t in sent_tools)
         # And they're wrapped (truncation + wrapping both applied)
         assert [t["function"]["name"] for t in sent_tools] == [
-            "t_0", "t_1", "t_2", "t_3"
+            f"t_{i}" for i in range(_MINIMAX_MAX)
         ]
+
+
+# === truncation metric (Phase 0+ in-process counter, Phase 4 → Prometheus) ===
+
+def test_truncation_counter_starts_at_zero() -> None:
+    """get_truncation_counts() returns empty after reset (or any model absent)."""
+    from harness.server.llm.router import get_truncation_counts, reset_truncation_counts
+
+    reset_truncation_counts()
+    counts = get_truncation_counts()
+    # Either empty (clean state) or only models that haven't been touched
+    # in this test should be 0. We don't assert exact zero — other tests in
+    # the same process may have left entries. We DO assert it's a dict.
+    assert isinstance(counts, dict)
+    assert counts.get("MiniMax-M2.7-test-marker", 0) == 0
+
+
+def test_truncation_counter_increments_on_truncate() -> None:
+    """Each call to _limit_tools_for_model that actually truncates bumps the counter."""
+    from harness.server.llm.router import (
+        get_truncation_counts,
+        reset_truncation_counts,
+    )
+
+    reset_truncation_counts()
+    marker = "test-counter-marker-xyz"
+    n_over = _MINIMAX_MAX + 3
+    tools = [
+        {"name": f"t_{i}", "description": "x", "parameters": {"type": "object"}}
+        for i in range(n_over)
+    ]
+    # 3 calls → counter should be 3 for that model
+    for _ in range(3):
+        LLMRouter._limit_tools_for_model(marker, tools)
+    counts = get_truncation_counts()
+    assert counts.get(marker, 0) == 3
+
+
+def test_truncation_counter_does_not_increment_under_cap() -> None:
+    """When tool count <= cap, the counter is NOT bumped."""
+    from harness.server.llm.router import (
+        get_truncation_counts,
+        reset_truncation_counts,
+    )
+
+    reset_truncation_counts()
+    marker = "test-counter-uncapped-xyz"
+    tools = [{"name": f"t_{i}", "description": "x", "parameters": {"type": "object"}} for i in range(3)]
+    LLMRouter._limit_tools_for_model(marker, tools)
+    assert get_truncation_counts().get(marker, 0) == 0
+
+
+def test_truncation_counter_per_model_isolation() -> None:
+    """Counter increments only for the model that actually truncated."""
+    from harness.server.llm.router import (
+        get_truncation_counts,
+        reset_truncation_counts,
+    )
+
+    reset_truncation_counts()
+    m1 = "test-iso-model-aaa"
+    m2 = "test-iso-model-bbb"
+    n_over = _MINIMAX_MAX + 1
+    tools = [{"name": f"t_{i}", "description": "x", "parameters": {"type": "object"}} for i in range(n_over)]
+    LLMRouter._limit_tools_for_model(m1, tools)
+    LLMRouter._limit_tools_for_model(m2, tools)
+    LLMRouter._limit_tools_for_model(m1, tools)
+    counts = get_truncation_counts()
+    assert counts.get(m1, 0) == 2
+    assert counts.get(m2, 0) == 1
 
 
 # === import-time error ===

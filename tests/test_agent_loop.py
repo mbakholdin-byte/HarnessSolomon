@@ -10,6 +10,12 @@ The AgentLoop is responsible for:
 The tests use a FakeRouter (programmed responses) and a real ToolRuntime
 bound to a temp project_root. We do NOT mock the runtime — the safety
 layer must remain in the loop.
+
+Streaming mode (TODO from napkin.md, Phase 0+ cleanup):
+  When ``AgentLoop.run(..., stream=True)`` is used, the loop calls
+  ``router.streaming_completion()`` and yields token events live. The
+  final ``assistant_message`` event still carries the full text + usage
+  + cost for persistence.
 """
 from __future__ import annotations
 
@@ -244,3 +250,210 @@ async def test_loop_passes_tools_to_router(tmp_path: Path) -> None:
     assert call["tools"] is TOOL_SCHEMAS
     # Model is forwarded
     assert call["model"] == "MiniMax-M2.7"
+
+
+# === Streaming mode (Phase 0+ — TODO from napkin.md) ===
+#
+# AgentLoop.run(stream=True) uses router.streaming_completion() instead of
+# router.completion(). The user-facing API still yields:
+#   - one or more "token" events live as the model generates
+#   - one "assistant_message" at the end of the iteration carrying the
+#     FULL text + usage + cost (for DB persistence)
+#   - "tool_result" events for tool executions
+#   - "done" as the very last event
+#
+# We do NOT change the contract for non-streaming callers (default
+# stream=False preserves Шаг 6 behaviour exactly).
+
+
+class StreamingFakeRouter:
+    """Fake router that supports both completion() and streaming_completion().
+
+    Each scripted turn is a tuple (content, tool_calls) — the router
+    emits a sequence of StreamEvent "token" events, then a "done" with
+    the aggregated content / tool_calls / usage.
+    """
+
+    def __init__(self, scripted_turns: list[dict[str, Any]]) -> None:
+        self.scripted_turns = scripted_turns
+        self.call_count = 0
+        self.calls: list[dict[str, Any]] = []
+
+    async def completion(
+        self, messages, model, tools=None, **kwargs
+    ) -> CompletionResult:
+        raise NotImplementedError("stream=True path must use streaming_completion")
+
+    async def streaming_completion(
+        self, messages, model, tools=None, **kwargs
+    ):
+        self.calls.append(
+            {"messages": list(messages), "model": model, "tools": tools}
+        )
+        if self.call_count >= len(self.scripted_turns):
+            raise RuntimeError("StreamingFakeRouter: out of scripted turns")
+        turn = self.scripted_turns[self.call_count]
+        self.call_count += 1
+        # Emit one token event per character, then done.
+        content = turn.get("content", "")
+        for ch in content:
+            yield StreamEvent(type="token", content=ch)
+        yield StreamEvent(
+            type="done",
+            content=content,
+            tool_call=turn.get("tool_call_dict"),
+            usage=turn.get("usage", {}),
+            cost=turn.get("cost", 0.0),
+        )
+
+
+async def test_loop_streaming_emits_token_events(tmp_path: Path) -> None:
+    """stream=True: one token event per character + assistant_message at the end."""
+    runtime = ToolRuntime(project_root=tmp_path)
+    router = StreamingFakeRouter(
+        scripted_turns=[
+            {
+                "content": "Hello, world!",
+                "usage": {"prompt_tokens": 5, "completion_tokens": 13, "total_tokens": 18},
+                "cost": 0.0001,
+            }
+        ]
+    )
+    loop = AgentLoop(runtime=runtime, router=router, max_iterations=5)
+
+    events: list[StreamEvent] = []
+    async for ev in loop.run(
+        messages=[{"role": "user", "content": "hi"}],
+        model="MiniMax-M2.7",
+        stream=True,
+    ):
+        events.append(ev)
+
+    types = [ev.type for ev in events]
+    # We should have 13 token events (length of "Hello, world!") + 1 assistant + 1 done
+    assert types.count("token") == 13
+    assert types.count("assistant_message") == 1
+    assert types.count("done") == 1
+    assert events[-1].type == "done"
+
+    # The token events concatenate to the full text
+    token_text = "".join(ev.content for ev in events if ev.type == "token")
+    assert token_text == "Hello, world!"
+
+    # The final assistant_message carries the FULL content + usage + cost
+    assistant_ev = next(ev for ev in events if ev.type == "assistant_message")
+    assert assistant_ev.content == "Hello, world!"
+    assert assistant_ev.usage is not None
+    assert assistant_ev.usage["completion_tokens"] == 13
+    assert assistant_ev.cost == 0.0001
+
+
+async def test_loop_streaming_default_is_true(tmp_path: Path) -> None:
+    """stream defaults to True (UI uses Web streaming) — but only when
+    router supports streaming_completion. With FakeRouter (no streaming)
+    the loop must fall back to completion() to keep backward compat.
+    """
+    runtime = ToolRuntime(project_root=tmp_path)
+    # FakeRouter has only completion() — no streaming_completion
+    router = FakeRouter(
+        scripted_responses=[
+            CompletionResult(content="ok", tool_calls=None, usage={}, cost=0.0)
+        ]
+    )
+    loop = AgentLoop(runtime=runtime, router=router, max_iterations=5)
+
+    events: list[StreamEvent] = []
+    async for ev in loop.run(
+        messages=[{"role": "user", "content": "hi"}],
+        model="MiniMax-M2.7",
+    ):
+        events.append(ev)
+
+    # If fallback works, we get the standard 1 assistant + 1 done
+    types = [ev.type for ev in events]
+    assert types.count("assistant_message") == 1
+    assert types.count("done") == 1
+    assert events[-1].type == "done"
+
+
+async def test_loop_streaming_with_tool_call(tmp_path: Path) -> None:
+    """stream=True with a tool_call: tokens → tool_result → next iteration tokens → done."""
+    (tmp_path / "data.txt").write_text("answer = 42", encoding="utf-8")
+
+    runtime = ToolRuntime(project_root=tmp_path)
+    router = StreamingFakeRouter(
+        scripted_turns=[
+            # Iter 1: model decides to read the file
+            {
+                "content": "Reading...",
+                "tool_call_dict": _make_tool_call(
+                    "call_1", "read_file", {"path": "data.txt"}
+                ),
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+            # Iter 2: model produces the final answer
+            {
+                "content": "The file says: 42",
+                "usage": {"prompt_tokens": 2, "completion_tokens": 4, "total_tokens": 6},
+                "cost": 0.0001,
+            },
+        ]
+    )
+    loop = AgentLoop(runtime=runtime, router=router, max_iterations=5)
+
+    events: list[StreamEvent] = []
+    async for ev in loop.run(
+        messages=[{"role": "user", "content": "read data.txt"}],
+        model="MiniMax-M2.7",
+        stream=True,
+    ):
+        events.append(ev)
+
+    types = [ev.type for ev in events]
+    # Iter 1: 8 tokens ("Reading") + 1 assistant + 1 tool_result
+    # Iter 2: 19 tokens ("The file says: 42") + 1 assistant + 1 done
+    assert types.count("token") == 8 + 19
+    assert types.count("assistant_message") == 2
+    assert types.count("tool_result") == 1
+    assert types.count("done") == 1
+    assert events[-1].type == "done"
+
+    # Tool result event carries the file content
+    tool_result_ev = next(ev for ev in events if ev.type == "tool_result")
+    assert "answer = 42" in tool_result_ev.content
+
+
+async def test_loop_streaming_caps_at_max_iterations(tmp_path: Path) -> None:
+    """stream=True still caps at max_iterations and emits error event."""
+    runtime = ToolRuntime(project_root=tmp_path)
+    # 5 turns, each with a tool call
+    router = StreamingFakeRouter(
+        scripted_turns=[
+            {
+                "content": f"i{i}",
+                "tool_call_dict": _make_tool_call(
+                    f"call_{i}", "glob", {"pattern": "**/*.txt"}
+                ),
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            }
+            for i in range(5)
+        ]
+    )
+    loop = AgentLoop(runtime=runtime, router=router, max_iterations=5)
+
+    events: list[StreamEvent] = []
+    async for ev in loop.run(
+        messages=[{"role": "user", "content": "loop forever"}],
+        model="MiniMax-M2.7",
+        stream=True,
+    ):
+        events.append(ev)
+
+    types = [ev.type for ev in events]
+    assert types.count("assistant_message") == 5
+    assert types.count("tool_result") == 5
+    assert types.count("error") == 1
+    assert types.count("done") == 1
+    error_ev = next(ev for ev in events if ev.type == "error")
+    assert "max iterations" in error_ev.content.lower()
+    assert events[-1].type == "done"

@@ -23,6 +23,29 @@ from harness.server.llm.models import DEFAULT_MAX_TOOLS, get_model
 
 logger = logging.getLogger(__name__)
 
+# === In-process metrics (Phase 0+; Prometheus comes in Phase 4) ===
+#
+#: Count of tool-truncation events per model, since process start.
+#: Cheap dict for ``/api/metrics/truncations`` style endpoint (added
+#: on demand, not pre-baked). Phase 4 will move to Prometheus with the
+#: ``llm_tool_truncation_total{model=...}`` shape.
+_truncation_counters: dict[str, int] = {}
+
+
+def get_truncation_counts() -> dict[str, int]:
+    """Return a snapshot of tool-truncation counts per model.
+
+    Read-only copy — callers must not mutate the returned dict (the
+    underlying counter is module-private and process-scoped).
+    """
+    return dict(_truncation_counters)
+
+
+def reset_truncation_counts() -> None:
+    """Zero out all truncation counters. Useful for tests."""
+    _truncation_counters.clear()
+
+
 # litellm is an optional-but-strongly-recommended dependency. We try to
 # import it lazily so that the catalog + /api/models endpoint still work
 # even on machines where the heavy litellm install is undesirable.
@@ -171,13 +194,17 @@ class LLMRouter:
     ) -> list[dict] | None:
         """Cap the number of tools sent to the model at its per-spec limit.
 
-        Different providers have different per-request tool limits. MiniMax
-        rejects >4 tools with "invalid tool type:" (code 2013). Looking up
-        the model spec gives us the cap. If the model is unknown, we use
-        ``models.DEFAULT_MAX_TOOLS`` (4) which is a safe default.
+        Different providers have different per-request tool limits.
+        MiniMax's effective limit is at least 32 (verified 2026-06-14
+        with live calls). We use the per-spec cap, or
+        ``models.DEFAULT_MAX_TOOLS`` (16) as a safe default for unknown
+        models.
 
-        A ``logger.warning`` is emitted when truncation happens so the caller
-        can react (e.g. reduce TOOL_SCHEMAS or split into sub-agents).
+        On truncation: emits a structured warning (with dropped tool
+        names) AND increments the ``llm_tool_truncation_total`` counter
+        for the model. The counter is in-memory per process — good
+        enough for Phase 0 observability. Phase 4 will move this to
+        Prometheus.
         """
         if not tools:
             return tools
@@ -186,15 +213,22 @@ class LLMRouter:
         if len(tools) <= max_tools:
             return tools
         truncated = tools[:max_tools]
+        dropped = [
+            t.get("name", "?") if isinstance(t, dict) else "?"
+            for t in tools[max_tools:]
+        ]
         logger.warning(
-            "tools truncated for model=%s: sent %d, model max=%d. "
+            "tools truncated for model=%s: kept %d of %d, model max=%d. "
             "Dropped tools: %s",
             model,
             max_tools,
+            len(tools),
             max_tools,
-            [t.get("name", "?") if isinstance(t, dict) else "?"
-             for t in tools[max_tools:]],
+            dropped,
         )
+        # Increment the in-process counter for the model. Phase 4
+        # (observability) will swap this for a Prometheus metric.
+        _truncation_counters[model] = _truncation_counters.get(model, 0) + 1
         return truncated
 
     @staticmethod
@@ -249,7 +283,10 @@ class LLMRouter:
         """Stream a completion, yielding StreamEvent chunks.
 
         Always ends with a `done` event (or `error` if the underlying stream
-        raises).
+        raises). The final ``done`` event carries the aggregated
+        ``content``, ``tool_calls`` (a list of router-normalised dicts —
+        usually 0 or 1 element for cloud models), ``usage`` and ``cost``
+        so callers can persist a complete record.
         """
         logger.debug("streaming_completion: model=%s tools=%s", model, bool(tools))
         call_kwargs: dict[str, Any] = dict(kwargs)
@@ -263,30 +300,56 @@ class LLMRouter:
                 model, call_kwargs["tools"]
             )
             call_kwargs["tools"] = self._wrap_tools_for_litellm(call_kwargs["tools"])
+        # Aggregator state for the final 'done' event
+        content_buf: list[str] = []
+        # tool_calls_buf: list of (index, dict) for delta accumulation
+        tool_calls_buf: dict[int, dict[str, Any]] = {}
+        usage_final: dict | None = None
         try:
             response = litellm.completion(
                 model=litellm_model,
                 messages=messages,
                 **call_kwargs,
             )
-            # litellm returns a sync iterator when stream=True. Some custom
-            # providers may return an async iterator; we detect & handle both.
-            if hasattr(response, "__aiter__"):
-                async for chunk in response:
-                    ev = self._chunk_to_event(chunk)
-                    if ev is not None:
-                        yield ev
-            else:
-                for chunk in response:
-                    ev = self._chunk_to_event(chunk)
-                    if ev is not None:
-                        yield ev
+            # Always drain via SYNC iteration in a worker thread.
+            #
+            # Why sync and not async? litellm wraps generator responses
+            # in BaseModelResponseIterator which exposes BOTH __iter__
+            # and __aiter__. The async path calls
+            # self.streaming_response.__aiter__() — but if
+            # streaming_response is a generator, that raises
+            # `AttributeError: 'generator' object has no '__aiter__'`.
+            # The sync path always works. The cost is one thread hop,
+            # which is fine for streaming (we don't block the event
+            # loop for the duration of the response).
+            import asyncio
+
+            chunks_sync = await asyncio.to_thread(lambda: list(response))
+            for chunk in chunks_sync:
+                token_ev, partial = self._chunk_to_event(
+                    chunk, content_buf, tool_calls_buf
+                )
+                if token_ev is not None:
+                    yield token_ev
+                if partial.usage is not None:
+                    usage_final = partial.usage
         except Exception as exc:  # noqa: BLE001 - we want to surface any error to the client
             logger.exception("streaming_completion failed")
             yield StreamEvent(type="error", content=str(exc))
             return
 
-        yield StreamEvent(type="done")
+        # Final tool calls list, sorted by index
+        tool_calls_final: list[dict[str, Any]] | None = None
+        if tool_calls_buf:
+            tool_calls_final = [tool_calls_buf[i] for i in sorted(tool_calls_buf)]
+        cost = self._compute_cost(model, usage_final) if usage_final else 0.0
+        yield StreamEvent(
+            type="done",
+            content="".join(content_buf),
+            tool_call=tool_calls_final[0] if tool_calls_final else None,
+            usage=usage_final,
+            cost=cost,
+        )
 
     # --- helpers ---
 
@@ -330,19 +393,71 @@ class LLMRouter:
             cost=cost,
         )
 
-    def _chunk_to_event(self, chunk: Any) -> StreamEvent | None:
-        """Convert a single litellm streaming chunk into a StreamEvent."""
+    def _chunk_to_event(
+        self,
+        chunk: Any,
+        content_buf: list[str] | None = None,
+        tool_calls_buf: dict[int, dict[str, Any]] | None = None,
+    ) -> tuple[StreamEvent | None, "_StreamingPartial"]:
+        """Convert a single litellm streaming chunk into a StreamEvent.
+
+        The streaming router accumulates content + tool_call deltas in
+        caller-provided buffers. Each tool_call may arrive across many
+        chunks (id once, name once, arguments in pieces). We stitch
+        them together by the delta's ``index`` so the final 'done'
+        event carries a complete tool_call.
+
+        Returns (event_to_yield, partial). The event is a ``token``
+        event if the chunk carried new content; otherwise None. The
+        ``partial`` carries any partial data extracted from this chunk
+        (currently only ``usage`` when the model reports it mid-stream).
+        """
+        partial = _StreamingPartial()
         if not getattr(chunk, "choices", None):
-            # Some chunks only carry usage; we ignore them for now.
-            return None
+            # Some chunks only carry usage (and no choices) — pick it up.
+            u = getattr(chunk, "usage", None)
+            if u is not None:
+                partial.usage = {
+                    "prompt_tokens": int(getattr(u, "prompt_tokens", 0) or 0),
+                    "completion_tokens": int(getattr(u, "completion_tokens", 0) or 0),
+                    "total_tokens": int(getattr(u, "total_tokens", 0) or 0),
+                }
+            return None, partial
         choice = chunk.choices[0]
         delta = getattr(choice, "delta", None)
         if delta is None:
-            return None
+            return None, partial
+
         content_piece: str = getattr(delta, "content", "") or ""
+        if content_piece and content_buf is not None:
+            content_buf.append(content_piece)
+
+        # Tool-call deltas (OpenAI streaming shape)
+        if tool_calls_buf is not None:
+            for tc_delta in getattr(delta, "tool_calls", None) or []:
+                idx = int(getattr(tc_delta, "index", 0) or 0)
+                slot = tool_calls_buf.setdefault(
+                    idx,
+                    {
+                        "id": None,
+                        "type": "function",
+                        "function": {"name": None, "arguments": ""},
+                    },
+                )
+                if getattr(tc_delta, "id", None):
+                    slot["id"] = tc_delta.id
+                if getattr(tc_delta, "type", None):
+                    slot["type"] = tc_delta.type
+                fn = getattr(tc_delta, "function", None)
+                if fn is not None:
+                    if getattr(fn, "name", None):
+                        slot["function"]["name"] = fn.name
+                    if getattr(fn, "arguments", None):
+                        slot["function"]["arguments"] += fn.arguments
+
         if content_piece:
-            return StreamEvent(type="token", content=content_piece)
-        return None
+            return StreamEvent(type="token", content=content_piece), partial
+        return None, partial
 
     def _compute_cost(self, model: str, usage: dict[str, int]) -> float:
         """Compute cost in USD from catalog pricing × token usage.
@@ -361,4 +476,18 @@ class LLMRouter:
         return round(cost, 9)
 
 
-__all__ = ["LLMRouter", "CompletionResult", "StreamEvent"]
+__all__ = ["LLMRouter", "CompletionResult", "StreamEvent", "get_truncation_counts", "reset_truncation_counts"]
+
+
+# === Streaming helpers (private) ===
+
+class _StreamingPartial:
+    """Holds data extracted from a single streaming chunk that doesn't
+    warrant its own yielded event (currently: usage info carried in
+    some chunks without a content delta).
+    """
+
+    __slots__ = ("usage",)
+
+    def __init__(self) -> None:
+        self.usage: dict | None = None
