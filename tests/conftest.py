@@ -179,6 +179,49 @@ def agents_dir(tmp_path: Path) -> Path:
 
 
 # ---------------------------------------------------------------------------
+# Phase 2.1 — memory namespace + cascade fixtures
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def memory_namespace(tmp_path: Path) -> dict[str, Path]:
+    """Four disjoint storage dirs for a single ``UnifiedMemory(agent_id=...)``.
+
+    The harness/memory adapters are stateful on disk: each namespace needs
+    its own ``hmem_dir`` / ``mem0_dir`` / ``hybrid_dir`` / ``file_dir``.
+    Tests that exercise cross-namespace isolation use this fixture to
+    spin up a fresh dir quadruple under ``tmp_path``.
+
+    Returns a dict keyed by layer (hmem/mem0/hybrid/file). The caller
+    unpacks into ``UnifiedMemory(..., **namespace_dirs, agent_id=...)``.
+    """
+    base = tmp_path / "memory"
+    return {
+        "hmem_dir":   base / "hmem",
+        "mem0_dir":   base / "mem0",
+        "hybrid_dir": base / "hybrid",
+        "file_dir":   base / "file",
+    }
+
+
+@pytest.fixture
+def cascade_decision() -> Any:
+    """A factory for stub :class:`CascadeDecision` objects in tests.
+
+    Returned as a callable so individual tests can build decisions
+    with custom tiers/models without depending on the real
+    ``TierSelector`` (which is what the cascade tests themselves verify).
+    The factory is parametrized on the field most often overridden in
+    tests (``tier``); other fields fall back to Phase 2.1 defaults.
+    """
+    from harness.agents.cascade import CascadeDecision  # lazy import
+    return lambda **kw: CascadeDecision(
+        chosen_model=kw.get("chosen_model", "glm-4.7"),
+        tier=kw.get("tier", "T2"),
+        reason=kw.get("reason", "fixture-default"),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Real LLM marker — auto-skip when no API key is set
 # ---------------------------------------------------------------------------
 

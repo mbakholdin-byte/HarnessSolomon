@@ -1,5 +1,21 @@
 # Changelog — Solomon Harness
 
+## Phase 2.1 — Sub-agents v1.1 (2026-06-14, in progress)
+
+### Scope
+
+Закрывает 3 stub'а из Phase 2.0:
+
+1. **Cost-aware T1→T2→T3 cascade** — `LLMRouterClassifier.classify()` уже возвращает `RouterDecision.confidence`; новый `TierSelector` (`harness/agents/cascade.py`) маппит confidence в T1 (Ollama local, $0) / T2 (GLM-4.7 cloud) / T3 (MiniMax M2.7) по двум порогам из settings. `AgentRunner.run(model_override=...)` применяет выбор cascade без мутации spec.
+2. **Persistent background mode** — `MergeQueue.enqueue_async()` возвращает `job_id` сразу, `subscribe(job_id)` yields `JobEvent` stream, `JobStore` (SQLite aiosqlite) персистит `merge_jobs` + `merge_events` для resume после рестарта. CLI `--background` + `agents jobs <id>`, HTTP `GET /api/v1/agents/jobs`.
+3. **Per-agent memory namespacing** — `UnifiedMemory(agent_id=...)` пробрасывает namespace в 4 адаптера; `write()` auto-injects `metadata["agent_id"]` + `#agent/<id>` tag. `AgentSpec.memory_namespace: str | None` (default share).
+
+### Backward compat
+
+- Все 4 built-in (explore/plan/code/review) — без изменений, default `MiniMax-M2.7` + namespace `"solomon"`.
+- `MergeQueue.enqueue()` (await-to-completion) — deprecated, оставлен как sync-обёртка над `enqueue_async()`.
+- `UnifiedMemory(agent_id="solomon")` — default preserves Phase 1 behaviour.
+
 ## Phase 2.0 — Sub-agents v1.0 (2026-06-14)
 
 ### 8 шагов / 8 коммитов за ~3 часа (post-Phase 1, единая сессия)

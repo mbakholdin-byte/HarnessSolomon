@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -93,6 +93,57 @@ class Settings(BaseSettings):
         gt=0,
         description="Wall-clock cap (seconds) for a single sub-agent run (used by MergeQueue).",
     )
+
+    # === Sub-agents cost-aware cascade (Phase 2.1) ===
+    subagent_t1_model: str = Field(
+        default="qwen3:8b",
+        description=(
+            "Tier-1 model id (cheap local, e.g. Ollama). Used by TierSelector "
+            "when router confidence >= subagent_confidence_high. Set to empty "
+            "string to disable T1 (cascade falls back to T2)."
+        ),
+    )
+    subagent_t2_model: str = Field(
+        default="glm-4.7",
+        description=(
+            "Tier-2 model id (cloud mid-tier). Used when confidence is in "
+            "[subagent_confidence_low, subagent_confidence_high)."
+        ),
+    )
+    subagent_confidence_high: float = Field(
+        default=0.85,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Confidence >= this threshold -> Tier-1 (cheap local). "
+            "Calibrate via Phase 5 eval harness. See docs/MODEL_REGISTRY.md."
+        ),
+    )
+    subagent_confidence_low: float = Field(
+        default=0.55,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Confidence in [low, high) -> Tier-2. Below low -> Tier-3 (premium). "
+            "Calibrate via Phase 5 eval harness. See docs/MODEL_REGISTRY.md."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _cascade_thresholds_ordered(self) -> "Settings":
+        """Guard against a misconfigured cascade: low must be strictly below high.
+
+        When the operator sets ``subagent_confidence_low >= subagent_confidence_high``,
+        no confidence value would fall in the [low, high) T2 band and the cascade
+        would degenerate to a binary T1/T3. We reject the configuration at
+        load time so the user notices immediately, not on the first router call.
+        """
+        if self.subagent_confidence_low >= self.subagent_confidence_high:
+            raise ValueError(
+                f"subagent_confidence_low ({self.subagent_confidence_low}) must be "
+                f"< subagent_confidence_high ({self.subagent_confidence_high})"
+            )
+        return self
 
 
 settings = Settings()

@@ -71,7 +71,9 @@ def _resolve_adapter_for_layer(
         return mem0
     if layer == "L2.5":
         # L2.5 is mempalace (KG). For now, fall back to mem0 (semantic).
-        # TODO(Phase 2.1+): add a real MemPalaceAdapter (separate track, not Phase 2 sub-agents).
+        # TODO(Phase 2.1+ — separate track): add a real MemPalaceAdapter.
+        # Phase 2.1 itself only touches sub-agents (cascade / background / namespacing),
+        # not the mempalace KG adapter. See docs/roadmap.md §L2.5 track.
         return mem0
     if layer == "L3":
         return hybrid
