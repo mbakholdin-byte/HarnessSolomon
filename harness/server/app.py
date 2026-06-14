@@ -126,13 +126,22 @@ def create_app() -> FastAPI:
     from harness.server.routes.models import router as models_router
     from harness.server.routes.chat import router as chat_router
     from harness.server.routes.agents_jobs import router as agents_jobs_router
+    from harness.server.routes.capabilities import router as capabilities_router
 
     app.include_router(health_router, prefix="/api", tags=["health"])
     app.include_router(sessions_router, prefix="/api", tags=["sessions"])
     app.include_router(models_router, prefix="/api", tags=["models"])
     app.include_router(chat_router, prefix="/api/chat")  # WebSocket only
-    # Phase 2.2: merge-queue HTTP API.
+    # Phase 2.2: merge-queue HTTP API. Phase 1.6: routes now require
+    # ``agents.read`` via ``Depends(require_scope(Scope.AGENTS_READ))``.
     app.include_router(agents_jobs_router, prefix="/api/v1/agents", tags=["agents"])
+    # Phase 1.6: capabilities discovery — always public so a client
+    # with no token can still discover the server's auth surface.
+    # Mounted at /api/v1/capabilities (the router's internal path
+    # is just "/capabilities", so we add the /api/v1 prefix here).
+    app.include_router(
+        capabilities_router, prefix="/api/v1", tags=["capabilities"],
+    )
 
     return app
 

@@ -1,6 +1,6 @@
 # Changelog — Solomon Harness
 
-## Phase 1.6 — Scope-gated API v1.0 (Steps 0-1 / 6, in progress, 2026-06-14)
+## Phase 1.6 — Scope-gated API v1.0 (Steps 0-2 / 6, in progress, 2026-06-14)
 
 ### Step 0 — Token store + scopes enum + settings (commit `eff5725`)
 
@@ -8,11 +8,17 @@
 |---|-----|-------|--------|
 | Step 0 | `harness/server/auth/{__init__,scopes,tokens,db}.py` — `Scope` enum (6 значений), `parse_scopes` / `has_scope` / `format_scopes`, `TokenStore` (aiosqlite, SHA-256 hashed), `TokenRecord` (frozen dataclass) | NEW: 4 файла (~530 LoC), `harness/config.py` +4 settings, `harness/server/app.py` lifespan wiring, `tests/conftest.py` `auth_store` + `make_token` fixtures, `tests/test_token_store.py` (NEW, ~190 LoC) | 8 (scopes) + 6 (token store) = 14 |
 
-### Step 1 — FastAPI deps (`get_current_token`, `require_scope`) (this commit)
+### Step 1 — FastAPI deps (`get_current_token`, `require_scope`) (commit `4d30871`)
 
 | # | Что | Файлы | +Tests |
 |---|-----|-------|--------|
 | Step 1 | `harness/server/auth/deps.py` (NEW, ~155 LoC) — `get_token_store` (503 on missing), `get_current_token` (401 on missing/malformed/wrong/revoked), `require_scope(*required)` factory (403 with informative detail on missing scope, ANY match, 401 bubbles up); `auth_required=False` short-circuits both deps for dev mode | NEW: `deps.py` + `tests/test_auth_deps.py` (~290 LoC, 13 tests) | 13 |
+
+### Step 2 — Capabilities endpoint + apply to /api/v1/agents (this commit)
+
+| # | Что | Файлы | +Tests |
+|---|-----|-------|--------|
+| Step 2 | `harness/server/auth/route_registry.py` (NEW, ~120 LoC) — `EndpointSpec` dataclass + `collect_endpoints(app)` walks `app.routes`, finds `require_scope` deps via `_required_scopes` marker attribute (на самих dep callables); `harness/server/routes/capabilities.py` (NEW, ~70 LoC) — `GET /api/v1/capabilities` (public, returns server_version, auth_required, scopes_available, endpoints); `harness/server/routes/agents_jobs.py` — `Depends(_agents_read)` на всех 3 GET routes; `harness/server/app.py` — mount `capabilities_router` with `/api/v1` prefix | NEW: 2 файла, MODIFIED: `agents_jobs.py` + `app.py` + `tests/test_agents_api.py` (Phase 2.2 baseline fix), `tests/test_capabilities.py` (NEW, 9 tests) | 9 |
 
 **Settings added (Phase 1.6):**
 - `auth_db_path: Path` — `data/harness-scope.db` (sibling of `agent-jobs.db`)

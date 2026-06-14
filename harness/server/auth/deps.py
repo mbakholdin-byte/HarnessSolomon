@@ -132,6 +132,12 @@ def require_scope(*required: Scope) -> Callable:
     dev mode (``auth_required=False``) the check is skipped and
     the dependency passes through silently.
 
+    The returned function carries a ``_required_scopes`` attribute
+    (a ``frozenset[Scope]``) so that the route-registry
+    introspection in
+    :mod:`harness.server.auth.route_registry` can pick up the
+    scope set without resorting to fragile signature inspection.
+
     Usage::
 
         @router.get("/jobs")
@@ -139,10 +145,6 @@ def require_scope(*required: Scope) -> Callable:
             token: TokenRecord | None = Depends(require_scope(Scope.AGENTS_READ)),
         ):
             ...
-
-    The dependency is created once at import time (when the route
-    is defined) and shared across all requests — so we capture
-    ``required`` in a closure rather than reaching for a class.
     """
     required_set = frozenset(required)
 
@@ -180,6 +182,10 @@ def require_scope(*required: Scope) -> Callable:
             )
         return token
 
+    # Marker attribute — picked up by collect_endpoints(). The
+    # underscore prefix flags it as private to the auth package;
+    # external code should not depend on it.
+    _dep._required_scopes = required_set  # type: ignore[attr-defined]
     return _dep
 
 

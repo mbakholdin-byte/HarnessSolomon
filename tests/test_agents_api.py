@@ -28,10 +28,23 @@ from harness.config import settings
 # === Helpers ===
 
 def _make_app_with_store(store: JobStore) -> object:
-    """Build a FastAPI app and pre-populate ``app.state.job_store``."""
+    """Build a FastAPI app and pre-populate ``app.state``.
+
+    Phase 1.6: the agents_jobs routes now require ``agents.read``
+    scope, which is enforced by a FastAPI dep that pulls the
+    ``TokenStore`` from ``app.state``. In dev mode
+    (``auth_required=False``, set by ``isolated_settings``) the
+    dep short-circuits and the store is never queried — but the
+    attribute still has to be present (the dep raises 503 if
+    it's None when the check happens). We attach a real
+    ``TokenStore`` so the dep has something to read.
+    """
     from harness.server.app import create_app
+    from harness.server.auth.tokens import TokenStore
     app = create_app()
     app.state.job_store = store
+    app.state.token_store = TokenStore(settings.auth_db_path)
+    app.state.auth_required = settings.auth_required  # False in tests
     app.state.merge_queue = None
     return app
 

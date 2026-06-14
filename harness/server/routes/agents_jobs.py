@@ -1,9 +1,9 @@
-"""HTTP API for the merge-queue job store (Phase 2.2, Step 4).
+"""HTTP API for the merge-queue job store (Phase 2.2, Step 4 + Phase 1.6).
 
 Endpoints:
-  - ``GET /api/v1/agents/jobs/<job_id>`` — fetch one job's record
-  - ``GET /api/v1/agents/jobs?recent=N`` — list the N most recent jobs
-  - ``GET /api/v1/agents/health`` — queue health (stats for ops)
+  - ``GET /api/v1/agents/jobs/<job_id>`` — fetch one job's record (Phase 1.6: requires ``agents.read``)
+  - ``GET /api/v1/agents/jobs?recent=N`` — list the N most recent jobs (Phase 1.6: requires ``agents.read``)
+  - ``GET /api/v1/agents/health`` — queue health (stats for ops) (Phase 1.6: requires ``agents.read``)
 
 The router is mounted at ``/api/v1/agents`` in :mod:`harness.server.app`.
 It reads from ``app.state.job_store`` (a :class:`JobStore` instance
@@ -11,6 +11,8 @@ set up in the FastAPI lifespan handler) and never constructs one
 itself — the trust boundary from Phase 2.0 is preserved.
 
 Failure modes:
+  - 401 if no token / malformed header / wrong / revoked token (Phase 1.6)
+  - 403 if token lacks ``agents.read`` scope (Phase 1.6)
   - 404 if the job_id is unknown
   - 503 if ``app.state.job_store`` is not configured (e.g. the
     lifespan handler failed to initialise it). The route is wired
@@ -21,8 +23,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
+
+from harness.server.auth.deps import require_scope
+from harness.server.auth.scopes import Scope
 
 router = APIRouter()
 
@@ -81,9 +86,25 @@ def _get_store(request: Request) -> Any:
     return store
 
 
+# Phase 1.6: every route below requires the ``agents.read`` scope.
+# The ``_agents_read`` alias is created once at import time and
+# shared across all three GETs (FastAPI caches dep callables).
+_agents_read = require_scope(Scope.AGENTS_READ)
+
+
 @router.get("/jobs/{job_id}", response_model=_JobRecordSchema)
-async def get_job(job_id: str, request: Request) -> _JobRecordSchema:
-    """Fetch one job by id. 404 if not found."""
+async def get_job(
+    job_id: str,
+    request: Request,
+    _token: Any = Depends(_agents_read),
+) -> _JobRecordSchema:
+    """Fetch one job by id. 404 if not found.
+
+    Phase 1.6: requires ``agents.read`` scope. The token is not
+    used by the handler body but its presence is enforced by
+    the dependency — FastAPI will resolve it before the handler
+    runs.
+    """
     import asyncio
     store = _get_store(request)
     rec = await store.load(job_id)
@@ -94,9 +115,14 @@ async def get_job(job_id: str, request: Request) -> _JobRecordSchema:
 
 @router.get("/jobs", response_model=list[_JobRecordSchema])
 async def list_jobs(
-    request: Request, recent: int = 20,
+    request: Request,
+    recent: int = 20,
+    _token: Any = Depends(_agents_read),
 ) -> list[_JobRecordSchema]:
-    """List the ``recent`` most recent jobs (default 20, newest first)."""
+    """List the ``recent`` most recent jobs (default 20, newest first).
+
+    Phase 1.6: requires ``agents.read`` scope.
+    """
     import asyncio
     store = _get_store(request)
     if recent <= 0:
@@ -106,13 +132,21 @@ async def list_jobs(
 
 
 @router.get("/health", response_model=_QueueHealth)
-async def queue_health(request: Request) -> _QueueHealth:
+async def queue_health(
+    request: Request,
+    _token: Any = Depends(_agents_read),
+) -> _QueueHealth:
     """Ops health endpoint: per-repo lock stats + recent job count.
 
     The lock stats are read from ``app.state.merge_queue`` when
     available; the recent-job count is read from the store. The
     two are independent so a missing queue doesn't kill the
     health response.
+
+    Phase 1.6: requires ``agents.read`` scope (it's a read
+    endpoint, and we keep the auth surface uniform across the
+    v1 namespace — operators who want a fully-open health
+    endpoint can hit ``/api/health`` which remains legacy-open).
     """
     import asyncio
     store = _get_store(request)

@@ -79,6 +79,13 @@ def isolated_settings(
     monkeypatch.setattr(settings, "auth_db_path", paths["auth_db_path"])
     from harness.server.auth import db as auth_db
     auth_db._reset_init_flag()
+    # Test suite runs in "dev mode" — open auth by default so the
+    # legacy Phase 0-2.2 tests don't need a token to hit /api/v1/*
+    # endpoints. Tests that want to assert auth behaviour set
+    # ``settings.auth_required = True`` explicitly (via
+    # ``monkeypatch.setattr(settings, "auth_required", True)`` in
+    # the test body or a per-test fixture).
+    monkeypatch.setattr(settings, "auth_required", False)
     # Force the DB layer to re-init under the new path.
     db_sqlite._db_initialized = False
     return paths
