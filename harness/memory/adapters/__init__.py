@@ -12,6 +12,7 @@ one storage layer:
 Adapters are intentionally thin — translation only. The high-level
 logic (dual-write, search routing) lives in ``harness.memory.unified``.
 """
+from harness.memory.adapters.file import FileAdapter, INDEX_FILENAME
 from harness.memory.adapters.hmem import HmemAdapter, VALID_PREFIXES
 from harness.memory.adapters.hybrid import DEFAULT_PROJECT, DEFAULT_TAG, HybridAdapter
 from harness.memory.adapters.mem0 import Mem0Adapter
@@ -23,4 +24,6 @@ __all__ = [
     "HybridAdapter",
     "DEFAULT_PROJECT",
     "DEFAULT_TAG",
+    "FileAdapter",
+    "INDEX_FILENAME",
 ]
