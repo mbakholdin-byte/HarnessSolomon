@@ -1,4 +1,4 @@
-"""Merge queue — code agent → reviewer agent → adversarial verify → merge (Phase 2.0, Step 7 + Phase 2.1, Step 2).
+"""Merge queue — code agent → reviewer agent → adversarial verify → merge (Phase 2.0, Step 7 + Phase 2.1, Step 2 + Phase 2.2, Step 1).
 
 The merge queue orchestrates a single end-to-end flow:
 
@@ -11,8 +11,13 @@ The merge queue orchestrates a single end-to-end flow:
        the main worktree and clean up. Otherwise leave the worktree for
        human inspection.
 
-**Serialisation:** all jobs share a single :class:`asyncio.Lock`. A
-parallel cross-repo queue is Phase 2.2.
+**Serialisation (Phase 2.2):** jobs are serialised **per repo** via
+:class:`~harness.agents.repo_locks.RepoLockRegistry`. Two jobs in
+different repos run in parallel; two jobs in the same repo still
+serialise (worktree + git operations aren't safe to run concurrently
+inside one repo). The back-compat alias ``self._lock`` is a single
+process-wide lock and is kept for any external caller that grabbed
+the attribute directly (deprecated; use ``self._locks``).
 
 **Timeouts:** each agent call is wrapped in :func:`asyncio.wait_for`
 with ``settings.subagent_timeout_s`` (default 300s).
@@ -32,6 +37,7 @@ from pathlib import Path
 from typing import Any
 
 from harness.agents.jobs import JobEvent, JobStore
+from harness.agents.repo_locks import RepoLockRegistry
 from harness.agents.runner import AgentRunner
 from harness.agents.spec import AgentSpec
 from harness.agents.verify import AdversarialVerify
@@ -39,6 +45,18 @@ from harness.agents.worktree import WorktreeSession
 from harness.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+#: Statuses for which ``subscribe()`` should keep streaming events.
+#: Phase 2.2 extends the set with the 5 PR-phase statuses so a job
+#: waiting for CI checks continues to receive events. Derived from
+#: :data:`harness.agents.jobs._RUNNING_STATUSES` (private) — we
+#: re-derive here to keep the import boundary clean (avoid pulling
+#: a private symbol from another module).
+_IN_FLIGHT_STATUSES: frozenset[str] = frozenset({
+    "queued", "running_code", "running_review", "verifying",
+    "pr_creating", "pr_open", "pr_waiting_checks", "pr_waiting_review", "merging_pr",
+})
 
 
 @dataclass
@@ -98,6 +116,17 @@ class MergeQueue:
         self.runner = runner
         self.verifier = verifier
         self.store = store
+        # Phase 2.2: per-repo lock registry. Two jobs in different
+        # repos can now run in parallel; same-repo jobs still serialise.
+        # ``self._lock`` is kept as a back-compat alias (a process-wide
+        # lock) for any external caller that grabbed the attribute
+        # directly. New code should use ``self._locks.lock_for(repo)``.
+        self._locks = RepoLockRegistry()
+        # Back-compat: a single global lock equivalent to Phase 2.0/2.1
+        # behaviour. Used by ``enqueue()`` (which doesn't yet know about
+        # per-repo targeting) and any code that does ``self._lock``
+        # directly. We construct it once per MergeQueue so ``acquire``
+        # / ``release`` pair correctly.
         self._lock = asyncio.Lock()
         # In-process event queues for ``subscribe()`` (Phase 2.1).
         # Keyed by job_id. We use a plain dict (not the JobStore) so
@@ -106,13 +135,31 @@ class MergeQueue:
         self._live: dict[str, asyncio.Queue[JobEvent]] = {}
 
     async def enqueue(self, job: MergeJob) -> MergeResult:
-        """Run one job end-to-end. Jobs are serialised by an asyncio.Lock.
+        """Run one job end-to-end. Jobs are serialised per-repo (Phase 2.2).
+
+        Phase 2.2: replaced the single global ``asyncio.Lock`` with
+        a per-repo registry. Two jobs in different repos can run in
+        parallel; two jobs in the same repo still serialise. For
+        backward compat, the sync path uses the runner's repo (Phase
+        2.1 behaviour) and a new ``MergeJob.repo_override`` (Phase 2.2
+        Step 3) lets cross-repo callers target a different path.
 
         Always returns a :class:`MergeResult` (never raises). On any
         internal failure, ``merged=False`` and ``error`` is populated.
         """
-        async with self._lock:
+        repo = self._job_repo(job)
+        async with self._locks.lock_for(repo):
             return await self._run_job(job)
+
+    def _job_repo(self, job: MergeJob) -> Path:
+        """Resolve the repo a job targets. Phase 2.2 Step 3 will
+        extend ``MergeJob`` with ``repo_override``; this helper
+        isolates that change so we can wire per-repo locking now
+        without changing the dataclass.
+        """
+        # Phase 2.1: only ``self.runner.repo`` exists. Phase 2.2 Step 3
+        # will read ``job.repo_override`` first.
+        return self.runner.repo
 
     # === Background mode (Phase 2.1) ===
 
@@ -183,9 +230,7 @@ class MergeQueue:
         # Check terminal status before consuming live (avoid blocking
         # on a queue that will never see a sentinel).
         rec = await self.store.load(job_id)
-        if rec is None or rec.status not in (
-            "queued", "running_code", "running_review", "verifying",
-        ):
+        if rec is None or rec.status not in _IN_FLIGHT_STATUSES:
             return
         queue = self._live.get(job_id)
         if queue is None:
@@ -199,9 +244,7 @@ class MergeQueue:
             except asyncio.TimeoutError:
                 # Re-check terminal status periodically.
                 rec = await self.store.load(job_id)
-                if rec is None or rec.status not in (
-                    "queued", "running_code", "running_review", "verifying",
-                ):
+                if rec is None or rec.status not in _IN_FLIGHT_STATUSES:
                     return
                 continue
             yield ev
@@ -238,7 +281,8 @@ class MergeQueue:
         (Phase 2.0) cover the logic; :meth:`_run_job_async` adds
         status persistence on top.
         """
-        async with self._lock:
+        repo = self._job_repo(job)
+        async with self._locks.lock_for(repo):
             await self._emit(job_id, "started")
             try:
                 # 1. Worktree.
