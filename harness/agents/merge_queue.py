@@ -1,4 +1,4 @@
-"""Merge queue — code agent → reviewer agent → adversarial verify → merge (Phase 2.0, Step 7).
+"""Merge queue — code agent → reviewer agent → adversarial verify → merge (Phase 2.0, Step 7 + Phase 2.1, Step 2).
 
 The merge queue orchestrates a single end-to-end flow:
 
@@ -16,14 +16,22 @@ parallel cross-repo queue is Phase 2.2.
 
 **Timeouts:** each agent call is wrapped in :func:`asyncio.wait_for`
 with ``settings.subagent_timeout_s`` (default 300s).
+
+**Background mode (Phase 2.1):** :meth:`MergeQueue.enqueue_async` returns
+a ``job_id`` immediately and runs the job in a background ``asyncio.Task``.
+Status and event log are persisted via :class:`~harness.agents.jobs.JobStore`
+so the CLI / Web UI can poll progress and resume after a process restart.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
+from harness.agents.jobs import JobEvent, JobStore
 from harness.agents.runner import AgentRunner
 from harness.agents.spec import AgentSpec
 from harness.agents.verify import AdversarialVerify
@@ -42,6 +50,16 @@ class MergeJob:
     task: str
     worktree_id: str
     model: str | None = None  # overrides the spec's model
+    #: Optional cascade model overrides (Phase 2.1). When set, the
+    #: queue passes the chosen tier's model to ``AgentRunner.run``
+    #: via ``model_override=``. ``None`` means "use spec.model"
+    #: (Phase 2.0 behaviour). Reserved for a future cascade hookup
+    #: — Phase 2.1 Step 2 only stores these for the JobStore
+    #: observability, it does NOT yet drive the agent loop with
+    #: them (cascade is Step 1, integration is Step 4).
+    model_t1: str | None = None
+    model_t2: str | None = None
+    model_t3: str | None = None
 
 
 @dataclass
@@ -64,12 +82,28 @@ class MergeQueue:
     Args:
         runner:   The :class:`AgentRunner` shared with the rest of the harness.
         verifier: The :class:`AdversarialVerify` panel.
+        store:    Optional :class:`JobStore` for background-mode persistence
+                  (Phase 2.1). When ``None``, the queue still works
+                  synchronously via :meth:`enqueue` but
+                  :meth:`enqueue_async` raises — background mode is opt-in.
     """
 
-    def __init__(self, runner: AgentRunner, verifier: AdversarialVerify) -> None:
+    def __init__(
+        self,
+        runner: AgentRunner,
+        verifier: AdversarialVerify,
+        *,
+        store: JobStore | None = None,
+    ) -> None:
         self.runner = runner
         self.verifier = verifier
+        self.store = store
         self._lock = asyncio.Lock()
+        # In-process event queues for ``subscribe()`` (Phase 2.1).
+        # Keyed by job_id. We use a plain dict (not the JobStore) so
+        # late subscribers don't have to hit SQLite; the store is
+        # the durable copy, this is the live broadcast channel.
+        self._live: dict[str, asyncio.Queue[JobEvent]] = {}
 
     async def enqueue(self, job: MergeJob) -> MergeResult:
         """Run one job end-to-end. Jobs are serialised by an asyncio.Lock.
@@ -79,6 +113,269 @@ class MergeQueue:
         """
         async with self._lock:
             return await self._run_job(job)
+
+    # === Background mode (Phase 2.1) ===
+
+    async def enqueue_async(self, job: MergeJob) -> str:
+        """Enqueue a job to run in the background; return its ``job_id``.
+
+        The job runs in an ``asyncio.Task`` scheduled on the current
+        event loop. Use :meth:`get_status` to poll or :meth:`subscribe`
+        to stream events.
+
+        The serialisation contract is preserved: at most ONE background
+        job runs at a time (the same ``asyncio.Lock`` that guards
+        :meth:`enqueue` also guards the background task).
+
+        Requires a ``store`` to have been provided at construction.
+        Raises ``RuntimeError`` otherwise.
+        """
+        if self.store is None:
+            raise RuntimeError(
+                "enqueue_async requires a JobStore; pass store=... to MergeQueue"
+            )
+        job_id = await self.store.create(
+            worktree_id=job.worktree_id,
+            model=job.model or job.code_spec.model,
+            prompt=job.task[:500],   # truncate for DB display
+            status="queued",
+        )
+        # Live event queue (consumed by ``subscribe``).
+        self._live[job_id] = asyncio.Queue()
+        # Schedule the background runner.
+        asyncio.create_task(self._run_job_async(job, job_id))
+        return job_id
+
+    async def get_status(self, job_id: str) -> str | None:
+        """Return the current job status (string) or ``None`` if unknown.
+
+        Reads from the persistent :class:`JobStore`. The result is
+        up-to-date as of the last status update (or
+        ``recover_running`` if the process restarted).
+        """
+        if self.store is None:
+            return None
+        rec = await self.store.load(job_id)
+        return rec.status if rec is not None else None
+
+    async def subscribe(self, job_id: str) -> AsyncIterator[JobEvent]:
+        """Stream live events for a job.
+
+        Yields the job's historical events first (replay from the
+        store), then any new events as they arrive on the in-process
+        queue. Terminates when the job reaches a terminal status
+        (merged/failed/timeout/cancelled).
+        """
+        if self.store is None:
+            return
+        # 1. Replay historical events (so a UI connecting mid-job
+        #    still sees the code_done / review_done / etc).
+        async for ev in self._replay_then_live(job_id):
+            yield ev
+
+    async def _replay_then_live(self, job_id: str) -> AsyncIterator[JobEvent]:
+        """Replay JobStore events, then forward from the live queue."""
+        if self.store is None:
+            return
+        replayed = await self.store.list_events(job_id)
+        for ev in replayed:
+            yield ev
+        # Check terminal status before consuming live (avoid blocking
+        # on a queue that will never see a sentinel).
+        rec = await self.store.load(job_id)
+        if rec is None or rec.status not in (
+            "queued", "running_code", "running_review", "verifying",
+        ):
+            return
+        queue = self._live.get(job_id)
+        if queue is None:
+            return
+        # Consume live events until the job goes terminal. We poll
+        # the store on each iteration to detect terminal state without
+        # a separate "done" sentinel in the queue itself.
+        while True:
+            try:
+                ev = await asyncio.wait_for(queue.get(), timeout=1.0)
+            except asyncio.TimeoutError:
+                # Re-check terminal status periodically.
+                rec = await self.store.load(job_id)
+                if rec is None or rec.status not in (
+                    "queued", "running_code", "running_review", "verifying",
+                ):
+                    return
+                continue
+            yield ev
+            # The runner's last event is always ``merged``/``failed``/
+            # ``timeout``/``cancelled`` — but we don't rely on a
+            # sentinel kind here, we just keep consuming until the
+            # store says the job is terminal. A small sleep keeps
+            # tests fast without busy-spinning.
+
+    async def _emit(self, job_id: str, kind: str, **payload: Any) -> None:
+        """Append an event to the store and broadcast on the live queue."""
+        if self.store is None:
+            return
+        await self.store.append_event(job_id, kind, payload)
+        ev = JobEvent(
+            id=0,  # filled by DB AUTOINCREMENT; not surfaced to callers
+            job_id=job_id,
+            ts="",
+            kind=kind,
+            payload=payload,
+        )
+        q = self._live.get(job_id)
+        if q is not None:
+            await q.put(ev)
+
+    async def _run_job_async(self, job: MergeJob, job_id: str) -> None:
+        """Background-task body. Mirrors :meth:`_run_job` but emits events.
+
+        Note: deliberately duplicates :meth:`_run_job` to avoid
+        complicating the Phase 2.0 sync path with optional callbacks.
+        The two methods MUST stay in lock-step — the canonical flow
+        is in :meth:`_run_job`; this one copies it line-for-line and
+        adds ``await self._emit(...)`` hooks. The ``_run_job`` tests
+        (Phase 2.0) cover the logic; :meth:`_run_job_async` adds
+        status persistence on top.
+        """
+        async with self._lock:
+            await self._emit(job_id, "started")
+            try:
+                # 1. Worktree.
+                try:
+                    worktree_ctx = WorktreeSession(
+                        self.runner.repo, worktree_id=job.worktree_id,
+                    )
+                    wt = await worktree_ctx.__aenter__()
+                except Exception as e:
+                    await self.store.update_status(
+                        job_id, "failed", finished=True,
+                        error=f"worktree creation failed: {type(e).__name__}: {e}",
+                    )
+                    await self._emit(job_id, "failed", reason="worktree creation failed")
+                    return
+
+                # 2. Code agent.
+                await self.store.update_status(job_id, "running_code")
+                await self._emit(job_id, "running_code")
+                code_result = await self._call_with_timeout(
+                    self.runner.run(
+                        job.code_spec, job.task,
+                        worktree_id=job.worktree_id,
+                        external_worktree=wt,
+                    ),
+                )
+                if code_result.error is not None and not code_result.final_text:
+                    try:
+                        await worktree_ctx.__aexit__(None, None, None)
+                    except Exception:
+                        pass
+                    try:
+                        await worktree_ctx.delete_branch()
+                    except Exception:
+                        pass
+                    await self.store.update_status(
+                        job_id, "failed", finished=True,
+                        cost=code_result.total_cost, error=code_result.error,
+                    )
+                    await self._emit(job_id, "failed", reason="code agent failed")
+                    return
+                await self._emit(job_id, "code_done", iterations=code_result.iterations)
+
+                # 3. Review agent.
+                await self.store.update_status(job_id, "running_review")
+                await self._emit(job_id, "running_review")
+                review_prompt = (
+                    f"Original task:\n{job.task}\n\n"
+                    f"Code agent's changes (review with severity scale BLOCKER/MAJOR/MINOR/NIT):\n"
+                    f"{code_result.final_text}"
+                )
+                review_result = await self._call_with_timeout(
+                    self.runner.run(
+                        job.review_spec, review_prompt,
+                        worktree_id=job.worktree_id,
+                        external_worktree=wt,
+                    ),
+                )
+                if review_result.error is not None and not review_result.final_text:
+                    try:
+                        await worktree_ctx.__aexit__(None, None, None)
+                    except Exception:
+                        pass
+                    try:
+                        await worktree_ctx.delete_branch()
+                    except Exception:
+                        pass
+                    await self.store.update_status(
+                        job_id, "failed", finished=True,
+                        cost=code_result.total_cost + review_result.total_cost,
+                        error=review_result.error,
+                    )
+                    await self._emit(job_id, "failed", reason="review agent failed")
+                    return
+                await self._emit(job_id, "review_done", iterations=review_result.iterations)
+
+                # 4. Adversarial verify.
+                await self.store.update_status(job_id, "verifying")
+                await self._emit(job_id, "verifying")
+                passed = await self.verifier.run(
+                    prompt=job.task, answer=review_result.final_text,
+                    model=job.model or job.code_spec.model,
+                )
+
+                if not passed:
+                    # PRESERVE worktree for human review.
+                    await self.store.update_status(
+                        job_id, "failed", finished=True,
+                        cost=code_result.total_cost + review_result.total_cost,
+                        error="adversarial verify rejected the review",
+                    )
+                    await self._emit(job_id, "failed", reason="verify rejected")
+                    return
+
+                # 5. Fast-forward merge.
+                try:
+                    await self._ff_merge(self.runner.repo, wt.branch)
+                except Exception as e:
+                    await self.store.update_status(
+                        job_id, "failed", finished=True,
+                        cost=code_result.total_cost + review_result.total_cost,
+                        error=f"git merge --ff-only failed: {e}",
+                    )
+                    await self._emit(job_id, "failed", reason="merge failed")
+                    return
+
+                # 6. Cleanup.
+                try:
+                    await worktree_ctx.__aexit__(None, None, None)
+                except Exception:
+                    pass
+                try:
+                    await worktree_ctx.delete_branch()
+                except Exception:
+                    pass
+                await self.store.update_status(
+                    job_id, "merged", finished=True,
+                    cost=code_result.total_cost + review_result.total_cost,
+                )
+                await self._emit(job_id, "merged")
+            except _Timeout:
+                await self.store.update_status(
+                    job_id, "timeout", finished=True,
+                    error="subagent_timeout_s exceeded",
+                )
+                await self._emit(job_id, "timeout")
+            except Exception as e:
+                logger.exception("background merge job %s crashed", job_id)
+                await self.store.update_status(
+                    job_id, "failed", finished=True,
+                    error=f"{type(e).__name__}: {e}",
+                )
+                await self._emit(job_id, "failed", reason="crashed")
+            finally:
+                # Best-effort cleanup of the live queue. The store
+                # keeps the durable record.
+                self._live.pop(job_id, None)
 
     async def _run_job(self, job: MergeJob) -> MergeResult:
         # 1. Open the worktree.

@@ -23,6 +23,9 @@ Public API (re-exported for convenience):
 - :class:`MergeQueue`        — ``harness.agents.merge_queue``
 - :class:`TierSelector`      — ``harness.agents.cascade``  (Phase 2.1)
 - :class:`CascadeDecision`   — ``harness.agents.cascade``  (Phase 2.1)
+- :class:`JobStore`          — ``harness.agents.jobs``     (Phase 2.1)
+- :class:`JobRecord`         — ``harness.agents.jobs``     (Phase 2.1)
+- :class:`JobEvent`          — ``harness.agents.jobs``     (Phase 2.1)
 """
 from __future__ import annotations
 
@@ -44,4 +47,8 @@ __all__ = [
     # Phase 2.1 — cost-aware cascade
     "TierSelector",
     "CascadeDecision",
+    # Phase 2.1 — background mode persistence
+    "JobStore",
+    "JobRecord",
+    "JobEvent",
 ]
