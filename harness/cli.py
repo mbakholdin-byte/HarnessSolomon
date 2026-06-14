@@ -110,6 +110,16 @@ def _cmd_agents_run(args: argparse.Namespace) -> int:
     # path is simpler and the user can re-run with --background if
     # they need it.
     if args.background:
+        # Phase 2.2: --pr flag requires --background. Reject the
+        # combination in the non-background path (above) so we can
+        # safely assume the user opted in.
+        pr_mode = "off"
+        if args.pr_ready:
+            pr_mode = "ready"
+        elif args.pr or args.pr_draft:
+            pr_mode = "draft"
+        pr_target = args.pr_target or settings.pr_default_target_branch
+
         # In mock environments the ``code`` agent has no review spec
         # — we synthesize a read-only one so the merge queue's
         # code → review → verify path can complete (it will still
@@ -140,11 +150,26 @@ def _cmd_agents_run(args: argparse.Namespace) -> int:
         job = MergeJob(
             code_spec=spec, review_spec=review_spec,
             task=args.prompt, worktree_id=worktree_id,
+            pr_mode=pr_mode,
+            pr_target_branch=pr_target,
+            repo_override=Path(args.repo) if args.repo else None,
         )
         job_id = asyncio.run(queue.enqueue_async(job))
         print(f"job_id={job_id}")
         print(f"  status: use `harness agents jobs {job_id}` to poll")
+        if pr_mode != "off":
+            print(f"  pr_mode: {pr_mode} (target={pr_target})")
         return 0
+
+    # Phase 2.2: --pr requires --background. Sync path can't
+    # ``await`` PR lifecycle events; reject early with a clear error.
+    if args.pr or args.pr_draft or args.pr_ready:
+        print(
+            "error: --pr / --pr-draft / --pr-ready require --background "
+            "(the sync path can't await the PR lifecycle)",
+            file=sys.stderr,
+        )
+        return 2
 
     # Phase 2.1: cascade. Compute a tier decision and override the
     # model on this single run. We use a hardcoded 0.95 confidence
@@ -207,6 +232,16 @@ def _cmd_agents_jobs(args: argparse.Namespace) -> int:
         if len(prompt) > 200:
             prompt = prompt[:197] + "..."
         print(f"  prompt      : {prompt}")
+        # Phase 2.2: PR integration fields (only shown when present).
+        if rec.pr_mode != "off" or rec.pr_url or rec.repo:
+            print(f"  pr_mode     : {rec.pr_mode}")
+            if rec.target_branch:
+                print(f"  target_branch: {rec.target_branch}")
+            if rec.repo:
+                print(f"  repo        : {rec.repo}")
+            if rec.pr_url:
+                print(f"  pr_url      : {rec.pr_url}")
+                print(f"  pr_number   : {rec.pr_number}")
         return 0
 
     # List recent jobs.
@@ -217,29 +252,17 @@ def _cmd_agents_jobs(args: argparse.Namespace) -> int:
             return 0
         print(
             f"{'job_id':18s}  {'status':14s}  {'model':14s}  "
-            f"{'cost':>8s}  {'worktree_id':12s}  started_at"
+            f"{'cost':>8s}  {'worktree_id':12s}  {'pr_mode':6s}  started_at"
         )
-        print("-" * 100)
+        print("-" * 110)
         for r in recs:
             print(
                 f"{r.id:18s}  {r.status:14s}  {r.model:14s}  "
-                f"${r.cost:7.4f}  {r.worktree_id:12s}  {r.started_at}"
+                f"${r.cost:7.4f}  {r.worktree_id:12s}  {r.pr_mode:6s}  {r.started_at}"
             )
         return 0
 
     return asyncio.run(_list())
-
-
-def _cmd_agents(args: argparse.Namespace) -> int:
-    """Dispatch on ``agents`` sub-subcommand."""
-    if args.agents_command is None or args.agents_command == "list":
-        return _cmd_agents_list(args)
-    if args.agents_command == "run":
-        return _cmd_agents_run(args)
-    if args.agents_command == "jobs":
-        return _cmd_agents_jobs(args)
-    print(f"unknown agents subcommand: {args.agents_command!r}", file=sys.stderr)
-    return 2
 
 
 def _cmd_agents(args: argparse.Namespace) -> int:
@@ -301,6 +324,39 @@ def _build_parser() -> argparse.ArgumentParser:
             "Route through TierSelector (T1 to T2 to T3 cascade). "
             "CLI mock uses confidence=0.95; the FastAPI path passes "
             "the real router decision."
+        ),
+    )
+    run.add_argument(
+        "--pr",
+        action="store_true",
+        help=(
+            "Phase 2.2: open a draft PR instead of local ff-merge "
+            "(shorthand for --pr-draft). Requires --background."
+        ),
+    )
+    run.add_argument(
+        "--pr-draft",
+        action="store_true",
+        help=(
+            "Phase 2.2: open a draft PR. Requires --background. "
+            "Mutually exclusive with --pr-ready (use --pr for shorthand)."
+        ),
+    )
+    run.add_argument(
+        "--pr-ready",
+        action="store_true",
+        help=(
+            "Phase 2.2: open a ready-for-review PR (no --draft). "
+            "Requires --background."
+        ),
+    )
+    run.add_argument(
+        "--pr-target",
+        default=None,
+        help=(
+            "Phase 2.2: target branch for the PR (default: "
+            "settings.pr_default_target_branch = 'main'). Only used "
+            "with --pr / --pr-draft / --pr-ready."
         ),
     )
     jobs = agents_sub.add_parser("jobs", help="Inspect background jobs (Phase 2.1)")

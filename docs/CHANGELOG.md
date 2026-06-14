@@ -1,31 +1,75 @@
 # Changelog — Solomon Harness
 
-## Phase 2.2 — Sub-agents v1.2: GitHub PR + parallel cross-repo queue (in progress, 2026-06-14)
+## Phase 2.2 — Sub-agents v1.2: GitHub PR + parallel cross-repo queue (ЗАКРЫТО v0.5.0, 2026-06-14)
 
-### Step 0 — Prerequisites (commit `phase-2.2-step-0-prereqs`)
+### 5 шагов / 5 коммитов за ~2.5 часа (post-Phase 2.1, единая сессия)
 
-**Файлы:**
-- `harness/agents/jobs.py` — `JOB_STATUSES` +5 PR-phase states (`pr_creating`, `pr_open`, `pr_waiting_checks`, `pr_waiting_review`, `merging_pr`); `_RUNNING_STATUSES` +5 (PR-phase jobs are still in-flight); `JobStatus` enum +5 members; `JobRecord` +5 fields (`repo`, `pr_url`, `pr_number`, `target_branch`, `pr_mode`); `SCHEMA` +5 columns; `_apply_phase22_migrations()` for `ALTER TABLE ... ADD COLUMN` on legacy DBs (idempotent via `PRAGMA table_info`); `create()` +`repo`/`pr_mode`/`target_branch` kwargs; `update_status()` +`pr_url`/`pr_number` kwargs; `load()` +`list_recent()` return new fields
-- `harness/config.py` — +5 settings (`github_token_env`, `pr_default_target_branch`, `pr_poll_interval_s`, `pr_wait_timeout_s`, `pr_strategy` with `auto/strict/off` validator)
-- `tests/conftest.py` — `gh_subprocess_stub` fixture (replaces `harness.agents.pr_integration._gh` with programmable stub for Phase 2.2 Step 2 tests)
-- `tests/test_job_store.py` — +7 tests in `TestPR22Schema`: PR fields round-trip, `pr_mode='off'` default, `pr_url`/`pr_number` via `update_status`, `recover_running` cancels PR-phase jobs, `ALTER TABLE` migration back-fills legacy DB, `JobStatus` enum drift guard
+| # | Шаг | Коммит | Что | +Tests |
+|---|-----|--------|-----|--------|
+| 0 | Prerequisites | `125dbde` | 5 PR fields (`repo`, `pr_url`, `pr_number`, `target_branch`, `pr_mode`) + 5 PR-phase statuses (`pr_creating`, `pr_open`, `pr_waiting_checks`, `pr_waiting_review`, `merging_pr`) + `ALTER TABLE` migration + 5 PR settings + `gh_subprocess_stub` fixture | 7 |
+| 1 | Per-repo Lock registry | `92ff3f7` | `harness/agents/repo_locks.py` (NEW) — `RepoLockRegistry` keyed by `str(Path(repo).resolve())`, guards per-repo `asyncio.Lock` + insertion guard; `MergeQueue._lock` replaced with `self._locks` registry + back-compat alias; per-repo serialisation in `enqueue` and `_run_job_async` | 11 |
+| 2 | gh CLI wrapper | `2dd594c` | `harness/agents/pr_integration.py` (NEW) — `GHUnavailable`, Pydantic `PRCreateResult`/`PRStatus`/`PRMergeResult`, module-level `_gh` injection point, `check_gh_available` / `create_pr` / `get_pr_status` / `wait_for_checks` / `merge_pr` via `asyncio.create_subprocess_exec` | 20 |
+| 3 | PR lifecycle in MergeQueue | `9b4d46b` | `MergeJob` +`pr_mode`/`pr_target_branch`/`repo_override`, `MergeResult` +`pr_url`/`pr_number`/`pr_skipped`, `_run_pr_phase()` (pr_creating→pr_open→pr_waiting_checks→merging_pr→merged), GHUnavailable fallback на local ff-merge при `pr_strategy='auto'`, `recover_running()` catches new PR-phase statuses | 12 |
+| 4 | CLI + FastAPI + docs | (this commit) | CLI: `--pr`/`--pr-draft`/`--pr-ready`/`--pr-target` flags, `--pr` без `--background` → exit 2, dedup `_cmd_agents`, расширенный `_cmd_agents_jobs` output с PR-колонками; FastAPI: lifespan JobStore + MergeQueue singleton + новый router `/api/v1/agents/jobs/{id}` + list + health; `docs/merge-queue.md` (NEW, 250 строк) | 14 (7 CLI + 7 API) |
 
-**Tests:** 454 → **466** (+12 net new)
-**Backward compat:** all Phase 2.1 tests still pass without modification (legacy DBs get new columns with safe defaults; legacy callers see `pr_mode="off"` for newly created rows)
+### Метрики (на 14.06.2026, end of Phase 2.2)
 
-### Архитектурные решения (Phase 2.2, по мере реализации)
+- **Tests:** 454 (Phase 2.1 end) + 7 + 11 + 20 + 12 + 14 = **518 mock** + 5 real_llm
+- **Production:** 12 новых/изменённых файлов (`pr_integration.py`, `repo_locks.py`, `routes/agents_jobs.py` — new; `merge_queue.py`, `jobs.py`, `config.py`, `cli.py`, `app.py`, `subagents.md` — modified; `docs/merge-queue.md` — new) — ~1600 LoC net new
+- **Settings:** +5 (PR strategy + PR defaults)
+- **Built-in .md:** 0 (sub-agent surface unchanged)
+- **CLI subcommands:** 3 (list/run/jobs)
+- **CLI flags:** 7 (Phase 2.1) + 4 (Phase 2.2: --pr, --pr-draft, --pr-ready, --pr-target) = 11
+- **HTTP routes:** +3 (`/api/v1/agents/jobs/{id}`, `/jobs?recent=N`, `/health`)
+- **New deps:** 0 (gh CLI binary assumed on host; aiosqlite/pydantic/fastapi from Phase 0-1)
+- **Backward compat:** all 4 built-in agents работают без `gh` installed; legacy JobStore DBs migrated via `ALTER TABLE` (idempotent); `self._lock` alias kept on `MergeQueue` for Phase 2.1 callers
+- **Tag:** v0.5.0 (annotated, pushed)
 
-- **`ALTER TABLE` migrations идемпотентны через `PRAGMA table_info`** — не полагаемся на SQLite 3.35+ `ADD COLUMN IF NOT EXISTS`. Каждая колонка проверяется отдельно.
-- **`JobStatus` enum расширен на 5 members** — `frozen=True` не на enum, добавление безопасно; `JOB_STATUSES` теперь 13 значений.
-- **Settings `pr_strategy` валидируется в `@model_validator`** — `auto | strict | off`, default `auto`.
-- **`gh_subprocess_stub` fixture** — module-level monkeypatch `pr_integration._gh`, default behavior = "gh: command not found" (явная ошибка вместо тихого pass).
+### Architecture decisions (Phase 2.2)
 
-### Что осталось до Step 1
+- **`gh` CLI вместо `PyGithub`** — 0 new deps; token via `env=` (не argv); авторизация через `gh auth status` + `GITHUB_TOKEN` env var.
+- **`RepoLockRegistry` keyed by `Path.resolve()`** — симлинки/relative paths нормализуются; insertion guard защищает от race в asyncio single-thread.
+- **PR-ветка в `_run_pr_phase()` helper, не в `_run_job_async`** — Phase 2.1 sync/async duplication pattern preserved; тестируется изолированно.
+- **`pr_strategy="auto"` fallback на local ff-merge** — local dev без `gh` работает, не блокирует flow.
+- **`--pr` БЕЗ `--background` → exit 2** — sync path не может `await` PR lifecycle (CI polls, `wait_for_checks`); явная ошибка лучше silent fallback.
+- **Schema migration через `PRAGMA table_info`** — не полагаемся на SQLite 3.35+ `IF NOT EXISTS` для `ADD COLUMN`; каждая колонка проверяется отдельно.
+- **FastAPI wiring в lifespan** — JobStore + MergeQueue singleton; при отсутствии LLM API keys — `app.state.merge_queue = None`, routes возвращают 503, остальной сервер работает.
+- **`MergeJob.repo_override`** — per-job override для cross-repo parallelism; default = `self.runner.repo` (Phase 2.1 single-repo backward compat).
 
-- Per-repo Lock registry (`harness/agents/repo_locks.py`, NEW)
-- gh CLI wrapper (`harness/agents/pr_integration.py`, NEW)
-- PR lifecycle в MergeQueue
-- CLI + FastAPI wiring + docs
+### Готово (Phase 2.2)
+
+- [x] PR открывается автоматически после успешного code+review (`pr_mode="draft"` + happy `gh`)
+- [x] Merge queue ждёт CI checks (`statusCheckRollup.state` polling) + auto-merges при success
+- [x] 2+ репо обрабатываются параллельно через `RepoLockRegistry` (Step 1 stress test + Step 3 test_concurrent_jobs_on_different_repos)
+- [x] Merge failure: branch preserved, `status=failed`, `error` populated, `pr_url` сохраняется в store
+- [x] `pr_strategy="auto"` fallback на local merge при отсутствии `gh` / remote
+- [x] Все 4 built-in agents работают без `gh` installed (backward compat)
+- [x] CLI `agents run --pr` БЕЗ `--background` → exit 2 с понятной ошибкой
+- [x] FastAPI: `GET /api/v1/agents/jobs/<id>` returns 200/404 + `GET /api/v1/agents/jobs?recent=N` lists + `GET /api/v1/agents/health`
+- [x] CLI `agents jobs` output включает `pr_url`, `pr_number`, `repo`, `pr_mode` columns when present
+- [x] `docs/merge-queue.md` создан, покрывает все секции (CLI, settings, status table 13 значений, per-repo locks, HTTP API, gh auth troubleshooting)
+- [x] 0 new deps (`git diff pyproject.toml` пуст)
+- [x] Trust boundary preserved (`grep -rn "from harness.server" harness/agents/` пуст)
+
+### Что осталось до Фазы 2.3
+
+- Webhook receiver для inbound PR events (`POST /api/v1/agents/webhooks/github`)
+- Auto-merge labels (branch protection + `gh pr merge --auto`)
+- PR review templating (CODEOWNERS-aware reviewers, issue-link auto-resolution)
+- Multi-PR-per-job / stacked PRs
+- Multi-tenant `gh` config (multiple users с разными GitHub identities)
+- Rich PR UI в Web frontend (clickable `pr_url`, status badges)
+- Cross-PR dependency tracking
+- `gh` rate limit handling (GitHub API rate limit, automatic backoff)
+
+### Известные ограничения (Phase 2.2)
+
+- CLI `--background` запускает task в `asyncio.run` lifecycle — на завершение нужен FastAPI worker (это работает через `GET /api/v1/agents/jobs/<id>`)
+- Cascade thresholds `0.85` / `0.55` — educated guess, calibration в Phase 5
+- `UnifiedMemory` namespace isolation работает только для **новых** записей; старые entries в `<file_dir>/` (без subdirectory) остаются в `solomon` namespace (Phase 2.1.1 follow-up)
+- `recover_running()` маркит in-flight как `cancelled` (Phase 2.1 behaviour preserved); ручной resume через `enqueue_async(job_id_с_тем_же_worktree_id)`
+- `pr_strategy="auto"` + transient network blip: `check_gh_available` срабатывает один раз, transient во время `gh pr create` → `failed` (не silent fallback)
+- `gh` polling interval (`pr_poll_interval_s=15`) жёстко лимитирует скорость реакции на CI changes; webhook receiver в Phase 2.3 снимет это
 
 ---
 

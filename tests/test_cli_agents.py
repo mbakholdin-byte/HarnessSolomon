@@ -1,4 +1,4 @@
-"""Tests for harness.cli agents subcommands (Phase 2.1, Step 4).
+"""Tests for harness.cli agents subcommands (Phase 2.1, Step 4 + Phase 2.2, Step 4).
 
 Covers:
   - ``agents list`` exits 0 and prints the 4 built-ins
@@ -10,6 +10,9 @@ Covers:
   - ``agents jobs <unknown>`` exits 1
   - ``agents jobs --recent N`` prints up to N rows
   - ``agents --help`` lists all 3 subcommands (list/run/jobs)
+  - Phase 2.2: ``--pr`` flag parses correctly
+  - Phase 2.2: ``--pr`` without ``--background`` exits 2
+  - Phase 2.2: ``agents jobs <id>`` shows PR fields when present
 
 These tests are run via ``subprocess.run`` to exercise the full CLI
 argparse plumbing (and the "no harness server needed" path).
@@ -194,3 +197,118 @@ def test_agents_run_cascade_chooses_t1(
     assert "cascade:" in combined
     assert "tier=T1" in combined
     assert "qwen3:8b" in combined
+
+
+# === Phase 2.2: --pr flag tests ===
+
+class TestPRFlags:
+    def test_pr_flag_parses_in_help(self) -> None:
+        """``--pr`` appears in ``--help`` output and is accepted by argparse."""
+        res = _run_cli("agents", "run", "--help")
+        assert res.returncode == 0
+        for flag in ("--pr", "--pr-draft", "--pr-ready", "--pr-target"):
+            assert flag in res.stdout, f"{flag} missing from --help"
+
+    def test_pr_without_background_exits_2(
+        self, tmp_path: Path,
+    ) -> None:
+        """``--pr`` without ``--background`` exits 2 with a clear error."""
+        env = {"DB_PATH": str(tmp_path / "unused.db"), "PYTHONIOENCODING": "utf-8"}
+        res = _run_cli(
+            "agents", "run", "explore", "list built-ins",
+            "--no-worktree", "--pr",
+            env_extra=env,
+        )
+        assert res.returncode == 2
+        assert "--background" in res.stderr
+
+    def test_pr_ready_without_background_exits_2(
+        self, tmp_path: Path,
+    ) -> None:
+        env = {"DB_PATH": str(tmp_path / "unused.db"), "PYTHONIOENCODING": "utf-8"}
+        res = _run_cli(
+            "agents", "run", "explore", "list built-ins",
+            "--no-worktree", "--pr-ready",
+            env_extra=env,
+        )
+        assert res.returncode == 2
+        assert "--background" in res.stderr
+
+    def test_pr_with_background_enqueues_with_pr_mode(
+        self, tmp_path: Path,
+    ) -> None:
+        """``--pr --background`` enqueues a job with pr_mode='draft'."""
+        db_path = tmp_path / "jobs.db"
+        env = {"DB_PATH": str(db_path), "PYTHONIOENCODING": "utf-8"}
+        res = _run_cli(
+            "agents", "run", "explore", "list built-ins",
+            "--no-worktree", "--pr", "--background",
+            env_extra=env,
+        )
+        assert res.returncode == 0, res.stderr
+        assert "job_id=" in res.stdout
+        assert "pr_mode: draft" in res.stdout
+        import asyncio
+        jid = res.stdout.split("job_id=", 1)[1].split()[0]
+        store = JobStore(db_path.parent / "agent-jobs.db")
+        rec = asyncio.run(store.load(jid))
+        assert rec is not None
+        assert rec.pr_mode == "draft"
+
+    def test_pr_ready_with_background_enqueues_with_pr_mode(
+        self, tmp_path: Path,
+    ) -> None:
+        """``--pr-ready --background`` enqueues a job with pr_mode='ready'."""
+        db_path = tmp_path / "jobs.db"
+        env = {"DB_PATH": str(db_path), "PYTHONIOENCODING": "utf-8"}
+        res = _run_cli(
+            "agents", "run", "explore", "list built-ins",
+            "--no-worktree", "--pr-ready", "--pr-target", "develop",
+            "--background",
+            env_extra=env,
+        )
+        assert res.returncode == 0, res.stderr
+        assert "pr_mode: ready" in res.stdout
+        import asyncio
+        jid = res.stdout.split("job_id=", 1)[1].split()[0]
+        store = JobStore(db_path.parent / "agent-jobs.db")
+        rec = asyncio.run(store.load(jid))
+        assert rec is not None
+        assert rec.pr_mode == "ready"
+        assert rec.target_branch == "develop"
+
+    def test_jobs_output_includes_pr_fields(
+        self, tmp_path: Path,
+    ) -> None:
+        """``agents jobs <id>`` shows PR fields when pr_mode != 'off'."""
+        import asyncio
+        db_path = tmp_path / "jobs.db"
+        env = {"DB_PATH": str(db_path), "PYTHONIOENCODING": "utf-8"}
+        store = JobStore(db_path.parent / "agent-jobs.db")
+        jid = asyncio.run(store.create(
+            worktree_id="wt-pr-show", model="m", prompt="x",
+            pr_mode="draft", target_branch="main",
+        ))
+        res = _run_cli("agents", "jobs", jid, env_extra=env)
+        assert res.returncode == 0
+        out = res.stdout
+        assert "pr_mode" in out
+        assert "target_branch" in out
+        assert "draft" in out
+        assert "main" in out
+
+    def test_jobs_output_omits_pr_fields_for_default_mode(
+        self, tmp_path: Path,
+    ) -> None:
+        """``agents jobs <id>`` omits PR fields when pr_mode='off' (default)."""
+        import asyncio
+        db_path = tmp_path / "jobs.db"
+        env = {"DB_PATH": str(db_path), "PYTHONIOENCODING": "utf-8"}
+        store = JobStore(db_path.parent / "agent-jobs.db")
+        jid = asyncio.run(store.create(
+            worktree_id="wt-off-show", model="m", prompt="x",
+        ))
+        res = _run_cli("agents", "jobs", jid, env_extra=env)
+        assert res.returncode == 0
+        out = res.stdout
+        assert "pr_mode     :" not in out
