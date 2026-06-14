@@ -214,6 +214,7 @@ async def create_pr(
     body: str,
     draft: bool,
     env_var: str = "GITHUB_TOKEN",
+    body_file: Path | None = None,
 ) -> PRCreateResult:
     """Open a draft or ready-for-review PR via ``gh pr create``.
 
@@ -222,9 +223,16 @@ async def create_pr(
         head_branch: The branch we just pushed (the sub-agent's branch).
         base_branch: The branch the PR targets (usually ``"main"``).
         title:       PR title.
-        body:        PR body (Markdown).
+        body:        PR body (Markdown). Ignored if ``body_file`` is
+                     provided.
         draft:       If True, opens as a draft PR.
         env_var:     Name of the env var carrying the GitHub token.
+        body_file:   Phase 2.4: if set, pass ``--body-file <path>``
+                     to ``gh pr create`` instead of ``--body``. Useful
+                     for long templated bodies that exceed
+                     ``ARG_MAX`` (Windows: 32KB, Linux: 2MB). The
+                     caller is responsible for cleanup; we do not
+                     delete the file here.
 
     Returns:
         :class:`PRCreateResult` with ``url``, ``number``, ``branch``.
@@ -239,8 +247,11 @@ async def create_pr(
         "--base", base_branch,
         "--head", head_branch,
         "--title", title,
-        "--body", body,
     ]
+    if body_file is not None:
+        cmd.extend(["--body-file", str(body_file)])
+    else:
+        cmd.extend(["--body", body])
     if draft:
         cmd.append("--draft")
     env = _env_for_token(env_var)
