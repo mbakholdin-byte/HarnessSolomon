@@ -14,10 +14,23 @@ from pydantic import BaseModel
 
 # === Catalog ===
 
-#: Per-model cap on tools sent in a single LLM request. Different providers
-#: have different limits. MiniMax rejects requests with >4 tools
-#: ("invalid tool type:" code 2013). OpenAI o1 supports 128 but we don't use
-#: it yet. Conservative default keeps us safe across providers.
+#: Per-model cap on tools sent in a single LLM request.
+#:
+#: Empirically verified 2026-06-14 via live litellm calls:
+#: MiniMax-M2.7 accepts at least 32 tools when tool schemas are wrapped
+#: in OpenAI shape (the original 2013 error was the missing wrap, not
+#: the count). Other Chinese cloud providers (zhipuai, moonshot) follow
+#: similar limits. We use 16 as a comfortable default that fits the
+#: common 6-12 tool Phase 0/0.5 set with headroom for growth.
+#:
+#: When a tool list is truncated, ``LLMRouter._limit_tools_for_model``
+#: emits a warning AND increments an in-process counter. Phase 4
+#: (observability) will move the counter to Prometheus.
+#:
+#: Reference points for future models:
+#:   - OpenAI o1/o3:           128 (per OpenAI docs)
+#:   - OpenAI gpt-4o/4.1:      128
+#:   - Anthropic Claude 4.x:  no native limit (token-budgeted)
 MODELS: list[dict] = [
     {
         "id": "MiniMax-M2.7",
@@ -27,7 +40,7 @@ MODELS: list[dict] = [
         "ctx": 200000,
         "pricing_input": 0.30,   # $ per 1M tokens
         "pricing_output": 0.60,
-        "max_tools": 4,
+        "max_tools": 16,
     },
     {
         "id": "glm-4.7",
@@ -37,7 +50,7 @@ MODELS: list[dict] = [
         "ctx": 128000,
         "pricing_input": 0.10,
         "pricing_output": 0.10,
-        "max_tools": 4,
+        "max_tools": 16,
     },
     {
         "id": "moonshot-v1-128k",
@@ -47,12 +60,15 @@ MODELS: list[dict] = [
         "ctx": 128000,
         "pricing_input": 0.20,
         "pricing_output": 0.20,
-        "max_tools": 4,
+        "max_tools": 16,
     },
 ]
 
 #: Default cap when a model is unknown or doesn't specify max_tools.
-DEFAULT_MAX_TOOLS: int = 4
+#: 16 is a safe cross-provider default that fits the current Phase 0/0.5
+#: toolset with headroom. Bump per-model if a specific provider advertises
+#: a higher limit and you've verified it via live calls.
+DEFAULT_MAX_TOOLS: int = 16
 
 
 # === Schemas ===
