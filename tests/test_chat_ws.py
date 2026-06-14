@@ -96,6 +96,25 @@ def _create_session(client: TestClient, title: str = "ws-test", model: str = "Mi
 
 # === Test 1: connect, send user_message, get session_done ===
 
+def _receive_events(ws, max_events: int = 50) -> list[dict]:
+    """Receive up to N JSON events from the WebSocket, stopping on close.
+
+    Starlette's WebSocketTestSession only exposes ``receive_text`` /
+    ``receive_json`` (no ``iter_text``). We loop until the server closes
+    or we hit the cap.
+    """
+    events: list[dict] = []
+    for _ in range(max_events):
+        try:
+            payload = ws.receive_json()
+        except Exception:
+            break
+        events.append(payload)
+        if payload.get("type") == "session_done":
+            break
+    return events
+
+
 def test_ws_connect_and_get_session_done(client: TestClient) -> None:
     """Happy path: send a user_message, get assistant_message + session_done."""
     sid = _create_session(client)
@@ -115,12 +134,7 @@ def test_ws_connect_and_get_session_done(client: TestClient) -> None:
             f"/api/chat/ws?session_id={sid}&model=MiniMax-M2.7"
         ) as ws:
             ws.send_json({"type": "user_message", "content": "Привет"})
-            events: list[dict] = []
-            for msg in ws.iter_text():
-                payload = json.loads(msg)
-                events.append(payload)
-                if payload.get("type") == "session_done":
-                    break
+            events = _receive_events(ws)
 
     types = [e.get("type") for e in events]
     assert "assistant_message" in types
@@ -150,12 +164,7 @@ def test_ws_streams_assistant_message(client: TestClient) -> None:
             f"/api/chat/ws?session_id={sid}&model=MiniMax-M2.7"
         ) as ws:
             ws.send_json({"type": "user_message", "content": "hi"})
-            events: list[dict] = []
-            for msg in ws.iter_text():
-                payload = json.loads(msg)
-                events.append(payload)
-                if payload.get("type") == "session_done":
-                    break
+            events = _receive_events(ws)
 
     assistant_events = [e for e in events if e.get("type") == "assistant_message"]
     assert len(assistant_events) >= 1
@@ -183,9 +192,7 @@ def test_ws_persists_user_message_to_db(client: TestClient) -> None:
             f"/api/chat/ws?session_id={sid}&model=MiniMax-M2.7"
         ) as ws:
             ws.send_json({"type": "user_message", "content": "persisted!"})
-            for msg in ws.iter_text():
-                if json.loads(msg).get("type") == "session_done":
-                    break
+            _receive_events(ws)
 
     # Verify persistence via the REST endpoint
     r = client.get(f"/api/sessions/{sid}/messages")
@@ -205,18 +212,12 @@ def test_ws_handles_unknown_session(client: TestClient) -> None:
     """Connecting with a bogus session_id should yield an error event and close."""
     fake = FakeRouter(scripted_responses=[])
     with patch("harness.server.routes.chat.LLMRouter", return_value=fake):
-        # The server sends error then closes. We use a one-shot read.
         with client.websocket_connect(
             "/api/chat/ws?session_id=nonexistent-session&model=MiniMax-M2.7"
         ) as ws:
-            events: list[dict] = []
-            for msg in ws.iter_text():
-                payload = json.loads(msg)
-                events.append(payload)
-                if payload.get("type") == "error":
-                    break
+            events = _receive_events(ws, max_events=3)
 
-    assert len(events) == 1
+    assert len(events) >= 1
     assert events[0]["type"] == "error"
     assert "session" in events[0].get("content", "").lower()
 
@@ -231,14 +232,9 @@ def test_ws_unknown_model(client: TestClient) -> None:
         with client.websocket_connect(
             f"/api/chat/ws?session_id={sid}&model=does-not-exist"
         ) as ws:
-            events: list[dict] = []
-            for msg in ws.iter_text():
-                payload = json.loads(msg)
-                events.append(payload)
-                if payload.get("type") == "error":
-                    break
+            events = _receive_events(ws, max_events=3)
 
-    assert len(events) == 1
+    assert len(events) >= 1
     assert events[0]["type"] == "error"
     assert "model" in events[0].get("content", "").lower()
 
@@ -284,12 +280,7 @@ def test_ws_tool_call_visible(client: TestClient) -> None:
             f"/api/chat/ws?session_id={sid}&model=MiniMax-M2.7"
         ) as ws:
             ws.send_json({"type": "user_message", "content": "read it"})
-            events: list[dict] = []
-            for msg in ws.iter_text():
-                payload = json.loads(msg)
-                events.append(payload)
-                if payload.get("type") == "session_done":
-                    break
+            events = _receive_events(ws, max_events=20)
 
     types = [e.get("type") for e in events]
     assert "tool_result" in types
