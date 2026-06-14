@@ -374,6 +374,129 @@ class Settings(BaseSettings):
         ),
     )
 
+    # === Phase 2.5: auto-add label + rate limit + outbound webhooks ===
+    auto_add_label: bool = Field(
+        default=True,
+        description=(
+            "Phase 2.5: when ``job.auto_merge=True``, automatically "
+            "add the configured ``auto_merge_label`` to the PR via "
+            "``gh pr edit --add-label`` immediately after "
+            "``create_pr`` succeeds. This is what the Phase 2.3 docs "
+            "promised but did not implement — branch protection "
+            "rules that require this label can now enforce it. "
+            "Disable to skip the label call (the label is then "
+            "expected to be already present on the PR, e.g. via a "
+            "GitHub Action). Default True (most setups want this)."
+        ),
+    )
+    pr_rate_limit_max_retries: int = Field(
+        default=5,
+        ge=0,
+        le=20,
+        description=(
+            "Phase 2.5: how many times ``_gh_with_retry`` will retry "
+            "a ``gh`` subprocess that returned 403 or 429 (rate "
+            "limited). After this many failed attempts, the call "
+            "raises :class:`GHUnavailable` and the PR phase fails "
+            "the same way as a missing ``gh`` binary. Set to 0 to "
+            "disable retry entirely (Phase 2.4 behaviour). Default 5."
+        ),
+    )
+    pr_rate_limit_initial_backoff_s: float = Field(
+        default=2.0,
+        ge=0.0,
+        le=60.0,
+        description=(
+            "Phase 2.5: initial sleep (seconds) before the first "
+            "retry. Subsequent retries multiply by 2 up to "
+            "``pr_rate_limit_max_backoff_s``. If the ``gh`` stderr "
+            "contains a ``Retry-After: N`` line (parsed via regex), "
+            "we honor ``N`` instead of the exponential schedule. "
+            "Default 2.0s — a good balance between responsiveness "
+            "and not hammering GitHub."
+        ),
+    )
+    pr_rate_limit_max_backoff_s: float = Field(
+        default=60.0,
+        ge=1.0,
+        le=600.0,
+        description=(
+            "Phase 2.5: maximum sleep between retries. The "
+            "exponential schedule ``initial * 2^attempt`` is capped "
+            "at this value. Default 60.0s (one minute). With "
+            "``initial=2.0`` and ``max=60.0`` the sequence is "
+            "approximately 2, 4, 8, 16, 32, 60, 60, ... (5 retries "
+            "by default)."
+        ),
+    )
+    pr_rate_limit_jitter_s: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=10.0,
+        description=(
+            "Phase 2.5: random uniform jitter (seconds) added to "
+            "each backoff sleep. Reduces the thundering-herd effect "
+            "when many background jobs hit the same 429 burst. "
+            "Default 0.5s. Set to 0 to disable (deterministic — "
+            "useful in tests)."
+        ),
+    )
+    outbound_webhook_urls: str = Field(
+        default="",
+        description=(
+            "Phase 2.5: comma-separated list of HTTP(S) URLs that "
+            "receive POST events for critical lifecycle moments "
+            "(``merged``, ``failed``, ``stack_merged``, "
+            "``pr_waiting_review``). Empty string (default) "
+            "disables outbound entirely. Each URL is called with "
+            "``Authorization: Bearer <outbound_webhook_token>`` "
+            "and a JSON body mirroring the :class:`JobEvent` "
+            "shape: ``{event, job_id, kind, ...payload}``. "
+            "Failed deliveries (4xx/5xx/timeout) are retried up "
+            "to ``outbound_webhook_max_retries`` times with "
+            "exponential backoff; after exhaustion we log a "
+            "warning but do NOT fail the underlying job. The "
+            "intent is to integrate with Slack / Telegram / an "
+            "internal dashboard without blocking the merge queue."
+        ),
+    )
+    outbound_webhook_token: str = Field(
+        default="",
+        description=(
+            "Phase 2.5: shared bearer token sent in the "
+            "``Authorization`` header of every outbound webhook. "
+            "The receiver is expected to validate it and reject "
+            "unauthorized requests. Leave empty to send no "
+            "``Authorization`` header (NOT recommended in "
+            "production — anyone who can reach the URL can read "
+            "the events). Phase 4 will replace this with HMAC "
+            "signing."
+        ),
+    )
+    outbound_webhook_timeout_s: float = Field(
+        default=5.0,
+        ge=0.5,
+        le=60.0,
+        description=(
+            "Phase 2.5: per-request HTTP timeout (seconds) for the "
+            "outbound webhook delivery. If the receiver is slower "
+            "than this, the call is aborted and retried. Default "
+            "5.0s — a slow downstream should not stall the merge "
+            "queue."
+        ),
+    )
+    outbound_webhook_max_retries: int = Field(
+        default=3,
+        ge=0,
+        le=10,
+        description=(
+            "Phase 2.5: how many times a single outbound POST is "
+            "retried on 4xx / 5xx / timeout. With ``max_retries=3`` "
+            "the receiver gets up to 4 attempts (initial + 3). Set "
+            "to 0 to fire-and-forget without retry. Default 3."
+        ),
+    )
+
     @model_validator(mode="after")
     def _cascade_thresholds_ordered(self) -> "Settings":
         """Guard against a misconfigured cascade + Phase 2.4 split strategy.
@@ -415,6 +538,13 @@ class Settings(BaseSettings):
             raise ValueError(
                 f"pr_split_min_slices ({self.pr_split_min_slices}) must be "
                 f"<= pr_split_max_slices ({self.pr_split_max_slices})"
+            )
+        # Phase 2.5: rate-limit backoff must be in increasing order.
+        if self.pr_rate_limit_initial_backoff_s > self.pr_rate_limit_max_backoff_s:
+            raise ValueError(
+                f"pr_rate_limit_initial_backoff_s "
+                f"({self.pr_rate_limit_initial_backoff_s}) must be <= "
+                f"pr_rate_limit_max_backoff_s ({self.pr_rate_limit_max_backoff_s})"
             )
         return self
 

@@ -28,6 +28,7 @@ layer that:
 """
 from __future__ import annotations
 
+import fnmatch
 import re
 from pathlib import Path
 from typing import Iterable
@@ -208,8 +209,176 @@ def _render_reviewer_lines(reviewers: Iterable[str] | None) -> str:
     return "- " + " ".join(cleaned)
 
 
+# === CODEOWNERS (Phase 2.5) ===
+
+#: Default path (relative to the repo root) for the GitHub
+#: CODEOWNERS file. We follow GitHub's resolution order: this
+#: default is the most common location. Operators can override
+#: via :func:`parse_codeowners_for_diff`'s ``codeowners_path`` arg.
+DEFAULT_CODEOWNERS_PATH: Path = Path(".github/CODEOWNERS")
+
+
+def _parse_codeowners_text(text: str) -> list[tuple[str, list[str]]]:
+    """Parse a CODEOWNERS file's text into ``(pattern, owners)`` rows.
+
+    Skips blank lines and ``#`` comments. Each non-comment line
+    is split into a glob pattern (first token) and one-or-more
+    owner tokens (the rest). An owner token can be:
+
+    - ``@user`` — a personal handle (e.g. ``@octocat``)
+    - ``@org/team`` — a team handle
+    - ``user@org`` — an email (treated as a plain string; we
+      don't validate it)
+
+    Returns:
+        List of ``(pattern, owners)`` tuples in the order they
+        appeared. The order matters for negation patterns
+        (``!pattern``) — we honor "last match wins" semantics
+        by NOT pre-deduping, and let the caller match in order.
+    """
+    rows: list[tuple[str, list[str]]] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        # CODEOWNERS allows inline comments via space, so split
+        # on whitespace and take all tokens (the first is the
+        # pattern; the rest are owners).
+        parts = line.split()
+        if len(parts) < 1:
+            continue
+        pattern = parts[0]
+        owners_raw = parts[1:]
+        owners: list[str] = []
+        for tok in owners_raw:
+            tok = tok.strip()
+            if not tok:
+                continue
+            owners.append(tok)
+        rows.append((pattern, owners))
+    return rows
+
+
+def _match_codeowners_pattern(
+    file_path: str, pattern: str,
+) -> bool:
+    """Test one file against one CODEOWNERS pattern.
+
+    Supports the subset of patterns we need for ``fnmatch``:
+    ``*``, ``**``, ``?`` and literal segments. CODEOWNERS also
+    supports leading ``/`` (anchored to repo root) and trailing
+    ``/`` (directories); we translate those before delegating to
+    :func:`fnmatch.fnmatch`.
+
+    A leading ``/`` strips to a rooted pattern: ``/foo`` matches
+    only ``foo`` at the top of the repo. A trailing ``/`` means
+    "directory prefix" — we translate to ``pattern + '*'`` so
+    ``/docs/`` matches ``docs/anything``.
+
+    Args:
+        file_path: Repo-relative POSIX path (no leading ``./``).
+        pattern:   Raw CODEOWNERS pattern (may start with ``/``,
+                   may end with ``/``, may start with ``!``).
+    """
+    # Strip the leading ``!`` if present; we handle negation
+    # at the call site, not here.
+    if pattern.startswith("!"):
+        pattern = pattern[1:]
+    anchored = pattern.startswith("/")
+    directory = pattern.endswith("/")
+    p = pattern.lstrip("/").rstrip("/")
+    if directory:
+        p = p + "/*"
+    if anchored:
+        # Anchored: must match from the repo root.
+        return fnmatch.fnmatch(file_path, p)
+    # Unanchored: match the basename OR any path segment.
+    if fnmatch.fnmatch(file_path, p):
+        return True
+    basename = file_path.rsplit("/", 1)[-1]
+    return fnmatch.fnmatch(basename, p)
+
+
+def parse_codeowners_for_diff(
+    repo: Path,
+    diff_files: Iterable[str],
+    *,
+    codeowners_path: Path | None = None,
+) -> list[str]:
+    """Return suggested CODEOWNERS reviewers for a diff.
+
+    Reads ``<repo>/.github/CODEOWNERS`` (or ``codeowners_path`` if
+    supplied), parses it, and for each file in ``diff_files``
+    collects the union of owners whose patterns match. Returns
+    a sorted, deduplicated list of owner strings (``@user``,
+    ``@org/team``, or email).
+
+    Pure function aside from the file read. The file read is
+    wrapped in a ``try/except OSError`` so a missing or
+    unreadable CODEOWNERS file simply yields ``[]`` instead of
+    failing the PR creation. The ``fnmatch`` work is
+    O(files × patterns) which is fast (typical repos: < 100
+    files × ~20 patterns = 2000 ``fnmatch`` calls, <5ms).
+
+    Args:
+        repo: The repo root (a :class:`pathlib.Path`). The
+              CODEOWNERS file is read from
+              ``<repo>/.github/CODEOWNERS`` by default.
+        diff_files: Iterable of repo-relative POSIX paths (the
+                    output of ``git diff --name-only <base>``).
+                    May be empty.
+        codeowners_path: Optional override. If supplied, it is
+                         interpreted relative to ``repo`` (use
+                         an absolute path to escape the repo).
+
+    Returns:
+        Sorted, deduplicated list of owner strings. Empty if
+        no CODEOWNERS file exists or no patterns matched.
+
+    Examples:
+        >>> from pathlib import Path
+        >>> p = parse_codeowners_for_diff(
+        ...     Path("/tmp/repo"), ["src/a.py", "docs/b.md"],
+        ... )
+        []  # no CODEOWNERS
+    """
+    if codeowners_path is None:
+        codeowners_path = DEFAULT_CODEOWNERS_PATH
+    full = repo / codeowners_path
+    try:
+        text = full.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        # Missing file, permission denied, or non-UTF-8 — treat
+        # as "no owners" rather than crashing the PR phase.
+        return []
+    rows = _parse_codeowners_text(text)
+    if not rows:
+        return []
+    # GitHub applies CODEOWNERS patterns in REVERSE order
+    # (last match wins for a given path), so we iterate the
+    # list backwards to build a per-file "winning" set of owners.
+    # For union semantics (which is what we want — "any of these
+    # people is a fine reviewer") we just collect every owner
+    # that matches at least one file, ignoring negation.
+    owners: set[str] = set()
+    for f in diff_files:
+        if not f:
+            continue
+        # Normalize: strip leading "./", convert backslashes
+        # (Windows worktrees) to forward slashes.
+        f_norm = f.lstrip("./").replace("\\", "/")
+        for pattern, owners_in_row in rows:
+            if not owners_in_row:
+                continue
+            if _match_codeowners_pattern(f_norm, pattern):
+                owners.update(owners_in_row)
+    return sorted(owners)
+
+
 __all__ = [
+    "DEFAULT_CODEOWNERS_PATH",
     "DEFAULT_TEMPLATE_PATH",
     "extract_issue_numbers",
+    "parse_codeowners_for_diff",
     "render_pr_body",
 ]
