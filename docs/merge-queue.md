@@ -220,17 +220,19 @@ For local development without `gh`, the default `pr_strategy="auto"`
 gracefully falls back to a local `git merge --ff-only` and emits a
 `pr_skipped` event for the audit log.
 
-## Out of scope (Phase 2.3+)
+## Out of scope (Phase 2.4+)
 
-The following are deliberately not in Phase 2.2:
+The following are deliberately not in Phase 2.2/2.3:
 
 - **Webhook receiver** for inbound `pull_request` / `check_run` events.
   Phase 2.2 polls only. → **ЗАКРЫТО Phase 2.3 v0.7.0**
 - **Auto-merge labels** (branch protection + `gh pr merge --auto`).
   → **ЗАКРЫТО Phase 2.3 v0.7.0**
 - **PR review templating** (CODEOWNERS-aware reviewers, issue-link
-  auto-resolution).
-- **Multi-PR-per-job / stacked PRs**.
+  auto-resolution). → **ЗАКРЫТО Phase 2.4 v0.8.0**
+- **Multi-PR-per-job / stacked PRs**. → **ЗАКРЫТО Phase 2.4 v0.8.0**
+- **`pull_request_review.approved` short-circuit**.
+  → **ЗАКРЫТО Phase 2.4 v0.8.0**
 - **Multi-tenant** `gh` config (single global `$GITHUB_TOKEN`).
 - **Rich PR UI** in the Web frontend (clickable `pr_url`, status
   badges).
@@ -350,8 +352,137 @@ SIG=$(echo -n "$BODY" | openssl dgst -sha256 -hmac "$SECRET" | sed 's/^.*= //')
 curl -X POST "https://abc123.ngrok.io/api/v1/agents/webhooks/github" \
   -H "X-Hub-Signature-256: sha256=$SIG" \
   -H "X-GitHub-Event: pull_request" \
-  -H "X-GitHub-Delivery: test-1" \
+  -H "X-GitHub-Delivery: "test-1" \
   -H "Content-Type: application/json" \
   --data "$BODY"
 # → 200 {"delivery_id": "test-1", "event_type": "pull_request", "processed": true}
 ```
+
+## Stacked PRs (Phase 2.4 v0.8.0)
+
+One job can now spawn N dependent PRs (a "stack"). PR-B's
+`base_branch` is PR-A's branch, so PR-B is automatically rebased
+onto PR-A when PR-A merges. This is the GitHub stacked-PR
+convention.
+
+### Зачем
+
+A single large task often doesn't fit into one reviewable PR. You
+want to split the work into:
+
+- Slice 1: core logic
+- Slice 2: tests
+- Slice 3: docs / changelog
+
+…each small enough to review, each mergeable independently. Without
+stacking, the alternative is one huge PR (slow review) or three
+separate jobs with manual sequencing (error-prone).
+
+### Quick start
+
+```bash
+# Preview the split (no git mutations, no gh)
+harness agents split-plan .harness/worktrees/wt-1 --split-into 3
+# → plan: 3 slice(s) via 'auto' strategy
+# → slice 1/3: harness/wt-1/step-0 — src/core.py, src/utils.py
+# → slice 2/3: harness/wt-1/step-1 — tests/test_core.py
+# → slice 3/3: harness/wt-1/step-2 — docs/refactor.md
+
+# Enqueue a stacked run (background required)
+harness agents run code "refactor X" --split-into 3 --pr --background
+# → job_id=... stack_id=abc123
+# → 3 child PRs created, each stacked on the previous
+
+# Inspect the stack
+curl http://localhost:8765/api/v1/agents/stacks/abc123
+# → {"stack_id":"abc123","parent":{...},"children":[{...},{...},{...}]}
+```
+
+### Strategies (4)
+
+| Strategy | Grouping | When to use |
+|----------|----------|-------------|
+| `auto` (default) | If diff ≤ `max_files_per_slice`, single slice; else `directory` | Most tasks; no need to think about it |
+| `files` | Round-robin, ≤ `max_files_per_slice` per slice | Pure size balancing, ignores directory boundaries |
+| `directory` | Group by top-level directory prefix (`src/`, `tests/`, `docs/`) | Most "natural" split for code/test/docs layouts |
+| `size` | Balance by LOC (greedy LPT) | Even workload, expensive (needs `git diff --shortstat` per file) |
+
+Override per-run: `--split-strategy files`. Settings:
+`pr_split_strategy`, `pr_split_max_files_per_slice`,
+`pr_split_min_slices`, `pr_split_max_slices`.
+
+### File-list override (CI use case)
+
+```bash
+# Generate file list from main
+git diff --name-only main > /tmp/stack.txt
+
+# Enqueue with explicit list (planner groups these only)
+harness agents run code "..." --stack-files /tmp/stack.txt \
+  --split-into 3 --pr --background
+```
+
+### PR body templating
+
+`harness/agents/templates/pr_body.md` (default) substitutes
+7 placeholders: `{task}`, `{head_branch}`, `{base_branch}`,
+`{stack_line}`, `{issue_lines}`, `{reviewer_lines}`,
+`{test_summary}`. Override with `settings.pr_template_path`.
+
+Issue numbers are auto-extracted from the task text via
+`pr_issue_link_re` (default `r"#(\d+)"`). A task like
+`"fix #123, refs #456"` renders the body with
+`Closes #123` and `Refs #456` lines.
+
+### Recovery semantics
+
+- **Process restart** while a stack is in flight: `recover_running()`
+  cancels ALL in-flight rows (orchestrator + children). Operators
+  re-enqueue manually. The webhook handler's
+  `_maybe_promote_stack_parent` won't fire because there's no
+  active JobStore transaction.
+- **Slice failure mid-stack** (e.g. `create_pr` fails for slice 2):
+  `_run_stack_phase._cancel_stack` closes the previously-opened
+  sibling PRs (`gh pr close --delete-branch`) and marks the
+  orchestrator row `failed`. No orphan PRs in the repo.
+- **Webhook race with polling**: both paths check the terminal
+  status before updating (`update_status` is idempotent for
+  `pr_open` → `merging_pr` → `merged`).
+
+### Approved review short-circuit
+
+Phase 2.3 had an explicit no-op for `pull_request_review.approved`
+(no `auto-merge` trigger). Phase 2.4 closes it:
+
+- A `pull_request_review.approved` event transitions the job to
+  `merging_pr` (or `pr_auto_merge_enabled` if `auto_merge=True`).
+- The injected `merge_pr` / `enable_auto_merge` callables are
+  wired at server startup (`server/app.py` lifespan).
+- A `pull_request.closed+merged` webhook then marks the job
+  `merged` (and, for stacks, checks `all_stack_children_merged`
+  → promotes the parent orchestrator row to `merged`).
+
+### API additions
+
+- `POST /api/v1/agents/jobs` accepts `split_into`, `split_strategy`,
+  `stack_id` (Phase 2.4 fields).
+- `GET /api/v1/agents/stacks/{stack_id}` returns
+  `{stack_id, parent: JobRecord, children: [JobRecord]}` for
+  UIs that want to render the stack.
+- `GET /api/v1/agents/jobs/{job_id}` includes the 4 new
+  stack fields (`pr_stack_id`, `stack_position`, `stack_size`,
+  `depends_on_pr_number`).
+
+### Limitations (Phase 2.5+)
+
+- **Cross-repo stacks**: stacks are 1 repo. Cross-repo stacking
+  is not supported in Phase 2.4.
+- **Outbound webhooks**: Phase 2.4's webhook receiver is
+  inbound-only. Outbound webhooks (notify external systems
+  of job state changes) are Phase 4.
+- **Web UI**: the `GET /stacks/{id}` endpoint is JSON-only;
+  a React tree view is Phase 6.
+- **Auto-merge label**: the queue does NOT call
+  `gh pr edit --add-label harness-auto-merge`. Operators
+  configure branch protection to require the label and
+  pre-apply it (or do it via a separate workflow).

@@ -1,5 +1,95 @@
 # Changelog — Solomon Harness
 
+## Phase 2.4 — Stacked PRs + Review Templating + Approved Short-Circuit (ЗАКРЫТО v0.8.0, 2026-06-14)
+
+**Phase 2.4 (v0.8.0) — 4 шага / 4 коммита / 86 net new тестов (673 → 759) / 0 new deps**
+
+Расширяет Phase 2.3 тремя крупными фичами (per roadmap `12.06 Harness-Claude-Code-Architecture/roadmap.md:875`):
+
+1. **Stacked / multi-PR per job** — 1 task = N dependent PRs. PR-B's `base_branch` = PR-A's branch (GitHub stacked-PR convention). 4 strategies (`auto`/`files`/`directory`/`size`); max 8 slices; pure-function planner; N branches в одном worktree (без worktree proliferation).
+2. **PR body templating** — `harness/agents/templates/pr_body.md` (default) + custom override via `settings.pr_template_path`. Auto-extracts issue numbers from task text (`Closes #N` / `Refs #N`). `create_pr` теперь поддерживает `body_file: Path` для длинных templates (>ARG_MAX).
+3. **`pull_request_review.approved` short-circuit** — закрывает Phase 2.3 explicit no-op. На `approved` event: вызывает injected `merge_pr` (или `enable_auto_merge` если `job.auto_merge=True`) → `merged` (или `pr_auto_merge_enabled`). Также: parent-orchestrator row в стэке промоутится в `merged` после последнего child PR merge (через `JobStore.all_stack_children_merged` + `_maybe_promote_stack_parent`).
+
+**Ключевые архитектурные решения:**
+
+- **`pr_stack_id` + `stack_position` + `stack_size` + `depends_on_pr_number`** в `merge_jobs` (4 новые колонки, idempotent migration в `_apply_phase22_migrations` per Phase 2.3 pattern). Index `idx_merge_jobs_stack_id` после ALTER.
+- **Parent row at `stack_position=0`** — orchestrator, `pr_number=NULL`. `find_job_by_pr_number` фильтрует `pr_number IS NOT NULL` (back-compat: orchestrator row не возвращается на webhook lookups).
+- **N branches в 1 worktree** — `git -C <wt> checkout -B harness/<id>/step-<N>` для каждого slice. Push через `git push -u origin <branch>` перед `create_pr`. WorktreeSession не поддерживает mid-life branch switching — но `WorktreeSession` это просто checkout, git handles it.
+- **Pure-function SplitPlanner** — `harness/agents/pr_split.py:plan_splits()` без I/O, testable без git. 4 strategies, deterministic output, sort-stable.
+- **DI для trust boundary** — `WebhookHandler(store, secret, *, merger=None, auto_merger=None)`. `merge_pr` / `enable_auto_merge` инжектятся в lifespan, НЕ в module top-level. Phase 2.3 no-op сохранён (default constructor без merger = no-op).
+- **Per-repo `RepoLockRegistry`** — стэк в 1 repo = serialised. Cross-repo stacks не поддерживаются (явно в docs).
+- **PR review flow** — `pr_waiting_review` (status уже существовал из Phase 2.2) теперь достижим: после `wait_for_checks` success, если `review_decision == "review_required"`, job переходит в `pr_waiting_review` и poll'ит каждые 30с (timeout 24ч, settings). Approved → `merging_pr`; changes_requested → `failed`.
+
+**Step 0 (commit `61ea636`) — Schema + SplitPlanner:**
+- `merge_jobs` +4 stack cols, `_PR24_ALTER_COLUMNS`, `idx_merge_jobs_stack_id`
+- `JobStore.create()` +4 stack kwargs, `load()` / `find_job_by_pr_number()` / `list_recent()` → `_row_to_record()` helper
+- `find_jobs_by_stack_id(stack_id)` ordered by position
+- `all_stack_children_merged(stack_id)` для parent promotion
+- `harness/agents/pr_split.py` (NEW, ~250 LoC) — pure planner
+- 8 settings: `pr_split_strategy`, `pr_split_max_files_per_slice`, `pr_split_min_slices`, `pr_split_max_slices`, `pr_template_path`, `pr_issue_link_re`, `pr_review_timeout_s`, `pr_review_poll_interval_s`
+- 31 net new tests (22 pr_split + 9 job_store)
+
+**Step 1 (commit `8de5d87`) — PR body templating:**
+- `harness/agents/pr_templating.py` (NEW, ~250 LoC) — `extract_issue_numbers`, `render_pr_body` (pure)
+- `harness/agents/templates/pr_body.md` (default template, 30 LoC, 7 placeholders)
+- `pr_integration.create_pr` +`body_file: Path | None = None` → `gh pr create --body-file <path>`
+- `_run_pr_phase` заменяет inline f-string на `render_pr_body()`
+- `MergeJob` +5 stack fields (split_into, stack_id, stack_position, stack_size, depends_on_pr_number, slice_files)
+- 21 net new tests (8 extract_issue_numbers + 13 render_pr_body + body_file)
+
+**Step 2 (commit `6ef1cdf`) — Stacked PR orchestration:**
+- `_run_stack_phase` (~280 LoC) — split → branch → commit → push → create_pr per slice
+- Helpers: `_get_diff_files`, `_commit_slice`, `_push_branch`, `_cancel_stack`
+- Sync `_run_job` reject `split_into > 1` (background-only)
+- `_run_job_async` branch: `split_into > 1` → `_run_stack_phase` (else `_run_pr_phase`)
+- `JobStore.create` +`pr_url` +`pr_number` (persist child slice at create_pr moment)
+- CLI: `--split-into`, `--split-strategy`, `--stack-files`, +4 internal hidden flags
+- API: `GET /stacks/{stack_id}` returns parent + children; `_JobRecordSchema` +4 stack fields; `_EnqueueRequest` +3 stack fields
+- 12 net new tests (5 _run_stack_phase + 1 sync reject + 6 CLI)
+
+**Step 3 (commit `c359ae7`) — Approved short-circuit + multi-PR webhook:**
+- `WebhookEvent` +`pr_numbers: list[int]` (check_run fan-out)
+- `parse_github_payload("check_run", ...)` — extract ALL linked PRs (was [0])
+- `dispatch_event` refactored: fan-out per-PR, aggregate results
+- `_on_review_approved` — calls injected `merger` (or `auto_merger` for `auto_merge=True`), transitions to `merged` / `pr_auto_merge_enabled` / `failed`
+- `_maybe_promote_stack_parent` — flip parent to `merged` when all children merged
+- `WebhookHandler` DI: `merger`, `auto_merger` callable injection
+- `server/app.py` lifespan wires `merge_pr` + `enable_auto_merge` from `pr_integration`
+- 11 net new tests (3 parse + 4 approved + 2 fan-out + 2 stack promotion)
+
+**Step 4 (this commit) — CLI split-plan + docs + closeout:**
+- `harness agents split-plan` subcommand — dry-run preview, prints plan
+- `docs/merge-queue.md` +"Stacked PRs (Phase 2.4 v0.8.0)" раздел (~140 строк: strategy table, quick start, recovery, API additions, limitations)
+- `docs/CHANGELOG.md` +this section
+- 11 net new tests (8 dry-run + 2 dispatcher + 1 subprocess)
+
+**Roadmap status:**
+
+| Фаза | Статус | Tag |
+|------|--------|-----|
+| Phase 0+0.5+0.6 Web MVP | ✅ | v0.1.0 |
+| Phase 1 (4-layer memory) | ✅ частично | v0.2.0 |
+| Phase 1.6 (scope-gated API) | ✅ ЗАКРЫТО | v0.6.0 |
+| Phase 2.0+2.1 (sub-agents v1.1) | ✅ | v0.4.0 |
+| Phase 2.2 (real GH PR) | ✅ ЗАКРЫТО | v0.5.0 |
+| Phase 2.3 (PR webhooks + auto-merge) | ✅ ЗАКРЫТО | v0.7.0 |
+| **Phase 2.4 (stacked + templating + approved)** | ✅ **ЗАКРЫТО** | **v0.8.0** (NEW) |
+| Phase 3 (context engineering) | ⏳ | — |
+| Phase 4 (hooks + observability) | ⏳ | — |
+| Phase 5 (eval + hardening) | ⏳ | — |
+| Phase 6 (UX + IDE) | ⏳ | — |
+
+**Следующие кандидаты (по roadmap приоритету):**
+- **Phase 2.5** — cross-repo stacks, outbound webhooks, auto-add `harness-auto-merge` label. ~1-2 нед.
+- **Phase 3** (compaction + embeddings + privacy) — 2-3 нед, закрывает 4 carryover из Phase 1.
+- **Phase 4** (12 hooks + observability + `/api/*` → `/api/v1/*` migration) — 2-3 нед, production hardening.
+
+**Final test count:** 759 mock + 5 real_llm = 764 total. Commits в `06_Harness/`: 59 (55 → 59). New deps: 0.
+
+**Backward compat:** все 748 Phase 1.6+2.2+2.3+2.4 тестов проходят без изменений. Default path (`pr_mode="off"`, no stack) = unchanged. Production deployment: `HARNESS_WEBHOOK_SECRET` env + `AUTH_REQUIRED=true` (default). CLI `--split-into` = backward-compatible (Phase 2.2 single-PR behavior when `split_into is None` or `≤ 1`).
+
+---
+
 ## Phase 2.3 — PR Webhooks + Auto-Merge (ЗАКРЫТО v0.7.0, 2026-06-14)
 
 **Phase 2.3 (v0.7.0) — 4 шага / 4 коммита за ~3 часа (post-Phase 1.6, единая сессия)**

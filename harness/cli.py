@@ -348,8 +348,101 @@ def _cmd_agents(args: argparse.Namespace) -> int:
         return _cmd_agents_run(args)
     if args.agents_command == "jobs":
         return _cmd_agents_jobs(args)
+    if args.agents_command == "split-plan":
+        return _cmd_agents_split_plan(args)
     print(f"unknown agents subcommand: {args.agents_command!r}", file=sys.stderr)
     return 2
+
+
+def _cmd_agents_split_plan(args: argparse.Namespace) -> int:
+    """Phase 2.4: preview a split plan without enqueuing.
+
+    Runs the same planner that ``_run_stack_phase`` uses, but
+    in a read-only way: no gh, no git mutations, no JobStore
+    writes. Operators can verify the split before committing
+    to ``--split-into N --pr --background``.
+
+    Exit codes:
+      - 0: success (plan printed)
+      - 2: invalid input (bad path, empty diff, git error)
+      - 3: planner error (rare; only on bad settings)
+    """
+    from harness.agents.pr_split import plan_splits
+    from harness.config import settings
+
+    strategy = args.strategy or settings.pr_split_strategy
+    base = args.base or settings.pr_default_target_branch
+
+    # 1. Resolve file list.
+    if args.files is not None:
+        diff_files = [
+            line.strip() for line in args.files
+            if line.strip()
+        ]
+        args.files.close()
+    else:
+        # Run git diff to get the file list.
+        repo = args.worktree_path or "."
+        try:
+            import subprocess
+            out = subprocess.run(
+                ["git", "-C", repo, "diff", "--name-only", base],
+                capture_output=True, text=True, timeout=30,
+            )
+        except FileNotFoundError:
+            print(
+                "error: git not found in PATH; pass --files <list> "
+                "or install git",
+                file=sys.stderr,
+            )
+            return 3
+        except subprocess.TimeoutExpired:
+            print("error: git diff timed out", file=sys.stderr)
+            return 2
+        if out.returncode != 0:
+            print(
+                f"error: git diff failed (rc={out.returncode}): "
+                f"{out.stderr.strip()}",
+                file=sys.stderr,
+            )
+            return 2
+        diff_files = [
+            line for line in out.stdout.splitlines() if line.strip()
+        ]
+    if not diff_files:
+        print(
+            f"no files in diff vs {base!r} (or --files was empty)",
+            file=sys.stderr,
+        )
+        return 0  # not an error — caller can decide
+
+    # 2. Plan.
+    plan = plan_splits(
+        diff_files=diff_files,
+        strategy=strategy,
+        worktree_id="wt-dryrun",  # not used for branches; cosmetic
+        task="(split-plan dry-run)",
+        n_slices=args.split_into,
+        max_files_per_slice=settings.pr_split_max_files_per_slice,
+        min_slices=settings.pr_split_min_slices,
+        max_slices=settings.pr_split_max_slices,
+    )
+
+    # 3. Print.
+    print(f"plan: {len(plan)} slice(s) via {strategy!r} strategy")
+    print(f"  base ref: {base}")
+    print(f"  total files: {len(diff_files)}")
+    print()
+    if len(plan) == 1:
+        # Single-slice plan — would use the legacy single-PR path.
+        print("  (planner collapsed to 1 slice; the run would "
+              "use the single-PR path, no stack)")
+        return 0
+    for i, slice in enumerate(plan):
+        print(f"slice {i + 1}/{len(plan)}: {slice.branch_name}")
+        for f in slice.files:
+            print(f"    {f}")
+    return 0
 
 
 # === Phase 1.6: scope-gated API auth subcommand ===
@@ -825,6 +918,52 @@ def _build_parser() -> argparse.ArgumentParser:
     jobs.add_argument(
         "--recent", type=int, default=20,
         help="Number of recent jobs to list when no job_id is given (default 20).",
+    )
+    # Phase 2.4: split-plan subcommand for previewing stacked PR splits.
+    split_plan = agents_sub.add_parser(
+        "split-plan",
+        help=(
+            "Phase 2.4: preview how a worktree's diff would be split "
+            "into N stacked PRs (dry-run, no git/gh). "
+            "Run from a git repo or pass --files <list>."
+        ),
+    )
+    split_plan.add_argument(
+        "worktree_path", nargs="?",
+        help=(
+            "Path to a git worktree (default: current directory). "
+            "The split plan is built from 'git diff --name-only <base>'."
+        ),
+    )
+    split_plan.add_argument(
+        "--base", default=None,
+        help=(
+            "Base branch / ref for the diff (default: "
+            "settings.pr_default_target_branch = 'main')."
+        ),
+    )
+    split_plan.add_argument(
+        "--split-into", type=int, default=None,
+        help=(
+            "Phase 2.4: target slice count. If omitted, the planner "
+            "uses max_files_per_slice to decide."
+        ),
+    )
+    split_plan.add_argument(
+        "--strategy",
+        choices=["auto", "files", "directory", "size"], default=None,
+        help=(
+            "Phase 2.4: split strategy (default: "
+            "settings.pr_split_strategy = 'auto')."
+        ),
+    )
+    split_plan.add_argument(
+        "--files", type=argparse.FileType("r", encoding="utf-8"), default=None,
+        help=(
+            "Override the diff: read newline-separated file paths "
+            "from this file instead of running git diff. Useful "
+            "for CI: 'git diff --name-only main > files.txt'."
+        ),
     )
     agents.set_defaults(func=_cmd_agents)
 
