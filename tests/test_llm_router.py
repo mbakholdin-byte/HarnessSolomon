@@ -198,6 +198,104 @@ async def test_completion_uses_prefixed_model() -> None:
         )
 
 
+# === tool schema wrapping ===
+
+def test_wrap_tools_unwrapped_to_wrapped() -> None:
+    """Tool in 'name/description/parameters' form is wrapped to OpenAI shape."""
+    unwrapped = [
+        {
+            "name": "read_file",
+            "description": "Read a file.",
+            "parameters": {"type": "object", "properties": {"path": {"type": "string"}}},
+        }
+    ]
+    wrapped = LLMRouter._wrap_tools_for_litellm(unwrapped)
+    assert wrapped == [
+        {
+            "type": "function",
+            "function": {
+                "name": "read_file",
+                "description": "Read a file.",
+                "parameters": {"type": "object", "properties": {"path": {"type": "string"}}},
+            },
+        }
+    ]
+
+
+def test_wrap_tools_passes_through_already_wrapped() -> None:
+    """Tool already in OpenAI wrapped form is passed through unchanged."""
+    wrapped_in = [
+        {
+            "type": "function",
+            "function": {
+                "name": "x",
+                "description": "y",
+                "parameters": {"type": "object"},
+            },
+        }
+    ]
+    assert LLMRouter._wrap_tools_for_litellm(wrapped_in) == wrapped_in
+
+
+def test_wrap_tools_handles_none_and_empty() -> None:
+    """None and empty list pass through unchanged."""
+    assert LLMRouter._wrap_tools_for_litellm(None) is None
+    assert LLMRouter._wrap_tools_for_litellm([]) == []
+
+
+def test_wrap_tools_mixed_wrapped_and_unwrapped() -> None:
+    """Mix of wrapped and unwrapped tools — each handled correctly."""
+    tools = [
+        {"name": "a", "description": "A", "parameters": {"type": "object"}},
+        {
+            "type": "function",
+            "function": {
+                "name": "b",
+                "description": "B",
+                "parameters": {"type": "object"},
+            },
+        },
+    ]
+    wrapped = LLMRouter._wrap_tools_for_litellm(tools)
+    assert wrapped[0]["type"] == "function"
+    assert wrapped[0]["function"]["name"] == "a"
+    assert wrapped[1] == tools[1]  # pass-through
+
+
+async def test_completion_wraps_unwrapped_tools() -> None:
+    """completion() wraps unwrapped tools before sending to litellm.
+
+    Without this, litellm's minimax provider sends bare schemas to the
+    MiniMax API, which rejects with 'invalid tool type:'.
+    """
+    with patch("harness.server.llm.router.litellm") as mock_litellm:
+        mock_litellm.completion = AsyncMock(
+            return_value=_make_completion_response("ok", 1, 1)
+        )
+        router = LLMRouter()
+        unwrapped_tools = [
+            {
+                "name": "read_file",
+                "description": "Read a file.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"path": {"type": "string"}},
+                    "required": ["path"],
+                },
+            }
+        ]
+        await router.completion(
+            messages=[{"role": "user", "content": "x"}],
+            model="MiniMax-M2.7",
+            tools=unwrapped_tools,
+        )
+        # The tools sent to litellm MUST be in OpenAI wrapped form
+        sent_tools = mock_litellm.completion.call_args.kwargs["tools"]
+        assert sent_tools[0]["type"] == "function"
+        assert sent_tools[0]["function"]["name"] == "read_file"
+        assert sent_tools[0]["function"]["parameters"] == unwrapped_tools[0]["parameters"]
+
+
 # === import-time error ===
 
 def test_router_handles_missing_litellm(monkeypatch: pytest.MonkeyPatch) -> None:

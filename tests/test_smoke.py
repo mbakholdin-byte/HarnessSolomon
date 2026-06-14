@@ -615,18 +615,24 @@ async def test_smoke_2_real_llm(
     session_id: str,
     real_llm_runner,
 ) -> None:
-    """Real LLM: agent edits a file to replace 'old' with 'new'."""
+    """Real LLM: agent edits a file to replace 'release' with 'stable'.
+
+    Uses 'release'/'stable' instead of 'old'/'new' because 'old' is a
+    substring of 'placeholder' (would cause a false positive in the
+    "old not in text" assertion). This mirrors the choice in the mock
+    variant test_smoke_2_edit_file.
+    """
     project_root: Path = isolated_settings["project_root"]
     target = project_root / "data" / "test_edit.md"
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text("placeholder 'old' content", encoding="utf-8")
+    target.write_text("placeholder 'release' content", encoding="utf-8")
 
     app = create_app()
     with TestClient(app) as tc:
         with real_llm_runner.connect(tc, session_id) as ws:
             ws.send_json(
                 {"type": "user_message", "content": (
-                    "В файле data/test_edit.md замени 'old' на 'new'. "
+                    "В файле data/test_edit.md замени 'release' на 'stable'. "
                     "Используй edit_file."
                 )}
             )
@@ -634,8 +640,8 @@ async def test_smoke_2_real_llm(
 
     assert target.exists()
     text = target.read_text(encoding="utf-8")
-    assert "new" in text
-    assert "old" not in text
+    assert "stable" in text
+    assert "release" not in text
 
 
 @pytest.mark.real_llm

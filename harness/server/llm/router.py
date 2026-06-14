@@ -127,6 +127,11 @@ class LLMRouter:
         import inspect
 
         litellm_model = self._to_litellm_model_id(model)
+        # Normalize tool schemas to OpenAI's wrapped form
+        # (litellm's minimax provider doesn't auto-wrap; MiniMax API
+        # rejects unwrapped tools with "invalid tool type:").
+        if "tools" in call_kwargs:
+            call_kwargs["tools"] = self._wrap_tools_for_litellm(call_kwargs["tools"])
         fn = litellm.completion
         if inspect.iscoroutinefunction(fn):
             # Async mock or natively async provider
@@ -155,6 +160,46 @@ class LLMRouter:
             return model
         return f"{spec.provider}/{spec.id}"
 
+    @staticmethod
+    def _wrap_tools_for_litellm(tools: list[dict] | None) -> list[dict] | None:
+        """Wrap tool schemas in OpenAI's ``{"type": "function", ...}`` form.
+
+        litellm's built-in providers (openai, anthropic) auto-wrap tool
+        schemas. The ``minimax`` provider does not, so unwrapped schemas
+        reach the wire as ``{"name": ..., "description": ..., "parameters": ...}``
+        and MiniMax's API rejects them with ``invalid tool type: `` (code 2013).
+
+        Pass-through for tools already in the wrapped form (have ``type: function``)
+        and for tools that are not dicts (defensive).
+        """
+        if not tools:
+            return tools
+        wrapped: list[dict] = []
+        for tool in tools:
+            if not isinstance(tool, dict):
+                wrapped.append(tool)
+                continue
+            if tool.get("type") == "function" and "function" in tool:
+                # Already in OpenAI wrapped form
+                wrapped.append(tool)
+                continue
+            # Unwrapped form: {"name", "description", "parameters"}
+            if "name" in tool and "parameters" in tool:
+                wrapped.append(
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": tool["name"],
+                            "description": tool.get("description", ""),
+                            "parameters": tool["parameters"],
+                        },
+                    }
+                )
+            else:
+                # Unknown shape — pass through and let litellm error
+                wrapped.append(tool)
+        return wrapped
+
     # --- streaming ---
 
     async def streaming_completion(
@@ -176,6 +221,8 @@ class LLMRouter:
             call_kwargs["tools"] = tools
 
         litellm_model = self._to_litellm_model_id(model)
+        if "tools" in call_kwargs:
+            call_kwargs["tools"] = self._wrap_tools_for_litellm(call_kwargs["tools"])
         try:
             response = litellm.completion(
                 model=litellm_model,
