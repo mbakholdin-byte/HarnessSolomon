@@ -32,7 +32,7 @@
 - [x] WebSocket chat endpoint с streaming
 - [x] Frontend: Vite + React 18 + TypeScript
 - [x] Chat UI с sessions, models, messages, tool calls
-- [x] 62/62 unit-тестов зелёные (Step 8 e2e smoke идёт параллельно → 67)
+- [x] 67/67 тестов зелёные (62 unit + 5 e2e smoke, real_llm отдельно через `-m real_llm`)
 - [x] Quickstart: <10 минут до первого ответа
 
 **Спецификация:** `docs/PHASE-0-SPEC.md` (утверждена 13.06.2026)
@@ -46,7 +46,7 @@
 
 - **Backend:** Python 3.12+, FastAPI, uvicorn, LiteLLM, aiosqlite, Pydantic v2
 - **Frontend:** Vite, React 18, TypeScript, react-markdown
-- **LLM Фаза 0:** только облачные (MiniMax-M2.7, GLM-4.7, Kimi K2.6)
+- **LLM Фаза 0:** только облачные (MiniMax-M2.7, GLM-4.7, Moonshot-v1-128k)
 - **Локальные модели (Qwen3 8B/30B):** Фаза 0.5
 - **Embeddings (BGE-M3, FRIDA):** Фаза 1
 - **Memory (hmem, mem0, mempalace, hybrid):** Фаза 1

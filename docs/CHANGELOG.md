@@ -13,10 +13,10 @@
 | 5 | LiteLLM router | `83e99a4` | 3 models, /api/models |
 | 6 | Agent loop | `3dbcef8` | async generator, max 5 iters |
 | 7 | WebSocket chat | `8e9aa5d` | /api/chat/ws + tests |
-| 8 | Smoke tests | (Step 8, в процессе) | 5 e2e scenarios |
+| 8 | Smoke tests | `26ec994` | 5 e2e scenarios (mock + real_llm marker) |
 | 9 | Frontend scaffold | `8ebdef1` | Vite + React + TS |
 | 10 | Chat UI | `be57506` | components + real WS client |
-| 11 | Quickstart + docs | (Step 11) | этот шаг |
+| 11 | Quickstart + docs | `aed8aac` | quickstart, architecture, README, CHANGELOG |
 | — | Port fix | `2223742` | 8000 → 8765 (hns conflict) |
 | — | Tests refactor | `e482c02`, `aad4dc4` | unused imports, receive_json loop |
 
@@ -24,7 +24,7 @@
 
 - **Backend:** 17 Python модулей, ~2540 строк (server/, llm/, db/, agent/, routes/, config, main)
 - **Frontend:** 10 TS/TSX файлов, ~1140 строк (App, main, api/{client,ws}, 6 components)
-- **Tests:** 62 passed (unit) — Step 8 добавит 5 e2e smoke → 67
+- **Tests:** 67 passed (62 unit + 5 e2e smoke, real_llm отдельно через `-m real_llm`)
 - **Stack:** Python 3.12, FastAPI, LiteLLM, aiosqlite, Pydantic v2 / React 18, TypeScript 5, Vite 5
 - **Storage:** SQLite (index) + JSONL (source of truth), rebuild при старте
 - **E2E latency:** WebSocket roundtrip через Vite proxy <100ms (без LLM)
@@ -43,8 +43,9 @@
 
 ### Что осталось до Фазы 1
 
-- [ ] Step 8: e2e smoke tests (5 сценариев, в работе)
-- [ ] Tag `v0.1.0` и push в GitHub (после smoke merge)
+- [ ] Tag `v0.1.0` и push в GitHub
+- [ ] Real LLM smoke tests (с правильным provider prefix в litellm)
+- [ ] Скриншот UI в `docs/images/` (ручная работа Марка)
 
 ### Решения (decisions)
 
