@@ -108,9 +108,21 @@ async def lifespan(app: FastAPI):
         )
         await webhook_event_store.init()
         app.state.webhook_event_store = webhook_event_store
+        # Phase 2.4: inject the merger / auto_merger callables so
+        # the dispatcher can act on ``pull_request_review.approved``
+        # events. We import the actual functions from
+        # :mod:`harness.agents.pr_integration` at this point (DI
+        # keeps :mod:`harness.agents.webhook_handler` free of
+        # those imports at module top level — the trust boundary).
+        from harness.agents.pr_integration import (
+            enable_auto_merge,
+            merge_pr,
+        )
         app.state.webhook_handler = WebhookHandler(
             store=webhook_event_store,
             secret=settings.webhook_secret,
+            merger=merge_pr,
+            auto_merger=enable_auto_merge,
         )
         # Log whether webhooks are enabled or not (without
         # leaking the secret itself).

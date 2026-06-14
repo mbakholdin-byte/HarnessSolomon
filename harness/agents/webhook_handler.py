@@ -158,7 +158,21 @@ class WebhookEvent(BaseModel):
     #: ``check_run.pull_requests[0].number``, or
     #: ``pull_request_review.pull_request.number``. ``None`` for
     #: event types that don't carry a PR reference.
+    #:
+    #: Phase 2.4: this is now the FIRST linked PR (back-compat
+    #: for callers that only handle a single PR per event). For
+    #: ``check_run`` events, multiple PRs may be linked (a single
+    #: check run can validate N PRs against the same SHA). Use
+    #: :attr:`pr_numbers` for the full list — the dispatcher
+    #: fans out to all of them.
     pr_number: int | None = None
+    #: Phase 2.4: list of all PR numbers associated with this
+    #: event. For ``check_run`` events this is the full
+    #: ``check_run.pull_requests[].number`` list. For
+    #: ``pull_request`` / ``pull_request_review`` events this is
+    #: ``[event.pr_number]`` (length 1). Used by the dispatcher
+    #: to fan out to multiple stacked-PR children.
+    pr_numbers: list[int] = Field(default_factory=list)
     #: PR HTML URL (str). Same sources as ``pr_number``. ``None``
     #: if the event has no PR context.
     pr_url: str | None = None
@@ -219,11 +233,13 @@ def parse_github_payload(
     if event_type == "pull_request":
         pr = payload.get("pull_request") or {}
         head = pr.get("head") or {}
+        n = payload.get("number")
         return WebhookEvent(
             delivery_id="",  # filled by handle_raw
             event_type=event_type,
             action=action,
-            pr_number=payload.get("number"),
+            pr_number=n,
+            pr_numbers=[n] if n is not None else [],
             pr_url=pr.get("html_url"),
             head_sha=head.get("sha"),
             pr_merged=bool(pr.get("merged", False)),
@@ -231,16 +247,25 @@ def parse_github_payload(
 
     if event_type == "check_run":
         cr = payload.get("check_run") or {}
-        # GitHub attaches an array of linked PRs to a check_run. We
-        # use the FIRST one (in practice, a check_run is typically
-        # associated with one PR; this is the standard pattern).
+        # GitHub attaches an array of linked PRs to a check_run. A
+        # single check run can validate N PRs against the same SHA
+        # (e.g. a CI matrix that re-runs on every dependent PR).
+        # Phase 2.4: extract ALL linked PR numbers, not just the
+        # first. The dispatcher fans out the event to each PR's
+        # job. ``pr_number`` stays as the first for back-compat
+        # with Phase 2.3 callers (and single-PR repos).
         linked_prs = cr.get("pull_requests") or []
+        pr_numbers_list = [
+            int(p["number"])
+            for p in linked_prs if p.get("number") is not None
+        ]
         first_pr = linked_prs[0] if linked_prs else {}
         return WebhookEvent(
             delivery_id="",
             event_type=event_type,
             action=action,
             pr_number=first_pr.get("number"),
+            pr_numbers=pr_numbers_list,
             pr_url=first_pr.get("html_url"),
             head_sha=cr.get("head_sha"),
             conclusion=cr.get("conclusion"),
@@ -249,11 +274,13 @@ def parse_github_payload(
     if event_type == "pull_request_review":
         review = payload.get("review") or {}
         pr = payload.get("pull_request") or {}
+        n = pr.get("number") or payload.get("number")
         return WebhookEvent(
             delivery_id="",
             event_type=event_type,
             action=action,
-            pr_number=pr.get("number") or payload.get("number"),
+            pr_number=n,
+            pr_numbers=[n] if n is not None else [],
             pr_url=pr.get("html_url"),
             review_state=review.get("state"),
         )
@@ -285,11 +312,32 @@ class WebhookHandler:
                 will raise :class:`WebhookVerificationError` with
                 ``reason="missing_secret"`` (the route should map
                 this to 503).
+        merger: Optional Phase 2.4 callable
+                ``async def merge_pr(repo, pr_number, env_var) -> None``.
+                If set, the dispatcher calls it on a
+                ``pull_request_review.approved`` event (instead of
+                the Phase 2.3 no-op). If ``None`` (default), the
+                approved path stays as a no-op — useful in tests
+                that don't want to hit ``gh``.
+        auto_merger: Optional Phase 2.4 callable
+                ``async def enable_auto_merge(repo, pr_number, ...)``.
+                If set, used when ``job.auto_merge=True``. If
+                ``None``, the approved path falls back to direct
+                ``merger`` (the legacy Phase 2.2 merge flow).
     """
 
-    def __init__(self, store: WebhookEventStore, secret: str) -> None:
+    def __init__(
+        self,
+        store: WebhookEventStore,
+        secret: str,
+        *,
+        merger: Any = None,
+        auto_merger: Any = None,
+    ) -> None:
         self.store = store
         self.secret = secret
+        self._merger = merger
+        self._auto_merger = auto_merger
 
     async def handle_raw(
         self,
@@ -372,39 +420,121 @@ class WebhookHandler:
         pipeline. It runs AFTER :meth:`handle_raw` has verified
         the HMAC and recorded the event in the store.
 
-        Behaviour per event type:
+        Phase 2.4: an event may reference multiple PRs
+        (``event.pr_numbers``, e.g. a ``check_run`` linked to N
+        PRs). We fan out to each PR's job and aggregate the
+        results. For ``pull_request`` / ``pull_request_review`` the
+        list is always length 1 (back-compat with Phase 2.3).
+
+        After dispatching per-child events, if a child was marked
+        ``merged``, we check whether the stack is complete via
+        :meth:`JobStore.all_stack_children_merged` and promote the
+        parent orchestrator row to ``merged`` if so.
+
+        Behaviour per (event_type, pr_number) pair (Phase 2.3 base,
+        extended in Phase 2.4):
           - ``pull_request`` with ``action="closed"`` and
-            ``pr_merged=True`` → look up the job by ``pr_number``
-            and mark it ``merged`` (was ``pr_auto_merge_enabled``).
-          - ``check_run`` with ``conclusion="failure"`` → look up
-            the job and mark it ``failed`` (was ``pr_waiting_checks``).
-            ``conclusion="success"`` is currently a no-op (the
-            :func:`wait_for_checks` polling loop will pick it up
-            on its next iteration; we don't have a
-            "short-circuit wait_for_checks" call yet — that's a
-            Phase 2.3 follow-up).
-          - ``pull_request_review`` with ``review_state="changes_requested"``
-            → mark the job ``failed`` (was ``pr_waiting_checks``
-            or, in a future Phase 2.4, ``pr_waiting_review``).
-          - All other combinations → log + return
-            ``{"processed": False, "reason": "no action"}``.
+            ``pr_merged=True`` → mark the job ``merged`` (was
+            ``pr_auto_merge_enabled``). If the job is part of a
+            stack and the stack is now complete, promote parent.
+          - ``check_run`` with ``conclusion="failure"`` → mark
+            ``failed`` (was ``pr_waiting_checks``).
+          - ``check_run`` with ``conclusion="success"`` → no-op
+            (the polling loop will pick it up).
+          - ``pull_request_review`` with
+            ``review_state="changes_requested"`` → mark ``failed``.
+          - ``pull_request_review`` with ``review_state="approved"``
+            → Phase 2.4 short-circuit: call
+            :meth:`_on_review_approved` (merges the PR via the
+            injected ``merger`` or ``auto_merger`` callable, or
+            no-op if neither is configured).
 
         Returns:
             A small dict describing what happened, suitable for
-            serialisation in the route's 200 response. Operators
-            can also read it for debugging.
+            serialisation in the route's 200 response. For fan-out
+            events, ``dispatched_to`` lists the job ids we
+            processed; ``promoted_parent`` is set if a parent
+            orchestrator row was flipped to ``merged``.
         """
-        # Pull a single, latest job matching the pr_number. If no
-        # job has this number (the PR was opened by a human, not by
-        # the merge queue), we return a no-op.
-        if event.pr_number is None:
+        # Phase 2.4: normalise pr_numbers (Phase 2.3 events have
+        # only ``pr_number``; check_run can have multiple).
+        pr_numbers = list(event.pr_numbers)
+        if not pr_numbers and event.pr_number is not None:
+            pr_numbers = [event.pr_number]
+        if not pr_numbers:
             return {"processed": False, "reason": "no pr_number in event"}
-        job = await job_store.find_job_by_pr_number(event.pr_number)
-        if job is None:
-            return {
-                "processed": False,
-                "reason": f"no job with pr_number={event.pr_number}",
-            }
+
+        # Fan out to each PR's job (if any).
+        per_job_results: list[dict[str, Any]] = []
+        promoted_parent: dict[str, Any] | None = None
+        for n in pr_numbers:
+            job = await job_store.find_job_by_pr_number(n)
+            if job is None:
+                per_job_results.append({
+                    "pr_number": n,
+                    "processed": False,
+                    "reason": f"no job with pr_number={n}",
+                })
+                continue
+            r = await self._dispatch_to_job(event, n, job, job_store)
+            per_job_results.append({"pr_number": n, **r})
+            # Phase 2.4: if this event merged a child AND the
+            # child is part of a stack, check if the whole stack
+            # is now merged → promote the parent.
+            if (
+                r.get("action") == "marked_merged"
+                and job.pr_stack_id
+            ):
+                promoted = await self._maybe_promote_stack_parent(
+                    job.pr_stack_id, job_store,
+                )
+                if promoted is not None:
+                    promoted_parent = promoted
+
+        # Aggregate the fan-out: if any one was processed, the
+        # whole event is "processed". Otherwise it's a no-op.
+        any_processed = any(r.get("processed") for r in per_job_results)
+        result: dict[str, Any] = {
+            "processed": any_processed,
+            "dispatched_to": per_job_results,
+        }
+        if promoted_parent is not None:
+            result["promoted_parent"] = promoted_parent
+        if not any_processed:
+            # Preserve the original Phase 2.3 single-result shape
+            # for callers that don't expect fan-out.
+            if len(per_job_results) == 1:
+                result["reason"] = per_job_results[0].get("reason")
+            else:
+                result["reason"] = (
+                    f"no actionable job for {len(pr_numbers)} PR(s)"
+                )
+        elif len(per_job_results) == 1:
+            # Phase 2.3 back-compat: when only one job was
+            # affected, also expose ``action`` / ``job_id`` at the
+            # top level so existing callers/tests don't have to
+            # descend into ``dispatched_to``.
+            only = per_job_results[0]
+            if "action" in only:
+                result["action"] = only["action"]
+            if "job_id" in only:
+                result["job_id"] = only["job_id"]
+        return result
+
+    async def _dispatch_to_job(
+        self,
+        event: WebhookEvent,
+        pr_number: int,
+        job: Any,
+        job_store: JobStore,
+    ) -> dict[str, Any]:
+        """Dispatch one event to one job. Inner phase of :meth:`dispatch_event`.
+
+        Phase 2.4 split: was inline in ``dispatch_event``; now
+        factored so the fan-out loop can call it per PR.
+
+        Returns a per-job dict (no fan-out aggregation).
+        """
         # Terminal statuses: do not re-dispatch. The merge queue
         # has already moved on; this is a no-op for the dispatcher.
         if job.status in ("merged", "failed", "timeout", "cancelled"):
@@ -423,7 +553,7 @@ class WebhookHandler:
                 job.id, "merged", finished=True,
                 cost=job.cost,
                 pr_url=event.pr_url or job.pr_url,
-                pr_number=event.pr_number,
+                pr_number=pr_number,
             )
             return {
                 "processed": True,
@@ -439,7 +569,7 @@ class WebhookHandler:
             await job_store.update_status(
                 job.id, "failed", finished=True,
                 cost=job.cost,
-                error=f"PR CI failed (check_run reported failure)",
+                error="PR CI failed (check_run reported failure)",
             )
             return {
                 "processed": True,
@@ -479,20 +609,169 @@ class WebhookHandler:
                 "reason": "review changes_requested",
             }
 
-        # === review approved — no-op (Phase 2.4 review flow) ===
+        # === review approved — Phase 2.4 short-circuit ===
         if (
             event.event_type == "pull_request_review"
             and event.review_state == "approved"
         ):
-            return {
-                "processed": False,
-                "reason": "review approved; no auto-merge short-circuit in 2.3",
-            }
+            return await self._on_review_approved(job, job_store)
 
         # Default: log and let it pass.
         return {
             "processed": False,
             "reason": f"unhandled combination: {event.event_type}/{event.action}",
+        }
+
+    async def _on_review_approved(
+        self,
+        job: Any,
+        job_store: JobStore,
+    ) -> dict[str, Any]:
+        """Phase 2.4: handle a ``pull_request_review.approved`` event.
+
+        Closes the explicit Phase 2.3 no-op
+        (``webhook_handler.py:482-490`` in the pre-Step-3 code).
+        Replaces it with a real flow:
+
+          1. If the job is already in a terminal status, no-op.
+          2. If ``job.auto_merge=True`` and an ``auto_merger`` is
+             injected: call it (``gh pr merge --auto``), set the
+             job to ``pr_auto_merge_enabled``, and wait for the
+             inbound ``pull_request.closed+merged`` webhook to
+             flip it to ``merged``.
+          3. Else (no auto-merge): call the injected ``merger``
+             directly (``gh pr merge``), set the job to
+             ``merged``, finished=True.
+
+        If neither ``merger`` nor ``auto_merger`` is injected
+        (e.g. a test environment that doesn't want to hit ``gh``),
+        the function returns a no-op and the job stays in its
+        current status. This preserves the Phase 2.3 semantics
+        for callers that don't wire the new dependencies.
+
+        The merger/auto_merger callables are injected at
+        :class:`WebhookHandler` construction (DI) to keep the
+        trust boundary: this module does NOT import from
+        :mod:`harness.agents.pr_integration` at the top level.
+        """
+        # 1. Terminal guard.
+        if job.status in ("merged", "failed", "timeout", "cancelled"):
+            return {
+                "processed": False,
+                "reason": f"job {job.id} already in terminal status {job.status}",
+            }
+
+        # 2. Branch on auto_merge. ``auto_merge`` is a ``MergeJob``
+        # field (set at enqueue time); the ``JobRecord`` we read
+        # back from the store does NOT carry it (Phase 2.3
+        # schema). We default to False for Phase 2.3 / pre-2.4
+        # jobs. Phase 2.4 stack children are created with the
+        # parent's auto_merge via the stack orchestrator — for
+        # now, the operator can wire the ``auto_merger`` callable
+        # at server startup to enable this path.
+        auto_merge = bool(getattr(job, "auto_merge", False))
+        repo = job.repo
+        pr_number = job.pr_number
+        if auto_merge and self._auto_merger is not None:
+            try:
+                await self._auto_merger(
+                    repo=repo, pr_number=pr_number,
+                    merge_method="squash",  # Phase 2.4: respects setting
+                    delete_branch=True,
+                    env_var="GITHUB_TOKEN",
+                )
+            except Exception as e:
+                return {
+                    "processed": False,
+                    "reason": f"enable_auto_merge failed: {e}",
+                }
+            await job_store.update_status(
+                job.id, "pr_auto_merge_enabled",
+                cost=job.cost,
+            )
+            return {
+                "processed": True,
+                "action": "auto_merge_enabled",
+                "job_id": job.id,
+            }
+
+        # 3. Direct merge path.
+        if self._merger is None:
+            return {
+                "processed": False,
+                "reason": (
+                    "review approved but no merger injected; "
+                    "configure WebhookHandler(merger=...) to enable"
+                ),
+            }
+        try:
+            await self._merger(
+                repo=repo, pr_number=pr_number,
+                env_var="GITHUB_TOKEN",
+            )
+        except Exception as e:
+            await job_store.update_status(
+                job.id, "failed", finished=True,
+                cost=job.cost,
+                error=f"merge_pr after approved review failed: {e}",
+            )
+            return {
+                "processed": True,
+                "action": "marked_failed",
+                "job_id": job.id,
+                "reason": f"merge failed after approved review: {e}",
+            }
+        await job_store.update_status(
+            job.id, "merged", finished=True,
+            cost=job.cost,
+        )
+        return {
+            "processed": True,
+            "action": "merged_via_review",
+            "job_id": job.id,
+        }
+
+    async def _maybe_promote_stack_parent(
+        self,
+        stack_id: str,
+        job_store: JobStore,
+    ) -> dict[str, Any] | None:
+        """If all children of a stack are merged, promote the parent.
+
+        Phase 2.4: after a child PR is marked ``merged`` (via the
+        ``pull_request.closed+merged`` webhook), the parent
+        orchestrator row stays in ``pr_open`` until ALL children
+        are merged. This helper checks the aggregate via
+        :meth:`JobStore.all_stack_children_merged` and, if True,
+        updates the parent row to ``merged``.
+
+        Returns the promotion dict (for the route's 200 response)
+        or ``None`` if no promotion was needed.
+        """
+        all_merged = await job_store.all_stack_children_merged(stack_id)
+        if not all_merged:
+            return None
+        rows = await job_store.find_jobs_by_stack_id(stack_id)
+        parent = next(
+            (r for r in rows if r.stack_position == 0),
+            None,
+        )
+        if parent is None:
+            return None
+        if parent.status in ("merged", "failed", "timeout", "cancelled"):
+            return None  # already terminal
+        # Sum cost across children + parent (best effort; the
+        # children may not have a meaningful cost if they were
+        # created as PR rows directly).
+        total_cost = sum(r.cost for r in rows)
+        await job_store.update_status(
+            parent.id, "merged", finished=True,
+            cost=total_cost,
+        )
+        return {
+            "stack_id": stack_id,
+            "parent_job_id": parent.id,
+            "children_count": len(rows) - 1,
         }
 
 
