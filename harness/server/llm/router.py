@@ -89,7 +89,10 @@ class LLMRouter:
 
         Args:
             messages: OpenAI-style message list.
-            model: Model id from the catalog (e.g. "MiniMax-M2.7").
+            model: Model id from the catalog (e.g. "MiniMax-M2.7"). The router
+                maps it to the litellm form ("minimax/MiniMax-M2.7") via
+                `_to_litellm_model_id`. You can also pass an already-prefixed
+                id (e.g. "openai/gpt-4o") to bypass catalog lookup.
             tools: Optional list of OpenAI-style tool schemas.
             **kwargs: Forwarded to litellm.completion (temperature, max_tokens, ...).
 
@@ -114,16 +117,43 @@ class LLMRouter:
 
         - For real litellm (sync), run in a thread to avoid blocking the loop.
         - For AsyncMock / awaitable mocks (used in tests), `await` directly.
+
+        Maps the catalog id (e.g. "MiniMax-M2.7") to its litellm-compatible
+        form ("minimax/MiniMax-M2.7") by looking up the model spec and
+        prefixing the provider. If the model is already prefixed (contains
+        "/") or unknown to the catalog, the original id is passed through.
         """
         import asyncio
         import inspect
 
+        litellm_model = self._to_litellm_model_id(model)
         fn = litellm.completion
         if inspect.iscoroutinefunction(fn):
             # Async mock or natively async provider
-            return await fn(model=model, messages=messages, **call_kwargs)
+            return await fn(model=litellm_model, messages=messages, **call_kwargs)
         # Real sync litellm — offload to thread
-        return await asyncio.to_thread(fn, model=model, messages=messages, **call_kwargs)
+        return await asyncio.to_thread(
+            fn, model=litellm_model, messages=messages, **call_kwargs
+        )
+
+    @staticmethod
+    def _to_litellm_model_id(model: str) -> str:
+        """Map catalog id to litellm-compatible id with provider prefix.
+
+        Catalog ids like "MiniMax-M2.7" are user-facing. litellm requires
+        "{provider}/{model}" form (e.g. "minimax/MiniMax-M2.7"). This helper
+        looks up the catalog and prefixes the provider. Pass-through if the
+        id is already prefixed (contains "/") or unknown.
+        """
+        if "/" in model:
+            # Already in provider/model form — assume caller knows what they want
+            return model
+        spec = get_model(model)
+        if spec is None:
+            # Unknown model — let litellm produce its own error so the
+            # caller sees the original message
+            return model
+        return f"{spec.provider}/{spec.id}"
 
     # --- streaming ---
 
@@ -145,9 +175,10 @@ class LLMRouter:
         if tools is not None:
             call_kwargs["tools"] = tools
 
+        litellm_model = self._to_litellm_model_id(model)
         try:
             response = litellm.completion(
-                model=model,
+                model=litellm_model,
                 messages=messages,
                 **call_kwargs,
             )

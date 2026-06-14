@@ -84,10 +84,10 @@ async def test_completion_passes_tools() -> None:
             model="MiniMax-M2.7",
             tools=tools,
         )
-        # Verify tools were passed
+        # Verify tools were passed; model is mapped to provider-prefixed form
         call_kwargs = mock_litellm.completion.call_args.kwargs
         assert call_kwargs.get("tools") == tools
-        assert call_kwargs.get("model") == "MiniMax-M2.7"
+        assert call_kwargs.get("model") == "minimax/MiniMax-M2.7"
 
 
 async def test_completion_cost_uses_pricing() -> None:
@@ -148,6 +148,54 @@ async def test_streaming_includes_done_event() -> None:
             events.append(ev)
 
         assert events[-1].type == "done"
+
+
+# === model id mapping (provider prefix) ===
+
+def test_to_litellm_model_id_prefixes_catalog_id() -> None:
+    """Catalog id 'MiniMax-M2.7' maps to 'minimax/MiniMax-M2.7'."""
+    assert LLMRouter._to_litellm_model_id("MiniMax-M2.7") == "minimax/MiniMax-M2.7"
+    assert LLMRouter._to_litellm_model_id("glm-4.7") == "zhipuai/glm-4.7"
+    assert LLMRouter._to_litellm_model_id("moonshot-v1-128k") == "moonshot/moonshot-v1-128k"
+
+
+def test_to_litellm_model_id_passes_through_prefixed() -> None:
+    """Already-prefixed id is passed through unchanged."""
+    assert (
+        LLMRouter._to_litellm_model_id("openai/gpt-4o")
+        == "openai/gpt-4o"
+    )
+    assert (
+        LLMRouter._to_litellm_model_id("anthropic/claude-3-5-sonnet")
+        == "anthropic/claude-3-5-sonnet"
+    )
+
+
+def test_to_litellm_model_id_passes_through_unknown() -> None:
+    """Unknown model id is passed through (let litellm error)."""
+    assert (
+        LLMRouter._to_litellm_model_id("unknown-model-xyz")
+        == "unknown-model-xyz"
+    )
+
+
+async def test_completion_uses_prefixed_model() -> None:
+    """completion() sends 'minimax/MiniMax-M2.7' to litellm, not bare id."""
+    with patch("harness.server.llm.router.litellm") as mock_litellm:
+        mock_litellm.completion = AsyncMock(
+            return_value=_make_completion_response("ok", 1, 1)
+        )
+        router = LLMRouter()
+        await router.completion(
+            messages=[{"role": "user", "content": "x"}],
+            model="MiniMax-M2.7",
+        )
+        # The model id sent to litellm MUST have the provider prefix,
+        # otherwise litellm raises "LLM Provider NOT provided".
+        assert (
+            mock_litellm.completion.call_args.kwargs["model"]
+            == "minimax/MiniMax-M2.7"
+        )
 
 
 # === import-time error ===
