@@ -47,12 +47,19 @@ import asyncio
 import json
 import logging
 import os
+import random
 import re
 import shutil
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, Field
+
+# Phase 2.5: settings import is local (delayed) to avoid a
+# circular import — ``harness.config`` does not import from
+# ``harness.agents``, so this is safe at module load.
+if TYPE_CHECKING:
+    from harness.config import Settings
 
 logger = logging.getLogger(__name__)
 
@@ -142,6 +149,135 @@ async def _gh(*args: str, **kwargs: Any) -> tuple[int, str, str]:
         proc.returncode or 0,
         stdout_b.decode("utf-8", errors="replace"),
         stderr_b.decode("utf-8", errors="replace"),
+    )
+
+
+# === Phase 2.5: rate-limit retry wrapper ===
+
+#: Substrings in ``gh`` stderr that indicate a rate-limit response.
+#: ``gh`` doesn't always emit an HTTP status code (it speaks to
+#: the API in-process), but its error messages are stable.
+_RATE_LIMIT_PATTERNS: tuple[str, ...] = (
+    "API rate limit exceeded",
+    "rate limit",
+    "secondary rate limit",
+    "abuse detection",
+    "HTTP 429",
+    "HTTP 403",
+)
+
+#: Regex for parsing ``gh`` stderr's ``Retry-After: <seconds>`` hint.
+#: GitHub's secondary rate limit includes this header in plain
+#: text when ``--verbose`` is on; we keep the regex defensive.
+_RETRY_AFTER_RE = re.compile(r"Retry-After:\s*(\d+)", re.IGNORECASE)
+
+
+def _is_rate_limit_error(stderr: str) -> bool:
+    """Return True if ``gh``'s stderr looks like a rate-limit error."""
+    s = stderr.lower()
+    return any(pat.lower() in s for pat in _RATE_LIMIT_PATTERNS)
+
+
+def _extract_retry_after(stderr: str) -> int | None:
+    """Try to pull a ``Retry-After: N`` integer from stderr. ``None`` if absent."""
+    m = _RETRY_AFTER_RE.search(stderr)
+    if m is None:
+        return None
+    try:
+        return int(m.group(1))
+    except (ValueError, IndexError):
+        return None
+
+
+def _settings_rate_limit() -> tuple[int, float, float, float]:
+    """Read rate-limit settings (lazy import to dodge circulars).
+
+    Returns:
+        Tuple ``(max_retries, initial, max, jitter)``. Defaults
+        match the Field definitions in :mod:`harness.config` —
+        this function returns the runtime values, not the
+        defaults, so a test that monkeypatches ``settings`` will
+        see the patched values.
+    """
+    try:
+        from harness.config import settings as _s
+    except Exception:
+        return (5, 2.0, 60.0, 0.5)
+    return (
+        _s.pr_rate_limit_max_retries,
+        _s.pr_rate_limit_initial_backoff_s,
+        _s.pr_rate_limit_max_backoff_s,
+        _s.pr_rate_limit_jitter_s,
+    )
+
+
+async def _gh_with_retry(
+    *args: str, **kwargs: Any,
+) -> tuple[int, str, str]:
+    """Like :func:`_gh`, but retries 403/429 with backoff (Phase 2.5).
+
+    Behaviour:
+
+    - Calls ``_gh(*args, **kwargs)``.
+    - If the return code is non-zero AND stderr looks like a
+      rate-limit error (see :data:`_RATE_LIMIT_PATTERNS`):
+        - Parse ``Retry-After: N`` from stderr if present
+          (honored as-is).
+        - Otherwise compute exponential backoff:
+          ``min(initial * 2^attempt, max) + random.uniform(0, jitter)``.
+        - Sleep and retry, up to ``max_retries`` times.
+    - On exhaustion, raise :class:`GHUnavailable` so the existing
+      caller's error path is unchanged.
+    - If the return code is non-zero for a non-rate-limit reason,
+      return immediately (no retry — the caller's error handler
+      sees the same ``(rc, stdout, stderr)`` it would have seen
+      without the wrapper).
+
+    Returns:
+        The same ``(returncode, stdout, stderr)`` tuple as
+        :func:`_gh`, just potentially after several attempts.
+
+    Raises:
+        GHUnavailable:  Rate limit retries exhausted, OR the
+                        initial call failed with no rate-limit
+                        signal and we've decided to bail.
+    """
+    max_retries, initial, max_backoff, jitter = _settings_rate_limit()
+    last_rc, last_stdout, last_stderr = 0, "", ""
+    for attempt in range(max_retries + 1):
+        rc, stdout, stderr = await _gh(*args, **kwargs)
+        if rc == 0:
+            return (rc, stdout, stderr)
+        last_rc, last_stdout, last_stderr = rc, stdout, stderr
+        if not _is_rate_limit_error(stderr):
+            # Not a rate limit — return the (rc, stdout, stderr)
+            # tuple to the caller. The caller will raise its own
+            # error (Phase 2.2/2.3 behaviour, unchanged).
+            return (rc, stdout, stderr)
+        if attempt >= max_retries:
+            break
+        # Compute backoff.
+        retry_after = _extract_retry_after(stderr)
+        if retry_after is not None:
+            backoff = float(retry_after)
+        else:
+            backoff = min(initial * (2 ** attempt), max_backoff)
+            if jitter > 0:
+                backoff += random.uniform(0, jitter)
+        logger.info(
+            "gh rate-limited (attempt %d/%d); sleeping %.1fs before retry: %s",
+            attempt + 1, max_retries + 1, backoff,
+            stderr.strip()[:200],
+        )
+        await asyncio.sleep(backoff)
+    # Exhausted — surface as GHUnavailable.
+    raise GHUnavailable(
+        f"gh rate-limited after {max_retries + 1} attempts: "
+        f"{last_stderr.strip()[:200] or 'unknown'}",
+        hint=(
+            "Wait for the rate-limit window to reset, or reduce "
+            "the number of concurrent PR operations."
+        ),
     )
 
 
@@ -255,7 +391,9 @@ async def create_pr(
     if draft:
         cmd.append("--draft")
     env = _env_for_token(env_var)
-    rc, stdout, stderr = await _gh(*cmd, cwd=str(repo), env=env)
+    rc, stdout, stderr = await _gh_with_retry(
+        *cmd, cwd=str(repo), env=env,
+    )
     if rc != 0:
         raise RuntimeError(
             f"gh pr create failed (rc={rc}): {stderr.strip() or stdout.strip()}"
@@ -283,7 +421,7 @@ async def get_pr_status(
     """Return a snapshot of a PR's state via ``gh pr view --json``."""
     await check_gh_available(env_var=env_var)
     env = _env_for_token(env_var)
-    rc, stdout, stderr = await _gh(
+    rc, stdout, stderr = await _gh_with_retry(
         "pr", "view", str(pr_number),
         "--json", "state,merged,statusCheckRollup,reviewDecision",
         cwd=str(repo), env=env,
@@ -452,7 +590,9 @@ async def merge_pr(
     if delete_branch:
         cmd.append("--delete-branch")
     env = _env_for_token(env_var)
-    rc, stdout, stderr = await _gh(*cmd, cwd=str(repo), env=env)
+    rc, stdout, stderr = await _gh_with_retry(
+        *cmd, cwd=str(repo), env=env,
+    )
     if rc != 0:
         # Common cases:
         #   "Pull Request is not mergeable" — branch protection
@@ -533,7 +673,9 @@ async def enable_auto_merge(
     if delete_branch:
         cmd.append("--delete-branch")
     env = _env_for_token(env_var)
-    rc, stdout, stderr = await _gh(*cmd, cwd=str(repo), env=env)
+    rc, stdout, stderr = await _gh_with_retry(
+        *cmd, cwd=str(repo), env=env,
+    )
     if rc != 0:
         raise RuntimeError(
             f"gh pr merge {pr_number} --auto failed (rc={rc}): "
@@ -569,11 +711,64 @@ async def disable_auto_merge(
     await check_gh_available(env_var=env_var)
     cmd = ["pr", "merge", str(pr_number), "--disable-auto"]
     env = _env_for_token(env_var)
-    rc, stdout, stderr = await _gh(*cmd, cwd=str(repo), env=env)
+    rc, stdout, stderr = await _gh_with_retry(
+        *cmd, cwd=str(repo), env=env,
+    )
     if rc != 0:
         raise RuntimeError(
             f"gh pr merge {pr_number} --disable-auto failed (rc={rc}): "
             f"{stderr.strip() or stdout.strip()}"
+        )
+    return None
+
+
+# === Phase 2.5: add_pr_label ===
+
+async def add_pr_label(
+    *,
+    repo: Path,
+    pr_number: int,
+    label: str,
+    env_var: str = "GITHUB_TOKEN",
+) -> None:
+    """Add a label to an existing PR via ``gh pr edit --add-label``.
+
+    Idempotent: ``gh pr edit --add-label`` is a no-op (rc=0) if
+    the label is already on the PR. The function does NOT
+    create the label — that is the operator's responsibility
+    (run ``gh label create <name>`` once per repo). Calling
+    this with a non-existent label yields a non-zero rc and
+    raises :class:`RuntimeError`.
+
+    Used by :meth:`~harness.agents.merge_queue.MergeQueue._run_pr_phase`
+    (and the stack equivalent) immediately after :func:`create_pr`
+    succeeds, when ``job.auto_merge=True`` and
+    ``settings.auto_add_label=True``. The intent is to satisfy
+    branch-protection rules that require a specific label
+    (typically ``harness-auto-merge``) before ``gh pr merge
+    --auto`` is allowed.
+
+    Args:
+        repo:      Local repo path (used as ``cwd``).
+        pr_number: PR number.
+        label:     Label name (without the ``#`` prefix).
+        env_var:   GitHub token env var.
+
+    Raises:
+        GHUnavailable:  ``gh`` missing or not authenticated.
+        RuntimeError:   ``gh pr edit --add-label`` returned
+                        non-zero (e.g. label doesn't exist).
+    """
+    await check_gh_available(env_var=env_var)
+    cmd = ["pr", "edit", str(pr_number), "--add-label", label]
+    env = _env_for_token(env_var)
+    rc, stdout, stderr = await _gh_with_retry(
+        *cmd, cwd=str(repo), env=env,
+    )
+    if rc != 0:
+        raise RuntimeError(
+            f"gh pr edit {pr_number} --add-label {label} "
+            f"failed (rc={rc}): {stderr.strip() or stdout.strip()}"
         )
     return None
 
@@ -591,4 +786,6 @@ __all__ = [
     # Phase 2.3
     "enable_auto_merge",
     "disable_auto_merge",
+    # Phase 2.5
+    "add_pr_label",
 ]

@@ -41,6 +41,7 @@ from uuid import uuid4
 from harness.agents.jobs import JobEvent, JobStore
 from harness.agents.pr_integration import (
     GHUnavailable,
+    add_pr_label,
     create_pr,
     enable_auto_merge,
     get_pr_status,
@@ -796,6 +797,7 @@ class MergeQueue:
         # is empty.
         from harness.agents.pr_templating import (
             extract_issue_numbers,
+            parse_codeowners_for_diff,
             render_pr_body,
         )
         issues = extract_issue_numbers(
@@ -804,6 +806,15 @@ class MergeQueue:
         template_path = (
             Path(settings.pr_template_path)
             if settings.pr_template_path else None
+        )
+        # Phase 2.5: pull CODEOWNERS reviewers. Best-effort — if
+        # the file is missing or malformed, we get ``[]`` and the
+        # body just renders the "no reviewers" placeholder.
+        diff_files_for_owners = await self._get_diff_files(
+            repo, target_branch,
+        )
+        codeowners_reviewers = parse_codeowners_for_diff(
+            repo, diff_files_for_owners,
         )
         body = render_pr_body(
             task=job.task,
@@ -817,7 +828,7 @@ class MergeQueue:
             slice_total=(job.stack_size if job.stack_size > 1 else None),
             stack_id=job.stack_id,
             issue_numbers=issues,
-            codeowners_reviewers=None,  # Phase 2.5: read CODEOWNERS
+            codeowners_reviewers=codeowners_reviewers,
             test_summary="Run the test suite and verify the new tests pass.",
         )
 
@@ -875,6 +886,36 @@ class MergeQueue:
             )
             await self._emit(job_id, "failed", reason="pr create failed")
             return (False, None, None, False)
+
+        # === 1b. Auto-add label (Phase 2.5) ===
+        # Best-effort: if ``gh pr edit --add-label`` fails
+        # (label doesn't exist, network glitch, etc.) we log
+        # and continue. The auto-merge step below will surface
+        # the real branch-protection error if the missing
+        # label was the only blocker.
+        if job.auto_merge and settings.auto_add_label:
+            label = (
+                job.auto_merge_label
+                or settings.auto_merge_label
+            )
+            try:
+                await add_pr_label(
+                    repo=repo, pr_number=created.number, label=label,
+                    env_var=settings.github_token_env,
+                )
+                await self._emit(
+                    job_id, "label_added", label=label,
+                    pr_number=created.number,
+                )
+            except Exception as e:
+                logger.warning(
+                    "job %s: auto-add label %r failed (%s); "
+                    "continuing without it",
+                    job_id, label, e,
+                )
+                await self._emit(
+                    job_id, "label_failed", label=label, error=str(e),
+                )
 
         # PR created successfully.
         await self.store.update_status(
@@ -1426,6 +1467,24 @@ class MergeQueue:
                     draft=(job.pr_mode == "draft"),
                     env_var=settings.github_token_env,
                 )
+                # Phase 2.5: per-slice auto-add label (best-effort).
+                if job.auto_merge and settings.auto_add_label:
+                    label = (
+                        job.auto_merge_label
+                        or settings.auto_merge_label
+                    )
+                    try:
+                        await add_pr_label(
+                            repo=repo, pr_number=created.number,
+                            label=label,
+                            env_var=settings.github_token_env,
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "stack slice %d/%d (job %s): auto-add "
+                            "label %r failed (%s); continuing",
+                            i + 1, len(plan), job_id, label, e,
+                        )
             except GHUnavailable as e:
                 # Stacks require gh — no local fallback.
                 await self.store.update_status(

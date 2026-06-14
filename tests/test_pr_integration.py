@@ -604,3 +604,240 @@ class TestDisableAutoMerge:
         ])
         with pytest.raises(RuntimeError, match="no auto-merge"):
             await disable_auto_merge(repo=tmp_path, pr_number=5)
+
+
+# === Phase 2.5: rate-limit retry + auto-add label ===
+
+class TestRateLimitRetry:
+    """Tests for :func:`_gh_with_retry` (Phase 2.5)."""
+
+    async def test_non_rate_limit_error_no_retry(
+        self, gh_subprocess_stub, tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A non-zero rc WITHOUT a rate-limit signal → no retry,
+        return the (rc, stdout, stderr) tuple unchanged (Phase 2.2
+        caller behaviour preserved)."""
+        from harness.agents import pr_integration
+        monkeypatch.setattr(
+            "harness.agents.pr_integration.shutil.which",
+            lambda x: "/usr/bin/gh",
+        )
+        # ``create_pr`` runs through ``_gh_with_retry`` internally.
+        # The single non-200 rc has no rate-limit keyword in stderr.
+        gh_subprocess_stub([
+            (("auth", "status"), 0, "Logged in", ""),
+            (("pr", "create"), 1, "", "some other gh error"),
+        ])
+        with pytest.raises(RuntimeError, match="some other gh error"):
+            await pr_integration.create_pr(
+                repo=tmp_path, head_branch="h", base_branch="main",
+                title="t", body="b", draft=False,
+            )
+        # _stub_calls records only one ``pr create`` (no retry).
+        assert sum(
+            1 for c in pr_integration._stub_calls
+            if c[:2] == ("pr", "create")
+        ) == 1
+
+    async def test_rate_limit_triggers_retry(
+        self, gh_subprocess_stub, tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A 429-style stderr on the first call → second call
+        succeeds; ``create_pr`` returns the parsed PR URL."""
+        from harness.agents import pr_integration
+        from harness.config import settings
+        monkeypatch.setattr(
+            "harness.agents.pr_integration.shutil.which",
+            lambda x: "/usr/bin/gh",
+        )
+        # Speed up retry.
+        monkeypatch.setattr(settings, "pr_rate_limit_initial_backoff_s", 0.0)
+        monkeypatch.setattr(settings, "pr_rate_limit_jitter_s", 0.0)
+        # The stub matches predicates by ``in`` semantics for the
+        # multi-token case, so register a single ``pr create`` rule
+        # that fires the FIRST time. The second call (retry) won't
+        # match the registered predicate (it was popped) so it
+        # falls through to "no match" — the default for unmatched
+        # is rc=1, which is NOT a rate-limit, which would NOT
+        # match the parser and we'd return (1, ...) to create_pr
+        # which raises RuntimeError. So we register the success
+        # predicate twice. Actually the stub pops on success, so
+        # we register a single one and rely on the stub's retry
+        # behaviour: the second call also returns 1 + rate-limit
+        # stderr? No — we want the retry to SUCCEED. The cleanest
+        # way: register TWO ``pr create`` entries.
+        gh_subprocess_stub([
+            (("auth", "status"), 0, "Logged in", ""),
+            # First attempt: 429.
+            (("pr", "create"), 1, "",
+             "gh: HTTP 429: API rate limit exceeded"),
+            # Retry: success.
+            (("pr", "create"), 0,
+             "https://github.com/o/r/pull/99\n", ""),
+        ])
+        result = await pr_integration.create_pr(
+            repo=tmp_path, head_branch="h", base_branch="main",
+            title="t", body="b", draft=False,
+        )
+        assert result.number == 99
+        assert result.url.endswith("/pull/99")
+
+    async def test_rate_limit_exhausts_raises_gh_unavailable(
+        self, gh_subprocess_stub, tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """After ``max_retries`` rate-limited responses, ``_gh_with_retry``
+        raises :class:`GHUnavailable`."""
+        from harness.agents import pr_integration
+        from harness.config import settings
+        monkeypatch.setattr(
+            "harness.agents.pr_integration.shutil.which",
+            lambda x: "/usr/bin/gh",
+        )
+        # Zero backoff for speed, max_retries=2 → 3 attempts total.
+        monkeypatch.setattr(settings, "pr_rate_limit_initial_backoff_s", 0.0)
+        monkeypatch.setattr(settings, "pr_rate_limit_jitter_s", 0.0)
+        monkeypatch.setattr(settings, "pr_rate_limit_max_retries", 2)
+        # All three attempts return 429.
+        gh_subprocess_stub([
+            (("auth", "status"), 0, "Logged in", ""),
+            (("pr", "create"), 1, "", "HTTP 429 rate limit"),
+            (("pr", "create"), 1, "", "HTTP 429 rate limit"),
+            (("pr", "create"), 1, "", "HTTP 429 rate limit"),
+        ])
+        with pytest.raises(GHUnavailable, match="rate-limited after 3"):
+            await pr_integration.create_pr(
+                repo=tmp_path, head_branch="h", base_branch="main",
+                title="t", body="b", draft=False,
+            )
+
+    async def test_retry_after_header_honored(
+        self, gh_subprocess_stub, tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """``Retry-After: 1`` in stderr → sleep at least 1s."""
+        from harness.agents import pr_integration
+        from harness.config import settings
+        import time as _time
+        monkeypatch.setattr(
+            "harness.agents.pr_integration.shutil.which",
+            lambda x: "/usr/bin/gh",
+        )
+        # Use a tiny initial backoff; the header should override it.
+        monkeypatch.setattr(settings, "pr_rate_limit_initial_backoff_s", 0.01)
+        monkeypatch.setattr(settings, "pr_rate_limit_jitter_s", 0.0)
+        gh_subprocess_stub([
+            (("auth", "status"), 0, "Logged in", ""),
+            (("pr", "create"), 1, "",
+             "HTTP 429: Retry-After: 1"),
+            (("pr", "create"), 0,
+             "https://github.com/o/r/pull/77\n", ""),
+        ])
+        t0 = _time.monotonic()
+        await pr_integration.create_pr(
+            repo=tmp_path, head_branch="h", base_branch="main",
+            title="t", body="b", draft=False,
+        )
+        elapsed = _time.monotonic() - t0
+        # At least 1s (the Retry-After value).
+        assert elapsed >= 0.9
+
+    async def test_zero_max_retries_disables_retry(
+        self, gh_subprocess_stub, tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """``pr_rate_limit_max_retries=0`` → first 429 raises
+        ``GHUnavailable`` immediately (no retry)."""
+        from harness.agents import pr_integration
+        from harness.config import settings
+        monkeypatch.setattr(
+            "harness.agents.pr_integration.shutil.which",
+            lambda x: "/usr/bin/gh",
+        )
+        monkeypatch.setattr(settings, "pr_rate_limit_max_retries", 0)
+        gh_subprocess_stub([
+            (("auth", "status"), 0, "Logged in", ""),
+            (("pr", "create"), 1, "", "HTTP 429 rate limit"),
+        ])
+        with pytest.raises(GHUnavailable, match="rate-limited after 1"):
+            await pr_integration.create_pr(
+                repo=tmp_path, head_branch="h", base_branch="main",
+                title="t", body="b", draft=False,
+            )
+
+
+class TestAddPRLabel:
+    """Tests for :func:`add_pr_label` (Phase 2.5)."""
+
+    async def test_happy_path(
+        self, gh_subprocess_stub, tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from harness.agents.pr_integration import add_pr_label
+        monkeypatch.setattr(
+            "harness.agents.pr_integration.shutil.which",
+            lambda x: "/usr/bin/gh",
+        )
+        gh_subprocess_stub([
+            (("auth", "status"), 0, "Logged in", ""),
+            (("pr", "edit", "42", "--add-label", "harness-auto-merge"),
+             0, "", ""),
+        ])
+        # No exception.
+        await add_pr_label(
+            repo=tmp_path, pr_number=42, label="harness-auto-merge",
+        )
+
+    async def test_idempotent_label_already_present(
+        self, gh_subprocess_stub, tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """``gh pr edit --add-label`` is idempotent — second call
+        also returns rc=0, no exception."""
+        from harness.agents.pr_integration import add_pr_label
+        monkeypatch.setattr(
+            "harness.agents.pr_integration.shutil.which",
+            lambda x: "/usr/bin/gh",
+        )
+        # Register two identical calls — both succeed.
+        gh_subprocess_stub([
+            (("auth", "status"), 0, "Logged in", ""),
+            (("pr", "edit", "1", "--add-label", "l"), 0, "", ""),
+            (("pr", "edit", "1", "--add-label", "l"), 0, "", ""),
+        ])
+        await add_pr_label(repo=tmp_path, pr_number=1, label="l")
+        await add_pr_label(repo=tmp_path, pr_number=1, label="l")
+
+    async def test_raises_when_label_does_not_exist(
+        self, gh_subprocess_stub, tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from harness.agents.pr_integration import add_pr_label
+        monkeypatch.setattr(
+            "harness.agents.pr_integration.shutil.which",
+            lambda x: "/usr/bin/gh",
+        )
+        gh_subprocess_stub([
+            (("auth", "status"), 0, "Logged in", ""),
+            (("pr", "edit", "5", "--add-label", "no-such-label"),
+             1, "", "label not found"),
+        ])
+        with pytest.raises(RuntimeError, match="label not found"):
+            await add_pr_label(
+                repo=tmp_path, pr_number=5, label="no-such-label",
+            )
+
+    async def test_raises_when_gh_missing(
+        self, gh_subprocess_stub, tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from harness.agents.pr_integration import add_pr_label
+        monkeypatch.setattr(
+            "harness.agents.pr_integration.shutil.which",
+            lambda x: None,
+        )
+        with pytest.raises(GHUnavailable, match="not found in PATH"):
+            await add_pr_label(repo=tmp_path, pr_number=5, label="x")
+

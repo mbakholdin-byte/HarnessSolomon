@@ -325,6 +325,16 @@ def gh_subprocess_stub(monkeypatch: pytest.MonkeyPatch):
                 ):
                     queue.pop(i)
                     return (rc, out, err)
+            # Phase 2.5 defaults: if no predicate matched, treat
+            # ``gh auth status`` and ``gh pr edit --add-label`` as
+            # successful no-ops so Phase 2.3 auto-merge tests (which
+            # pre-date these calls) continue to pass without
+            # modification. Tests that want to simulate a failure
+            # register their own predicate for these commands.
+            if len(args) >= 2 and args[0] == "auth" and args[1] == "status":
+                return (0, "", "")
+            if len(args) >= 3 and args[0] == "pr" and args[1] == "edit":
+                return (0, "", "")
             # No match — return a generic failure.
             return (1, "", f"gh_subprocess_stub: no match for args={args}")
 
