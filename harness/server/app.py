@@ -56,9 +56,11 @@ def create_app() -> FastAPI:
     # Routers
     from harness.server.routes.health import router as health_router
     from harness.server.routes.sessions import router as sessions_router
+    from harness.server.routes.models import router as models_router
 
     app.include_router(health_router, prefix="/api", tags=["health"])
     app.include_router(sessions_router, prefix="/api", tags=["sessions"])
+    app.include_router(models_router, prefix="/api", tags=["models"])
 
     return app
 
