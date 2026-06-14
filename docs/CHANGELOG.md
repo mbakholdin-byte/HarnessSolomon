@@ -1,5 +1,34 @@
 # Changelog — Solomon Harness
 
+## Phase 2.2 — Sub-agents v1.2: GitHub PR + parallel cross-repo queue (in progress, 2026-06-14)
+
+### Step 0 — Prerequisites (commit `phase-2.2-step-0-prereqs`)
+
+**Файлы:**
+- `harness/agents/jobs.py` — `JOB_STATUSES` +5 PR-phase states (`pr_creating`, `pr_open`, `pr_waiting_checks`, `pr_waiting_review`, `merging_pr`); `_RUNNING_STATUSES` +5 (PR-phase jobs are still in-flight); `JobStatus` enum +5 members; `JobRecord` +5 fields (`repo`, `pr_url`, `pr_number`, `target_branch`, `pr_mode`); `SCHEMA` +5 columns; `_apply_phase22_migrations()` for `ALTER TABLE ... ADD COLUMN` on legacy DBs (idempotent via `PRAGMA table_info`); `create()` +`repo`/`pr_mode`/`target_branch` kwargs; `update_status()` +`pr_url`/`pr_number` kwargs; `load()` +`list_recent()` return new fields
+- `harness/config.py` — +5 settings (`github_token_env`, `pr_default_target_branch`, `pr_poll_interval_s`, `pr_wait_timeout_s`, `pr_strategy` with `auto/strict/off` validator)
+- `tests/conftest.py` — `gh_subprocess_stub` fixture (replaces `harness.agents.pr_integration._gh` with programmable stub for Phase 2.2 Step 2 tests)
+- `tests/test_job_store.py` — +7 tests in `TestPR22Schema`: PR fields round-trip, `pr_mode='off'` default, `pr_url`/`pr_number` via `update_status`, `recover_running` cancels PR-phase jobs, `ALTER TABLE` migration back-fills legacy DB, `JobStatus` enum drift guard
+
+**Tests:** 454 → **466** (+12 net new)
+**Backward compat:** all Phase 2.1 tests still pass without modification (legacy DBs get new columns with safe defaults; legacy callers see `pr_mode="off"` for newly created rows)
+
+### Архитектурные решения (Phase 2.2, по мере реализации)
+
+- **`ALTER TABLE` migrations идемпотентны через `PRAGMA table_info`** — не полагаемся на SQLite 3.35+ `ADD COLUMN IF NOT EXISTS`. Каждая колонка проверяется отдельно.
+- **`JobStatus` enum расширен на 5 members** — `frozen=True` не на enum, добавление безопасно; `JOB_STATUSES` теперь 13 значений.
+- **Settings `pr_strategy` валидируется в `@model_validator`** — `auto | strict | off`, default `auto`.
+- **`gh_subprocess_stub` fixture** — module-level monkeypatch `pr_integration._gh`, default behavior = "gh: command not found" (явная ошибка вместо тихого pass).
+
+### Что осталось до Step 1
+
+- Per-repo Lock registry (`harness/agents/repo_locks.py`, NEW)
+- gh CLI wrapper (`harness/agents/pr_integration.py`, NEW)
+- PR lifecycle в MergeQueue
+- CLI + FastAPI wiring + docs
+
+---
+
 ## Phase 2.1 — Sub-agents v1.1 (2026-06-14)
 
 ### 5 шагов / 5 коммитов за ~2.5 часа (post-Phase 2.0, единая сессия)

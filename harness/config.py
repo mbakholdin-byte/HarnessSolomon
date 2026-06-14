@@ -129,6 +129,53 @@ class Settings(BaseSettings):
         ),
     )
 
+    # === Sub-agents GitHub PR integration (Phase 2.2) ===
+    github_token_env: str = Field(
+        default="GITHUB_TOKEN",
+        description=(
+            "Name of the env var that holds the GitHub token. The token "
+            "value is read at PR-creation time and passed to ``gh`` via "
+            "the environment (never on the command line). Default: "
+            "GITHUB_TOKEN (the standard GitHub Actions convention)."
+        ),
+    )
+    pr_default_target_branch: str = Field(
+        default="main",
+        description=(
+            "Target branch the PR is opened against. Override per-job "
+            "via ``MergeJob.pr_target_branch`` or the CLI ``--pr-target`` "
+            "flag."
+        ),
+    )
+    pr_poll_interval_s: float = Field(
+        default=15.0,
+        gt=0.0,
+        description=(
+            "Seconds between ``gh pr view`` polls while waiting for CI "
+            "checks / review decisions. Used by ``wait_for_checks()``."
+        ),
+    )
+    pr_wait_timeout_s: float = Field(
+        default=300.0,
+        gt=0.0,
+        description=(
+            "Wall-clock cap (seconds) for waiting on PR checks/review. "
+            "After this, the job is marked ``failed`` with "
+            "``error='PR checks timed out after Ns'``. Set higher for "
+            "repos with slow CI."
+        ),
+    )
+    pr_strategy: str = Field(
+        default="auto",
+        description=(
+            "PR-mode strategy: ``auto`` (PR-IF-REMOTE — if ``origin`` "
+            "exists AND ``gh auth status`` is ok, open PR; otherwise "
+            "fall back to local ff-merge + warning), ``strict`` (PR is "
+            "required; failure on missing gh is a hard error), ``off`` "
+            "(never open a PR, always local merge)."
+        ),
+    )
+
     @model_validator(mode="after")
     def _cascade_thresholds_ordered(self) -> "Settings":
         """Guard against a misconfigured cascade: low must be strictly below high.
@@ -142,6 +189,11 @@ class Settings(BaseSettings):
             raise ValueError(
                 f"subagent_confidence_low ({self.subagent_confidence_low}) must be "
                 f"< subagent_confidence_high ({self.subagent_confidence_high})"
+            )
+        if self.pr_strategy not in ("auto", "strict", "off"):
+            raise ValueError(
+                f"pr_strategy must be one of 'auto' / 'strict' / 'off', "
+                f"got {self.pr_strategy!r}"
             )
         return self
 

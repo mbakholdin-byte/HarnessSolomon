@@ -35,11 +35,22 @@ logger = logging.getLogger(__name__)
 # === Constants ===
 
 #: All known job status values. Stored as TEXT in SQLite.
+#:
+#: Phase 2.2 adds 5 PR-lifecycle statuses (``pr_creating``, ``pr_open``,
+#: ``pr_waiting_checks``, ``pr_waiting_review``, ``merging_pr``) for
+#: jobs that opt into ``pr_mode="draft"`` or ``pr_mode="ready"``. They
+#: are terminal at the queue level (the job IS merged locally or
+#: waiting for a human to merge) but in-flight at the GitHub level.
 JOB_STATUSES: tuple[str, ...] = (
     "queued",
     "running_code",
     "running_review",
     "verifying",
+    "pr_creating",
+    "pr_open",
+    "pr_waiting_checks",
+    "pr_waiting_review",
+    "merging_pr",
     "merged",
     "failed",
     "timeout",
@@ -48,8 +59,12 @@ JOB_STATUSES: tuple[str, ...] = (
 
 #: Statuses that mean the job is still in flight. ``recover_running``
 #: uses this set to find jobs that were active when the process died.
+#: Phase 2.2: include the PR-phase statuses — a job waiting for CI
+#: checks is still in flight (a crash should mark it cancelled, not
+#: orphan the PR).
 _RUNNING_STATUSES: frozenset[str] = frozenset({
     "queued", "running_code", "running_review", "verifying",
+    "pr_creating", "pr_open", "pr_waiting_checks", "pr_waiting_review", "merging_pr",
 })
 
 
@@ -62,6 +77,11 @@ class JobStatus(str, Enum):
     RUNNING_CODE = "running_code"
     RUNNING_REVIEW = "running_review"
     VERIFYING = "verifying"
+    PR_CREATING = "pr_creating"
+    PR_OPEN = "pr_open"
+    PR_WAITING_CHECKS = "pr_waiting_checks"
+    PR_WAITING_REVIEW = "pr_waiting_review"
+    MERGING_PR = "merging_pr"
     MERGED = "merged"
     FAILED = "failed"
     TIMEOUT = "timeout"
@@ -74,6 +94,11 @@ class JobRecord:
 
     Immutable. Construct via :meth:`JobStore.load` (preferred) or
     directly in tests.
+
+    Phase 2.2 adds 5 optional fields for GitHub PR integration. They
+    are populated only when the job was enqueued with ``pr_mode != "off"``
+    (i.e. ``"draft"`` or ``"ready"``). For Phase 2.1 jobs (no PR
+    integration) the fields are ``None`` / ``"off"``.
     """
 
     id: str
@@ -85,6 +110,23 @@ class JobRecord:
     error: str | None
     model: str
     prompt: str               # included for ``list_recent`` UI display
+    # === Phase 2.2: PR integration fields ===
+    #: Absolute path of the repo the job ran in (per-job override
+    #: or ``settings.project_root`` for the default queue). Used by
+    #: the cross-repo lock registry and by ``gh pr create``.
+    repo: str | None = None
+    #: PR URL (e.g. ``https://github.com/owner/repo/pull/12``). Set
+    #: after the PR is opened; ``None`` for local-only merges.
+    pr_url: str | None = None
+    #: PR number extracted from the URL. ``None`` if no PR yet.
+    pr_number: int | None = None
+    #: Target branch the PR was opened against (defaults to
+    #: ``settings.pr_default_target_branch`` = ``"main"``).
+    target_branch: str | None = None
+    #: PR mode this job was enqueued with: ``"off"`` (default,
+    #: local ff-merge only), ``"draft"`` (open draft PR), or
+    #: ``"ready"`` (open ready-for-review PR).
+    pr_mode: str = "off"
 
 
 @dataclass(frozen=True)
@@ -103,17 +145,34 @@ class JobEvent:
 #: ``merge_jobs`` — one row per enqueued job.
 #: ``merge_events`` — append-only event log per job (used for ``subscribe``
 #: replay and for debugging after a crash).
+#:
+#: Phase 2.2 adds 5 columns to ``merge_jobs``:
+#:   ``repo TEXT`` — absolute path of the repo the job ran in
+#:   ``pr_url TEXT`` — populated after the PR is opened
+#:   ``pr_number INTEGER`` — populated after the PR is opened
+#:   ``target_branch TEXT`` — ``"main"`` / ``"develop"`` / etc.
+#:   ``pr_mode TEXT NOT NULL DEFAULT 'off'`` — ``"off" | "draft" | "ready"``
+#:
+#: For DBs that pre-date 2.2, the columns are added via idempotent
+#: ``ALTER TABLE ... ADD COLUMN`` migrations in :meth:`JobStore._ensure_schema`
+#: (guarded by ``PRAGMA table_info`` so it's safe to run on fresh DBs
+#: that already have the columns from ``CREATE TABLE``).
 SCHEMA: str = """
 CREATE TABLE IF NOT EXISTS merge_jobs (
-    id          TEXT PRIMARY KEY,
-    worktree_id TEXT NOT NULL,
-    status      TEXT NOT NULL,
-    started_at  TEXT NOT NULL,
-    finished_at TEXT,
-    cost        REAL NOT NULL DEFAULT 0.0,
-    error       TEXT,
-    model       TEXT NOT NULL,
-    prompt      TEXT NOT NULL
+    id            TEXT PRIMARY KEY,
+    worktree_id   TEXT NOT NULL,
+    status        TEXT NOT NULL,
+    started_at    TEXT NOT NULL,
+    finished_at   TEXT,
+    cost          REAL NOT NULL DEFAULT 0.0,
+    error         TEXT,
+    model         TEXT NOT NULL,
+    prompt        TEXT NOT NULL,
+    repo          TEXT,
+    pr_url        TEXT,
+    pr_number     INTEGER,
+    target_branch TEXT,
+    pr_mode       TEXT NOT NULL DEFAULT 'off'
 );
 CREATE INDEX IF NOT EXISTS idx_merge_jobs_status ON merge_jobs(status);
 CREATE INDEX IF NOT EXISTS idx_merge_jobs_started ON merge_jobs(started_at DESC);
@@ -128,6 +187,24 @@ CREATE TABLE IF NOT EXISTS merge_events (
 );
 CREATE INDEX IF NOT EXISTS idx_merge_events_job ON merge_events(job_id, id);
 """
+
+#: ALTER TABLE statements applied on existing DBs that pre-date
+#: Phase 2.2. Each is idempotent (we check ``PRAGMA table_info``
+#: before issuing). Order matters: ``ALTER TABLE`` is more lenient
+#: in older SQLite versions when columns are added one at a time.
+#: (All 5 columns have no default except ``pr_mode`` which gets
+#: ``DEFAULT 'off'``; we back-fill any pre-existing rows with
+#: ``"off"`` via a separate ``UPDATE``.)
+_PR22_ALTER_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("repo", "TEXT"),
+    ("pr_url", "TEXT"),
+    ("pr_number", "INTEGER"),
+    ("target_branch", "TEXT"),
+    # ``pr_mode`` is NOT NULL DEFAULT 'off' in the CREATE; for
+    # ALTER-added columns SQLite applies the DEFAULT to existing
+    # rows, so legacy Phase 2.1 rows read back as "off" (back-compat).
+    ("pr_mode", "TEXT NOT NULL DEFAULT 'off'"),
+)
 
 
 # === Helpers ===
@@ -163,14 +240,44 @@ class JobStore:
         self._initialized: bool = False
 
     async def _ensure_schema(self) -> None:
-        """Create tables on first connect. Cheap; idempotent."""
+        """Create tables on first connect. Cheap; idempotent.
+
+        Phase 2.2: also applies ``ALTER TABLE`` migrations for
+        pre-2.2 databases. We check ``PRAGMA table_info`` for each
+        new column and only ``ADD COLUMN`` if it's missing — this
+        makes the migration safe to run on both fresh and existing
+        DBs (e.g. one created by a Phase 2.1 build).
+        """
         if self._initialized:
             return
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         async with aiosqlite.connect(self.db_path) as db:
             await db.executescript(SCHEMA)
+            await self._apply_phase22_migrations(db)
             await db.commit()
         self._initialized = True
+
+    async def _apply_phase22_migrations(self, db: aiosqlite.Connection) -> None:
+        """Add Phase 2.2 columns to a pre-existing ``merge_jobs`` table.
+
+        For each column in :data:`_PR22_ALTER_COLUMNS`, check
+        ``PRAGMA table_info(merge_jobs)`` and issue an ``ALTER TABLE``
+        only if the column isn't already present. This is the
+        standard SQLite pattern (the ``ADD COLUMN`` itself is not
+        idempotent — the ``IF NOT EXISTS`` form is only supported in
+        SQLite 3.35+ and we want to support older versions too).
+        """
+        async with db.execute("PRAGMA table_info(merge_jobs)") as cur:
+            existing = {row[1] async for row in cur}
+        for col_name, col_type in _PR22_ALTER_COLUMNS:
+            if col_name in existing:
+                continue
+            # SQLite's ALTER TABLE ADD COLUMN with NOT NULL requires
+            # a non-NULL DEFAULT. ``pr_mode`` has DEFAULT 'off' inline,
+            # so this is safe.
+            await db.execute(
+                f"ALTER TABLE merge_jobs ADD COLUMN {col_name} {col_type}"
+            )
 
     # --- create / update ---
 
@@ -181,10 +288,17 @@ class JobStore:
         model: str,
         prompt: str,
         status: str = "queued",
+        repo: str | None = None,
+        pr_mode: str = "off",
+        target_branch: str | None = None,
     ) -> str:
         """Insert a new job row and return its id.
 
         The id is auto-generated. ``started_at`` is set to now UTC.
+
+        Phase 2.2: accepts ``repo``, ``pr_mode``, ``target_branch`` for
+        jobs that opt into GitHub PR integration. All three default to
+        ``None`` / ``"off"`` for backward compat with Phase 2.1 callers.
         """
         await self._ensure_schema()
         job_id = _new_job_id()
@@ -193,10 +307,12 @@ class JobStore:
             await db.execute(
                 """
                 INSERT INTO merge_jobs
-                    (id, worktree_id, status, started_at, cost, model, prompt)
-                VALUES (?, ?, ?, ?, 0.0, ?, ?)
+                    (id, worktree_id, status, started_at, cost, model,
+                     prompt, repo, pr_mode, target_branch)
+                VALUES (?, ?, ?, ?, 0.0, ?, ?, ?, ?, ?)
                 """,
-                (job_id, worktree_id, status, now, model, prompt),
+                (job_id, worktree_id, status, now, model, prompt,
+                 repo, pr_mode, target_branch),
             )
             await db.commit()
         return job_id
@@ -209,6 +325,8 @@ class JobStore:
         cost: float | None = None,
         error: str | None = None,
         finished: bool = False,
+        pr_url: str | None = None,
+        pr_number: int | None = None,
     ) -> None:
         """Update the job's status (and optionally cost / error / finish).
 
@@ -222,6 +340,13 @@ class JobStore:
                        timeout/cancelled). We do NOT validate the
                        status here — the caller is the source of
                        truth on lifecycle.
+            pr_url:    Phase 2.2: if supplied, set ``pr_url`` (called
+                       after ``gh pr create`` succeeds).
+            pr_number: Phase 2.2: if supplied, set ``pr_number``.
+
+        Note: ``pr_url`` and ``pr_number`` are normally set together.
+        We accept them as independent kwargs so the caller can update
+        one without the other (e.g. status flips first, then PR opens).
         """
         if status not in JOB_STATUSES:
             raise ValueError(
@@ -236,6 +361,12 @@ class JobStore:
         if error is not None:
             sets.append("error = ?")
             args.append(error)
+        if pr_url is not None:
+            sets.append("pr_url = ?")
+            args.append(pr_url)
+        if pr_number is not None:
+            sets.append("pr_number = ?")
+            args.append(int(pr_number))
         if finished:
             sets.append("finished_at = ?")
             args.append(_utcnow().isoformat())
@@ -281,7 +412,8 @@ class JobStore:
             async with db.execute(
                 """
                 SELECT id, worktree_id, status, started_at, finished_at,
-                       cost, error, model, prompt
+                       cost, error, model, prompt,
+                       repo, pr_url, pr_number, target_branch, pr_mode
                 FROM merge_jobs WHERE id = ?
                 """,
                 (job_id,),
@@ -294,6 +426,9 @@ class JobStore:
             status=row["status"], started_at=row["started_at"],
             finished_at=row["finished_at"], cost=row["cost"],
             error=row["error"], model=row["model"], prompt=row["prompt"],
+            repo=row["repo"], pr_url=row["pr_url"],
+            pr_number=row["pr_number"], target_branch=row["target_branch"],
+            pr_mode=row["pr_mode"] or "off",
         )
 
     async def list_events(self, job_id: str) -> list[JobEvent]:
@@ -331,7 +466,8 @@ class JobStore:
             async with db.execute(
                 """
                 SELECT id, worktree_id, status, started_at, finished_at,
-                       cost, error, model, prompt
+                       cost, error, model, prompt,
+                       repo, pr_url, pr_number, target_branch, pr_mode
                 FROM merge_jobs ORDER BY started_at DESC LIMIT ?
                 """,
                 (int(n),),
@@ -343,6 +479,9 @@ class JobStore:
                 status=r["status"], started_at=r["started_at"],
                 finished_at=r["finished_at"], cost=r["cost"],
                 error=r["error"], model=r["model"], prompt=r["prompt"],
+                repo=r["repo"], pr_url=r["pr_url"],
+                pr_number=r["pr_number"], target_branch=r["target_branch"],
+                pr_mode=r["pr_mode"] or "off",
             )
             for r in rows
         ]

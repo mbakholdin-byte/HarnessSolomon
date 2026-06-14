@@ -222,6 +222,61 @@ def cascade_decision() -> Any:
 
 
 # ---------------------------------------------------------------------------
+# Phase 2.2 — gh CLI subprocess stub
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def gh_subprocess_stub(monkeypatch: pytest.MonkeyPatch):
+    """Replace ``harness.agents.pr_integration._gh`` with a programmable stub.
+
+    Phase 2.2 tests use this to fake ``gh`` CLI calls without spawning
+    a real subprocess. The fixture is a factory: pass a list of
+    ``(args_predicate, returncode, stdout, stderr)`` tuples and the
+    stub returns the matching response for each ``_gh`` call.
+
+    Usage::
+
+        def test_create_pr_parses_url(gh_subprocess_stub):
+            gh_subprocess_stub([
+                # First call: ``gh auth status`` returns 0 (authenticated)
+                (("auth", "status"), 0, "Logged in to github.com\\n", ""),
+                # Second call: ``gh pr create`` returns the PR URL
+                (("pr", "create"), 0,
+                 "https://github.com/owner/repo/pull/42\\n", ""),
+            ])
+            # ... call create_pr() and assert PRCreateResult(...)
+
+    If no entries match, the stub returns ``(1, "", "gh: command not found")``
+    so tests can detect "I forgot to register this call" rather than
+    silently passing.
+    """
+    from harness.agents import pr_integration
+
+    def _install(entries: list[tuple[tuple[str, ...], int, str, str]]) -> None:
+        """Install a stub with a list of expected calls."""
+        queue = list(entries)
+        calls: list[tuple[str, ...]] = []
+
+        async def stub_gh(*args: str, **kwargs: Any) -> tuple[int, str, str]:
+            # Record only the positional args (no env= in records).
+            calls.append(tuple(args))
+            for i, (pred, rc, out, err) in enumerate(queue):
+                if pred == tuple(args) or all(
+                    a in tuple(args) for a in pred
+                ):
+                    queue.pop(i)
+                    return (rc, out, err)
+            # No match — return a generic failure.
+            return (1, "", f"gh_subprocess_stub: no match for args={args}")
+
+        monkeypatch.setattr(pr_integration, "_gh", stub_gh)
+        # Stash the calls list on the module for test introspection.
+        pr_integration._stub_calls = calls  # type: ignore[attr-defined]
+
+    return _install
+
+
+# ---------------------------------------------------------------------------
 # Real LLM marker — auto-skip when no API key is set
 # ---------------------------------------------------------------------------
 

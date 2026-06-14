@@ -1,4 +1,4 @@
-"""Tests for harness.agents.jobs.JobStore (Phase 2.1, Step 2).
+"""Tests for harness.agents.jobs.JobStore (Phase 2.1, Step 2; Phase 2.2, Step 0).
 
 Covers:
   - Schema creation (idempotent)
@@ -14,6 +14,9 @@ Covers:
   - DELETE CASCADE on merge_events when job row is dropped (no API, just verify FK works)
   - Parent dir auto-created
   - Empty list_recent(0) returns []
+  - Phase 2.2: PR integration fields (repo, pr_url, pr_number, target_branch, pr_mode)
+  - Phase 2.2: ALTER TABLE migration for pre-2.2 DBs
+  - Phase 2.2: PR-phase statuses included in recover_running()
 """
 from __future__ import annotations
 
@@ -235,3 +238,131 @@ class TestRecoverRunning:
         assert sorted(cancelled) == sorted(ids)
         for jid in ids:
             assert (await store.load(jid)).status == "cancelled"
+
+
+# === Phase 2.2: PR integration fields ===
+
+class TestPR22Schema:
+    """Phase 2.2: PR fields + ALTER TABLE migration + new statuses."""
+
+    async def test_create_accepts_pr_fields(self, tmp_path: Path) -> None:
+        """create() with repo + pr_mode + target_branch persists them."""
+        store = JobStore(tmp_path / "jobs.db")
+        jid = await store.create(
+            worktree_id="wt-pr", model="m", prompt="p",
+            repo="/abs/path/to/repo", pr_mode="draft",
+            target_branch="develop",
+        )
+        rec = await store.load(jid)
+        assert rec is not None
+        assert rec.repo == "/abs/path/to/repo"
+        assert rec.pr_mode == "draft"
+        assert rec.target_branch == "develop"
+        # PR URL/number start None.
+        assert rec.pr_url is None
+        assert rec.pr_number is None
+
+    async def test_create_defaults_pr_mode_to_off(self, tmp_path: Path) -> None:
+        """Phase 2.1 callers that don't pass pr_mode get pr_mode='off'."""
+        store = JobStore(tmp_path / "jobs.db")
+        jid = await store.create(worktree_id="wt", model="m", prompt="p")
+        rec = await store.load(jid)
+        assert rec.pr_mode == "off"
+
+    async def test_load_returns_new_fields_with_none(self, tmp_path: Path) -> None:
+        """Old rows (NULL in PR columns) load with sensible defaults."""
+        store = JobStore(tmp_path / "jobs.db")
+        jid = await store.create(worktree_id="wt", model="m", prompt="p")
+        rec = await store.load(jid)
+        assert rec.repo is None
+        assert rec.pr_url is None
+        assert rec.pr_number is None
+        assert rec.target_branch is None
+        assert rec.pr_mode == "off"  # NOT NULL DEFAULT 'off' backfill
+
+    async def test_update_status_with_pr_url(self, tmp_path: Path) -> None:
+        """update_status(pr_url=...) writes the URL column."""
+        store = JobStore(tmp_path / "jobs.db")
+        jid = await store.create(
+            worktree_id="wt", model="m", prompt="p", pr_mode="draft",
+        )
+        await store.update_status(
+            jid, "pr_open",
+            pr_url="https://github.com/owner/repo/pull/42",
+            pr_number=42,
+        )
+        rec = await store.load(jid)
+        assert rec.status == "pr_open"
+        assert rec.pr_url == "https://github.com/owner/repo/pull/42"
+        assert rec.pr_number == 42
+
+    async def test_recover_running_cancels_pr_phase(self, tmp_path: Path) -> None:
+        """PR-phase statuses are also 'in flight' and get cancelled on restart."""
+        store = JobStore(tmp_path / "jobs.db")
+        ids = []
+        for s in ("pr_creating", "pr_open", "pr_waiting_checks",
+                  "pr_waiting_review", "merging_pr"):
+            jid = await store.create(worktree_id="wt", model="m", prompt="p")
+            await store.update_status(jid, s)
+            ids.append(jid)
+        cancelled = await store.recover_running()
+        assert sorted(cancelled) == sorted(ids)
+        for jid in ids:
+            rec = await store.load(jid)
+            assert rec.status == "cancelled"
+            assert rec.error == "process restarted"
+
+    async def test_alter_table_migration_idempotent(self, tmp_path: Path) -> None:
+        """A DB with the Phase 2.1 schema is migrated in place.
+
+        We simulate a legacy DB by:
+          1. Creating a store (full Phase 2.2 schema + migration = no-op)
+          2. Dropping the new columns (sqlite supports DROP COLUMN only in 3.35+,
+             so we use a manual CREATE + INSERT with the legacy 9-col schema
+             and verify the migration back-fills on first read).
+        """
+        import sqlite3
+
+        # Create a Phase 2.1-style DB (9 columns, no PR fields).
+        legacy_db = tmp_path / "legacy.db"
+        conn = sqlite3.connect(legacy_db)
+        conn.executescript("""
+            CREATE TABLE merge_jobs (
+                id          TEXT PRIMARY KEY,
+                worktree_id TEXT NOT NULL,
+                status      TEXT NOT NULL,
+                started_at  TEXT NOT NULL,
+                finished_at TEXT,
+                cost        REAL NOT NULL DEFAULT 0.0,
+                error       TEXT,
+                model       TEXT NOT NULL,
+                prompt      TEXT NOT NULL
+            );
+            INSERT INTO merge_jobs
+                (id, worktree_id, status, started_at, cost, model, prompt)
+                VALUES ('legacy-1', 'wt-legacy', 'queued',
+                        '2026-06-14T12:00:00', 0.0, 'MiniMax-M2.7', 'old task');
+        """)
+        conn.commit()
+        conn.close()
+
+        # Open via JobStore — migration should add 5 columns.
+        store = JobStore(legacy_db)
+        rec = await store.load("legacy-1")
+        assert rec is not None
+        assert rec.worktree_id == "wt-legacy"
+        # New columns present and back-filled to safe defaults.
+        assert rec.repo is None
+        assert rec.pr_url is None
+        assert rec.pr_number is None
+        assert rec.target_branch is None
+        assert rec.pr_mode == "off"
+
+    async def test_jobstatus_enum_includes_pr_states(self) -> None:
+        """Defence against drift: every PR-phase JobStatus is in JOB_STATUSES."""
+        for s in (JobStatus.PR_CREATING, JobStatus.PR_OPEN,
+                  JobStatus.PR_WAITING_CHECKS, JobStatus.PR_WAITING_REVIEW,
+                  JobStatus.MERGING_PR):
+            assert s.value in JOB_STATUSES
+        # And the 13 total is what we expect.
+        assert len(JOB_STATUSES) == 13
