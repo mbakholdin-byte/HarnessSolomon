@@ -1,5 +1,76 @@
 # Changelog — Solomon Harness
 
+## Phase 2.3 — PR Webhooks + Auto-Merge (ЗАКРЫТО v0.7.0, 2026-06-14)
+
+**Phase 2.3 (v0.7.0) — 4 шага / 4 коммита за ~3 часа (post-Phase 1.6, единая сессия)**
+
+| # | Шаг | Коммит | Что | +Tests |
+|---|-----|--------|-----|--------|
+| 0 | Webhook store + settings | `a77b678` | `harness/agents/webhook_store.py` (NEW, ~180 LoC) — `WebhookEventStore` (aiosqlite, `webhook_events` table, `UNIQUE(delivery_id)` для idempotency, `is_duplicate` / `record_event` / `mark_processed` / `get_event` / `count_unprocessed`); `jobs.py` +1 status (`pr_auto_merge_enabled`), `find_job_by_pr_number(pr_number)` для webhook dispatch, idx на `pr_number` (idempotent миграция в `_apply_phase22_migrations`); 6 settings (`webhook_secret`, `webhook_path`, `webhook_max_payload_kb`, `auto_merge_label`, `auto_merge_method`, `auto_merge_delete_branch`); валидация `auto_merge_method ∈ {squash, merge, rebase}`; `conftest.isolated_settings` ставит `webhook_secret` для тестов | 12 |
+| 1 | HMAC + parsing | — (combined in next commit) | `harness/agents/webhook_handler.py` (NEW, ~280 LoC) — `verify_github_signature` (HMAC-SHA256 через `hmac.compare_digest`, timing-safe); `WebhookVerificationError` с `reason` (missing_signature / bad_signature / missing_secret); `WebhookEvent` (Pydantic) с 8 полями; `parse_github_payload` для 3 event types (pull_request / check_run / pull_request_review); `WebhookHandler.handle_raw` (verify → duplicate check → parse → record) + `dispatch_event` (lookup by pr_number → update JobStore) | 27 |
+| 2 | Auto-merge phase | `16f58be` | `pr_integration.py` +`enable_auto_merge` / `disable_auto_merge` (gh wrappers); `MergeJob` +`auto_merge` / `auto_merge_method` / `auto_merge_label`; `_run_pr_phase` — после `wait_for_checks` success: `enable_auto_merge()` → status `pr_auto_merge_enabled` (ждём webhook) **vs** fallback на direct `merge_pr` (Phase 2.2 behavior) при branch protection not configured; CLI флаги `--auto-merge` / `--pr-auto-merge` / `--auto-merge-method` / `--auto-merge-label`; `--pr-auto-merge` shortcut = `--pr --auto-merge`; `--pr-auto-merge` без `--background` → exit 2 | 16 |
+| 3 | Webhook route + docs | — | `harness/server/routes/agents_webhooks.py` (NEW, ~150 LoC) — `POST /api/v1/agents/webhooks/github` (HMAC verify → handle_raw → dispatch); читает `X-Hub-Signature-256` / `X-GitHub-Event` / `X-GitHub-Delivery` (case-insensitive); mount на `settings.webhook_path` (default `/api/v1/agents/webhooks/github`); lifespan wires `WebhookEventStore` + `WebhookHandler` на `app.state`; `docs/merge-queue.md` +раздел "Webhooks (Phase 2.3 v0.7.0)" — setup, event-to-status mapping, HMAC security, idempotency, CLI examples, ngrok testing | 12 |
+
+### Метрики (на 14.06.2026, end of Phase 2.3)
+
+- **Tests:** 606 (Phase 1.6 end) + 12 + 27 + 16 + 12 = **673 mock** + 5 real_llm
+- **Production:** 4 новых файла (`webhook_store.py`, `webhook_handler.py`, `routes/agents_webhooks.py`, раздел в `merge-queue.md`) + 6 модифицированных (`jobs.py`, `config.py`, `pr_integration.py`, `merge_queue.py`, `cli.py`, `app.py`, `conftest.py`, `merge-queue.md`, `CHANGELOG.md`) — ~900 LoC net new
+- **Settings:** +6 (webhook_secret, webhook_path, webhook_max_payload_kb, auto_merge_label, auto_merge_method, auto_merge_delete_branch)
+- **Job statuses:** +1 (pr_auto_merge_enabled) — 14 total
+- **HTTP routes:** +1 (`POST /api/v1/agents/webhooks/github`) — `/api/v1/*` total 10 routes
+- **CLI flags:** +4 (`--auto-merge`, `--pr-auto-merge`, `--auto-merge-method`, `--auto-merge-label`)
+- **Backward compat:** Phase 1.6 v0.6.0 + Phase 2.2 v0.5.0 тесты работают unchanged (`auth_required=False`, `--pr` defaults, default `pr_mode=off`)
+- **New deps:** 0 (hmac + hashlib stdlib; aiosqlite/pydantic/fastapi из Phase 0-1)
+- **Tag:** v0.7.0 (annotated)
+
+### Architecture decisions (Phase 2.3)
+
+- **HMAC-SHA256 для inbound webhooks** (стандарт GitHub, не Phase 1.6 tokens) — tokens для outbound, webhooks для inbound
+- **`UNIQUE(delivery_id)` constraint** — canonical idempotency для GitHub redeliveries; `is_duplicate` fast-path avoids HMAC + parse на redelivery
+- **Anti-enumeration** — same 503 для "secret not configured" и 401 для "bad signature" (no error-message side channels)
+- **No scope check на webhook route** — HMAC IS the auth (Phase 1.6 tokens для outbound); trust boundary preserved (`webhook_handler.py` не импортирует из `harness/server/auth/*`)
+- **Auto-merge fallback** — `enable_auto_merge` fails (branch protection not configured) → queue сразу вызывает `gh pr merge` (Phase 2.2 behavior); user не теряет job
+- **`pr_auto_merge_enabled` is in-flight** — Phase 2.3 добавил его в `_RUNNING_STATUSES`; `recover_running()` marks as cancelled после restart (matches other PR-phase statuses)
+- **3 base event types** (pull_request, check_run, pull_request_review) — `pull_request_review.approved` = no-op (Phase 2.4 review flow)
+- **WebhookEventStore отдельная таблица** в том же DB file что и JobStore (`agent-jobs.db`) — atomic creation, но логическое разделение для ops queries
+- **Bridge через `app.state`** — webhook handler и event store — lifespan-time singletons, `request.app.state` для route access
+- **Default `webhook_path = "/api/v1/agents/webhooks/github"`** — операторы могут override через `HARNESS_WEBHOOK_PATH` env
+- **CLI `--pr-auto-merge` shorthand** — `--pr --auto-merge` shortcut (no double-flag-typing)
+- **Webhooks полностью opt-in** — empty `webhook_secret` → 503 на route, но остальной сервер работает
+
+### Готово (Phase 2.3)
+
+- [x] Webhook receiver принимает `pull_request` / `check_run` / `pull_request_review` с HMAC-SHA256
+- [x] Bad signature → 401, missing signature → 401, `webhook_secret=""` → 503
+- [x] Redelivery (duplicate `X-GitHub-Delivery`) → 200 + `{"processed": false, "detail": "duplicate..."}` (idempotency)
+- [x] `pull_request` `closed+merged` → job marked `merged` (was `pr_auto_merge_enabled`)
+- [x] `check_run` `failure` → job marked `failed` с error message
+- [x] `pull_request_review` `changes_requested` → job marked `failed`
+- [x] Unknown event types → 200 + logged + ignored (no crash)
+- [x] `MergeQueue._run_pr_phase` с `auto_merge=True` → `pr_auto_merge_enabled` (ждёт webhook), не `merged`
+- [x] `auto_merge=True` + branch protection not configured → fallback на direct merge → `merged` (backward compat)
+- [x] CLI `--pr-auto-merge` shortcut = `--pr --auto-merge`
+- [x] CLI `--pr-auto-merge` без `--background` → exit 2 (same constraint as `--pr`)
+- [x] `docs/merge-queue.md` раздел "Webhooks" с setup, payload examples, HMAC, troubleshooting
+- [x] 0 new deps (`git diff pyproject.toml` пуст)
+- [x] Trust boundary preserved: `webhook_handler.py` НЕ импортирует из `harness/server/auth/*`; `routes/agents_webhooks.py` НЕ импортирует из `harness/agents/*` (only через `request.app.state`)
+- [x] Per commit: `pytest -m "not real_llm" -q` зелёный, `git status` clean
+- [x] Tag `v0.7.0` annotated + push
+
+### Carryover в Phase 2.4+
+
+- **Stacked / multi-PR per job** (split one task into N dependent PRs, dependency graph)
+- **PR review templating** (CODEOWNERS-aware reviewers, issue-link auto-resolve, pull_request_template.md injection)
+- **Multi-tenant `gh` config** (different GitHub identities per tenant)
+- **Web UI для PR** (clickable pr_url + status badges в React)
+- **Cross-PR dependency tracking** (PR-B waits for PR-A merge)
+- **GitHub rate limit handling** (automatic backoff, 403 detection)
+- **Outbound webhooks** (Phase 4 hooks — notify external systems о job state changes)
+- **Custom event mappings** (config-driven webhook → action mapping)
+- **Pull_request_review `approved` short-circuit** (currently no-op — Phase 2.4 для `pr_waiting_review` status)
+
+---
+
 ## Phase 1.6 — Scope-gated API v1.0 (ЗАКРЫТО v0.6.0, 2026-06-14)
 
 **Phase 1.6 (v0.6.0) — 6 шагов / 6 коммитов за ~3.5 часа (post-Phase 2.2, единая сессия)**
