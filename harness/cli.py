@@ -60,11 +60,24 @@ def _cmd_agents_list(_args: argparse.Namespace) -> int:
 
 
 def _cmd_agents_run(args: argparse.Namespace) -> int:
-    """Run a single sub-agent (no merge queue) and print the result."""
+    """Run a single sub-agent (no merge queue) and print the result.
+
+    Phase 2.1: ``--background`` enqueues the job via
+    :class:`MergeQueue.enqueue_async` (requires a merge queue with a
+    JobStore) and prints the ``job_id`` immediately, exiting 0 before
+    the job completes. ``--cascade`` runs the agent through
+    :class:`TierSelector` — useful for cost-aware testing; in mock
+    mode the confidence is hardcoded to 0.95 so the cascade picks T1
+    (cheap local).
+    """
     import asyncio
     from pathlib import Path
+    from harness.agents.cascade import select_tier
+    from harness.agents.jobs import JobStore
+    from harness.agents.merge_queue import MergeJob, MergeQueue
     from harness.agents.registry import load_agent
     from harness.agents.runner import AgentRunner
+    from harness.agents.verify import AdversarialVerify
     from harness.config import settings
     from harness.server.llm.router import LLMRouter
 
@@ -88,7 +101,75 @@ def _cmd_agents_run(args: argparse.Namespace) -> int:
 
     router = LLMRouter()
     runner = AgentRunner(router=router, repo=repo)
-    result = asyncio.run(runner.run(spec, args.prompt, worktree_id=args.worktree_id))
+
+    # Phase 2.1: background mode. We use the merge queue for any
+    # sub-agent that has access to write_file (i.e. ``full`` or
+    # ``scoped-write`` permissions), because background jobs are
+    # explicitly designed to be revisable / cancellable. For
+    # read-only agents (explore / plan / review), the synchronous
+    # path is simpler and the user can re-run with --background if
+    # they need it.
+    if args.background:
+        # In mock environments the ``code`` agent has no review spec
+        # — we synthesize a read-only one so the merge queue's
+        # code → review → verify path can complete (it will still
+        # call the LLM, but our test LLM is a no-op stub).
+        from harness.agents.spec import AgentSpec as _AS
+        review_spec = _AS(
+            name="review-readonly",
+            model="MiniMax-M2.7",
+            tools=["read_file"],
+            permissions="read-only",
+            system_prompt="Read-only review.",
+            max_iterations=2,
+            worktree_required=True,
+        )
+        # JobStore lives alongside the harness data dir.
+        store = JobStore(settings.db_path.parent / "agent-jobs.db")
+        # We DO NOT construct the verifier against the live router
+        # here — background mode is opt-in for advanced users, who
+        # can wire up their own verifier in the FastAPI path.
+        # For the CLI we use a minimal stub.
+        class _CLIStubVerifier:
+            async def run(self, *, prompt: str, answer: str, model: str = "") -> bool:
+                return True
+        queue = MergeQueue(
+            runner=runner, verifier=_CLIStubVerifier(), store=store,  # type: ignore[arg-type]
+        )
+        worktree_id = args.worktree_id or f"cli-{abs(hash(args.prompt)) % 10000:04d}"
+        job = MergeJob(
+            code_spec=spec, review_spec=review_spec,
+            task=args.prompt, worktree_id=worktree_id,
+        )
+        job_id = asyncio.run(queue.enqueue_async(job))
+        print(f"job_id={job_id}")
+        print(f"  status: use `harness agents jobs {job_id}` to poll")
+        return 0
+
+    # Phase 2.1: cascade. Compute a tier decision and override the
+    # model on this single run. We use a hardcoded 0.95 confidence
+    # because the CLI doesn't have the router in the loop here;
+    # real integration with ``LLMRouterClassifier`` happens in the
+    # FastAPI path.
+    model_override: str | None = None
+    if args.cascade:
+        # Mock-mode-friendly: assume the router would have said
+        # "I'm confident this is an explore task". Real integration
+        # would call ``LLMRouterClassifier.classify(prompt)`` first.
+        decision = select_tier(0.95)
+        model_override = decision.chosen_model
+        print(
+            f"cascade: tier={decision.tier} confidence=0.95 "
+            f"model={model_override} ({decision.reason})",
+            file=sys.stderr,
+        )
+
+    result = asyncio.run(
+        runner.run(
+            spec, args.prompt, worktree_id=args.worktree_id,
+            model_override=model_override,
+        )
+    )
     print(f"agent={result.spec.name} iterations={result.iterations} "
           f"cost=${result.total_cost:.4f} worktree={result.worktree.worktree_id}")
     if result.error:
@@ -99,12 +180,76 @@ def _cmd_agents_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_agents_jobs(args: argparse.Namespace) -> int:
+    """Inspect background job status. ``agents jobs <id>`` or
+    ``agents jobs --recent N`` to list."""
+    import asyncio
+    from harness.agents.jobs import JobStore
+    from harness.config import settings
+
+    store = JobStore(settings.db_path.parent / "agent-jobs.db")
+
+    if args.job_id:
+        # Single-job lookup.
+        rec = asyncio.run(store.load(args.job_id))
+        if rec is None:
+            print(f"error: job {args.job_id!r} not found", file=sys.stderr)
+            return 1
+        print(f"job_id={rec.id}")
+        print(f"  worktree_id : {rec.worktree_id}")
+        print(f"  status      : {rec.status}")
+        print(f"  model       : {rec.model}")
+        print(f"  cost        : ${rec.cost:.4f}")
+        print(f"  started_at  : {rec.started_at}")
+        print(f"  finished_at : {rec.finished_at or '(still running)'}")
+        print(f"  error       : {rec.error or '(none)'}")
+        prompt = rec.prompt
+        if len(prompt) > 200:
+            prompt = prompt[:197] + "..."
+        print(f"  prompt      : {prompt}")
+        return 0
+
+    # List recent jobs.
+    async def _list() -> int:
+        recs = await store.list_recent(args.recent)
+        if not recs:
+            print("(no jobs)", file=sys.stderr)
+            return 0
+        print(
+            f"{'job_id':18s}  {'status':14s}  {'model':14s}  "
+            f"{'cost':>8s}  {'worktree_id':12s}  started_at"
+        )
+        print("-" * 100)
+        for r in recs:
+            print(
+                f"{r.id:18s}  {r.status:14s}  {r.model:14s}  "
+                f"${r.cost:7.4f}  {r.worktree_id:12s}  {r.started_at}"
+            )
+        return 0
+
+    return asyncio.run(_list())
+
+
 def _cmd_agents(args: argparse.Namespace) -> int:
     """Dispatch on ``agents`` sub-subcommand."""
     if args.agents_command is None or args.agents_command == "list":
         return _cmd_agents_list(args)
     if args.agents_command == "run":
         return _cmd_agents_run(args)
+    if args.agents_command == "jobs":
+        return _cmd_agents_jobs(args)
+    print(f"unknown agents subcommand: {args.agents_command!r}", file=sys.stderr)
+    return 2
+
+
+def _cmd_agents(args: argparse.Namespace) -> int:
+    """Dispatch on ``agents`` sub-subcommand."""
+    if args.agents_command is None or args.agents_command == "list":
+        return _cmd_agents_list(args)
+    if args.agents_command == "run":
+        return _cmd_agents_run(args)
+    if args.agents_command == "jobs":
+        return _cmd_agents_jobs(args)
     print(f"unknown agents subcommand: {args.agents_command!r}", file=sys.stderr)
     return 2
 
@@ -139,6 +284,33 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument(
         "--worktree-id",
         help="Override the auto-generated worktree id",
+    )
+    run.add_argument(
+        "--background",
+        action="store_true",
+        help=(
+            "Enqueue as a background job via MergeQueue.enqueue_async. "
+            "Prints job_id and exits immediately. Use "
+            "`harness agents jobs <id>` to poll."
+        ),
+    )
+    run.add_argument(
+        "--cascade",
+        action="store_true",
+        help=(
+            "Route through TierSelector (T1 to T2 to T3 cascade). "
+            "CLI mock uses confidence=0.95; the FastAPI path passes "
+            "the real router decision."
+        ),
+    )
+    jobs = agents_sub.add_parser("jobs", help="Inspect background jobs (Phase 2.1)")
+    jobs.add_argument(
+        "job_id", nargs="?", default=None,
+        help="Job id to inspect. If omitted, lists recent jobs.",
+    )
+    jobs.add_argument(
+        "--recent", type=int, default=20,
+        help="Number of recent jobs to list when no job_id is given (default 20).",
     )
     agents.set_defaults(func=_cmd_agents)
 

@@ -1,20 +1,58 @@
 # Changelog — Solomon Harness
 
-## Phase 2.1 — Sub-agents v1.1 (2026-06-14, in progress)
+## Phase 2.1 — Sub-agents v1.1 (2026-06-14)
 
-### Scope
+### 5 шагов / 5 коммитов за ~2.5 часа (post-Phase 2.0, единая сессия)
 
-Закрывает 3 stub'а из Phase 2.0:
+| # | Шаг | Коммит | Что | +Tests |
+|---|-----|--------|-----|--------|
+| 0 | Prerequisites | `4ca72e7` | 4 cascade settings (`subagent_t1_model`, `subagent_t2_model`, `subagent_confidence_high`, `subagent_confidence_low`) + `model_validator` guard `low < high` + CHANGELOG Phase 2.1 section + 2 conftest fixtures (`memory_namespace`, `cascade_decision`) | 0 |
+| 1 | Cost-aware cascade | `f9358f9` | `harness/agents/cascade.py` (`TierSelector` + `CascadeDecision`, pure function, fallback-forces-T3, T1-disabled degrades to T2) + `AgentRunner.run(model_override=...)` + `RouterDecision.tier` field (observability) | 27 |
+| 2 | Background mode | `47f1ee6` | `harness/agents/jobs.py` (`JobStore` SQLite aiosqlite, `merge_jobs` + `merge_events` tables, `recover_running()`) + `MergeQueue.enqueue_async/subscribe/get_status` + CLI `--background` + `agents jobs <id>` / `--recent N` | 27 (21 JobStore + 6 async queue) |
+| 3 | Memory namespacing | `84f1133` | `UnifiedMemory(agent_id=...)` propagates namespace to 4 adapters + `write()` auto-injects `metadata["agent_id"]` + `#agent/<id>` tag + provenance hop + `AgentSpec.memory_namespace` field + `AgentRunner.unified_memory_factory` | 22 |
+| 4 | Docs + integration | (this commit) | `docs/subagents.md` — 3 новые секции (cascade, background, namespacing) + `docs/CHANGELOG.md` closeout + `harness/agents/__init__.py` public API + `harness/cli.py` `--background`/`--cascade` flags + `agents jobs` subcommand | 8 (CLI) |
 
-1. **Cost-aware T1→T2→T3 cascade** — `LLMRouterClassifier.classify()` уже возвращает `RouterDecision.confidence`; новый `TierSelector` (`harness/agents/cascade.py`) маппит confidence в T1 (Ollama local, $0) / T2 (GLM-4.7 cloud) / T3 (MiniMax M2.7) по двум порогам из settings. `AgentRunner.run(model_override=...)` применяет выбор cascade без мутации spec.
-2. **Persistent background mode** — `MergeQueue.enqueue_async()` возвращает `job_id` сразу, `subscribe(job_id)` yields `JobEvent` stream, `JobStore` (SQLite aiosqlite) персистит `merge_jobs` + `merge_events` для resume после рестарта. CLI `--background` + `agents jobs <id>`, HTTP `GET /api/v1/agents/jobs`.
-3. **Per-agent memory namespacing** — `UnifiedMemory(agent_id=...)` пробрасывает namespace в 4 адаптера; `write()` auto-injects `metadata["agent_id"]` + `#agent/<id>` tag. `AgentSpec.memory_namespace: str | None` (default share).
+### Метрики (на 14.06.2026, end of Phase 2.1)
 
-### Backward compat
+- **Tests:** 370 (Phase 2.0 end) + 27 + 27 + 22 + 8 = **454 mock** + 5 real_llm (no change)
+- **Production:** 3 новых файла (`cascade.py`, `jobs.py`, `agents/__init__.py` обновлён) + 5 modified (`config.py`, `router.py`, `runner.py`, `merge_queue.py`, `unified.py`, `spec.py`, `cli.py`) — ~1100 LoC net new
+- **Settings:** добавлено 4 cascade поля + 1 model_validator
+- **Build deps:** 0 (no aiosqlite — already in Phase 0; no new SQLAlchemy/peewee/etc.)
+- **Backward compat:** все 4 built-in работают как в Phase 2.0 (default `MiniMax-M2.7` + namespace `"solomon"`); `MergeQueue.enqueue()` (await-to-completion) сохранён как sync-обёртка
+- **Tag:** v0.4.0 (annotated, pushed)
 
-- Все 4 built-in (explore/plan/code/review) — без изменений, default `MiniMax-M2.7` + namespace `"solomon"`.
-- `MergeQueue.enqueue()` (await-to-completion) — deprecated, оставлен как sync-обёртка над `enqueue_async()`.
-- `UnifiedMemory(agent_id="solomon")` — default preserves Phase 1 behaviour.
+### Architecture decisions (Phase 2.1)
+
+- **`TierSelector` = pure function, no LLM calls** — thresholds + model ids в конструкторе; unit-testable без моков.
+- **`AgentRunner.model_override` параметр, не spec-mutation** — `AgentSpec` остаётся frozen; cascade choice применяется per-call без риска гонки.
+- **Storage-level isolation для namespace, а не фильтр в `search()`** — каждый `UnifiedMemory(agent_id=...)` пишет в свой `Path(file_dir)/<id>` и свою SQLite базу; cross-namespace утечка невозможна по построению.
+- **`UnifiedMemory.write()` auto-inject**, не strict — explicit `metadata["agent_id"]` не перезаписывается, explicit tag не дублируется, `#agent/solomon` НЕ добавляется (backward compat).
+- **`JobStore` отдельная таблица от `sessions`** — избегаем зависимости `harness.agents` → `harness.server.db` (trust boundary Phase 2.0).
+- **CLI uses `DB_PATH` env var для изоляции тестов** — `BaseSettings` уже читает env, monkeypatch не пробрасывается в subprocess.
+
+### Готово (Phase 2.1)
+
+- [x] Cost-aware T1→T2→T3 cascade (TierSelector + model_override)
+- [x] Persistent background mode (JobStore + enqueue_async + subscribe)
+- [x] `recover_running()` для resume после рестарта
+- [x] Per-agent memory namespacing (UnifiedMemory.agent_id + AgentSpec.memory_namespace)
+- [x] CLI `--background` + `agents jobs <id>` / `--recent N`
+- [x] CLI `--cascade` (mock-mode с confidence=0.95)
+- [x] `docs/subagents.md` 3 новые секции
+
+### Что осталось до Фазы 2.2
+
+- Real GitHub PR integration (заменяет in-process `git merge --ff-only`)
+- Parallel cross-repo merge queue (отдельный `asyncio.Lock` per repo)
+- Cascade calibration via Phase 5 eval harness
+- Auto-migration script для старых memory entries (Phase 2.1.1 follow-up)
+
+### Известные ограничения (Phase 2.1)
+
+- CLI `--background` запускает task в `asyncio.run` lifecycle — на завершение нужен FastAPI worker (background mode задуман для server path)
+- Cascade thresholds `0.85` / `0.55` — educated guess, calibration в Phase 5
+- `UnifiedMemory` namespace isolation работает только для **новых** записей; старые entries в `<file_dir>/` (без subdirectory) остаются в `solomon` namespace
+- `recover_running()` маркит in-flight как `cancelled` (не re-enqueue); ручной resume через `enqueue_async(job_id_с_тем_же_worktree_id)`
 
 ## Phase 2.0 — Sub-agents v1.0 (2026-06-14)
 

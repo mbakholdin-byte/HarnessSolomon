@@ -1,4 +1,4 @@
-# Sub-agents — Solomon Harness Phase 2.0
+# Sub-agents — Solomon Harness Phase 2.0 + 2.1
 
 Sub-agents are isolated, role-specific LLM loops that run inside their own
 `git worktree` and are dispatched by an LLM-as-router. Four built-in agents
@@ -176,24 +176,184 @@ import level (verified by static tests):
 If you need a "sub-agent calls sub-agent" workflow, run the second
 agent from the **parent** (your code), not from the first agent.
 
-## Out of scope (Phase 2.1+)
+## Cost-aware T1→T2→T3 cascade (Phase 2.1)
 
-The following are deliberately not in Phase 2.0:
+The router returns a `confidence` float (0.0–1.0) alongside the
+agent name. The `TierSelector` (in `harness/agents/cascade.py`)
+maps that confidence to a tier:
 
-- **Cost-aware T1→T2→T3 cascade** (Phase 2.1) — currently every sub-agent
-  hits the same `MiniMax-M2.7` (T3 cloud). The router returns
-  `confidence` so a future cascade can promote to a more capable model
-  on low confidence, or fall back to a cheap local model on high
-  confidence.
-- **Persistent background mode** (Phase 2.1) — all sub-agents are
-  await-to-completion. Progress reporting and resumption land in
-  Phase 2.1.
+| Confidence band             | Tier | Default model  | Cost                |
+|-----------------------------|------|----------------|---------------------|
+| `>= subagent_confidence_high` (0.85) | T1   | `qwen3:8b` (Ollama) | local, $0         |
+| `[low, high)` (0.55–0.85)   | T2   | `glm-4.7` (cloud)   | mid-tier cloud    |
+| `< subagent_confidence_low` (0.55)  | T3   | `MiniMax-M2.7` (cloud) | premium cloud |
+
+When the router returned `fallback=True` (e.g. parse failure),
+the selector **forces T3** — we don't take the cheap-local risk
+when the router itself wasn't sure.
+
+When `subagent_t1_model` is empty (e.g. CI without Ollama), the
+T1 band is **skipped** and the cascade degrades to T2/T3 on the
+same thresholds. There is no failure on the T1-missing path.
+
+**Settings (override via env or `.env`):**
+
+```bash
+SUBAGENT_T1_MODEL=qwen3:8b
+SUBAGENT_T2_MODEL=glm-4.7
+SUBAGENT_CONFIDENCE_HIGH=0.85
+SUBAGENT_CONFIDENCE_LOW=0.55
+```
+
+The model validator rejects `low >= high` at load time so a
+misconfigured cascade fails fast instead of degenerating to a
+binary T1/T3 with no T2 band.
+
+**Wiring the cascade into a run** (programmatic):
+
+```python
+from harness.agents.cascade import select_tier
+
+decision = select_tier(router_output.confidence, fallback=router_output.fallback)
+result = await runner.run(
+    spec, prompt,
+    model_override=decision.chosen_model,  # or None to keep spec.model
+)
+```
+
+**CLI smoke** (uses confidence=0.95 to deterministically pick T1):
+
+```bash
+python -m harness agents run explore "list 4 built-ins" --no-worktree --cascade
+# stderr: cascade: tier=T1 confidence=0.95 model=qwen3:8b ...
+```
+
+## Persistent background mode (Phase 2.1)
+
+`MergeQueue.enqueue_async()` returns a `job_id` immediately and runs
+the job in a background `asyncio.Task`. Status and event log persist
+in a small SQLite table (`merge_jobs` + `merge_events`).
+
+**Enqueue:**
+
+```bash
+python -m harness agents run code "add type hints" --background
+# job_id=8a3f9b2c1d4e5f6a
+#   status: use `harness agents jobs 8a3f9b2c1d4e5f6a` to poll
+```
+
+**Poll a single job:**
+
+```bash
+python -m harness agents jobs 8a3f9b2c1d4e5f6a
+# job_id=8a3f9b2c1d4e5f6a
+#   worktree_id : cli-4155
+#   status      : merged
+#   model       : MiniMax-M2.7
+#   cost        : $0.0023
+#   started_at  : 2026-06-14T12:31:29.706000
+#   finished_at : 2026-06-14T12:32:14.913000
+#   error       : (none)
+```
+
+**List recent jobs:**
+
+```bash
+python -m harness agents jobs --recent 20
+# job_id              status          model           cost   worktree_id  started_at
+# -----------------------------------------------------------------------------------
+# 8a3f9b2c1d4e5f6a    merged          MiniMax-M2.7    $0.0023 cli-4155   2026-06-14T12:31:29
+# ...
+```
+
+**Storage:** the JobStore lives at
+`<settings.db_path.parent>/agent-jobs.db`. The CLI picks it up
+automatically; programmatic users construct
+`JobStore(path)` and pass it via `MergeQueue(..., store=store)`.
+
+**Resume after restart:** the same store file is read on next
+startup. `JobStore.recover_running()` (called automatically by
+the FastAPI lifespan handler) marks any `running_*` jobs as
+`cancelled` with `error="process restarted"`. Operators can
+re-enqueue manually with the original `worktree_id`.
+
+**Status values:** `queued`, `running_code`, `running_review`,
+`verifying`, `merged`, `failed`, `timeout`, `cancelled`.
+
+## Per-agent memory namespacing (Phase 2.1)
+
+By default, every sub-agent shares the parent
+`UnifiedMemory(agent_id="solomon")` — there's no isolation, and
+the search/recall surface is one big pool.
+
+To give a custom sub-agent its own namespace, add
+`memory_namespace: <kebab-case>` to its `.md` frontmatter:
+
+```markdown
+---
+name: code-review
+model: MiniMax-M2.7
+tools: [read_file, grep, glob]
+permissions: read-only
+memory_namespace: code-review   # own hmem / mem0 / hybrid / file dirs
+max_iterations: 8
+---
+
+You review code changes against our internal style guide.
+```
+
+The runner threads `spec.memory_namespace` into a
+`UnifiedMemory(agent_id="code-review")` whose 4 adapters
+use disjoint storage paths:
+
+| Layer | Adapter        | How the namespace is propagated       |
+|-------|----------------|---------------------------------------|
+| L1    | hmem           | `HmemAdapter(agent="code-review")`     |
+| L2    | mem0           | `Mem0Adapter(user_id="code-review", collection="solomon-code-review-memories")` |
+| L3    | hybrid (SQLite)| `HybridAdapter(project="code-review", default_tags=["#agent/code-review"])` |
+| L4    | file (Markdown)| `FileAdapter(memory_dir=<root>/code-review)` |
+
+`UnifiedMemory.write()` auto-stamps:
+
+- `memory.metadata["agent_id"]` (unless the caller set it explicitly)
+- `memory.tags.append("#agent/<id>")` (skipped for the default
+  `solomon` namespace to avoid polluting existing memories)
+- `memory.provenance.append(ProvenanceEntry(layer="L_meta",
+  source="unified", id=<agent_id>))` so the audit trail records
+  which facade stamped the entry
+
+**Programmatic factory:**
+
+```python
+def unified_memory_for_spec(spec: AgentSpec) -> UnifiedMemory:
+    return UnifiedMemory(
+        hmem_dir=settings.hmem_dir,
+        mem0_dir=settings.mem0_dir,
+        hybrid_dir=settings.hybrid_dir,
+        file_dir=settings.file_dir,
+        agent_id=spec.memory_namespace or "solomon",
+    )
+
+runner = AgentRunner(router=router, repo=repo,
+                     unified_memory_factory=unified_memory_for_spec)
+```
+
+`AgentRunner.get_unified_memory(spec)` is cached by `spec.name`
+so the same spec reuses the same `UnifiedMemory` across runs.
+
+## Out of scope (Phase 2.2+)
+
+The following are deliberately not in Phase 2.1:
+
 - **Real GitHub PR integration** (Phase 2.2) — the merge queue is
   in-process (`git merge --ff-only` into the local main). PR creation
   lands in Phase 2.2.
 - **Parallel cross-repo merge queue** (Phase 2.2) — jobs are serialised
   by a single `asyncio.Lock`.
-- **Per-agent memory namespacing** in `UnifiedMemory` (Phase 2.1) —
-  all sub-agents currently share the parent `solomon` memory scope.
-- **MemPalaceAdapter** for L2.5 (separate track) — not a Phase 2
+- **Cascade calibration** (Phase 5) — the thresholds `0.85` / `0.55`
+  are educated guesses. We will measure them on a real eval set
+  (Phase 5) and adjust.
+- **Hot-reload `.harness/agents/*.md`** (Phase 4) — registry reads
+  the directory on every call. A file-watcher is Phase 4.
+- **MemPalaceAdapter** for L2.5 (separate track) — not a Phase 2.1
   concern despite the L2.5 placeholder comment in `harness/memory/`.
