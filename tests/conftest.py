@@ -86,6 +86,17 @@ def isolated_settings(
     # ``monkeypatch.setattr(settings, "auth_required", True)`` in
     # the test body or a per-test fixture).
     monkeypatch.setattr(settings, "auth_required", False)
+    # Phase 2.3: the webhook receiver needs a non-empty secret for
+    # HMAC verification. We set a test-only secret here so the
+    # webhook tests can compute a valid HMAC; tests that want
+    # "webhooks disabled" behaviour set this to ``""`` explicitly.
+    # 32+ chars satisfies the "real-looking secret" assumption in
+    # ``verify_github_signature`` (no upper bound enforced, but
+    # GitHub's docs recommend 32+).
+    monkeypatch.setattr(
+        settings, "webhook_secret",
+        "test-secret-32-chars-long-enough-for-hmac",
+    )
     # Force the DB layer to re-init under the new path.
     db_sqlite._db_initialized = False
     return paths

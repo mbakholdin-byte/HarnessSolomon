@@ -362,7 +362,8 @@ class TestPR22Schema:
         """Defence against drift: every PR-phase JobStatus is in JOB_STATUSES."""
         for s in (JobStatus.PR_CREATING, JobStatus.PR_OPEN,
                   JobStatus.PR_WAITING_CHECKS, JobStatus.PR_WAITING_REVIEW,
-                  JobStatus.MERGING_PR):
+                  JobStatus.MERGING_PR, JobStatus.PR_AUTO_MERGE_ENABLED):
             assert s.value in JOB_STATUSES
-        # And the 13 total is what we expect.
-        assert len(JOB_STATUSES) == 13
+        # 14 statuses as of Phase 2.3 (was 13 in Phase 2.2; we added
+        # PR_AUTO_MERGE_ENABLED for the ``gh pr merge --auto`` flow).
+        assert len(JOB_STATUSES) == 14

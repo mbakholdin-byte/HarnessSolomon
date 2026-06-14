@@ -219,6 +219,67 @@ class Settings(BaseSettings):
         ),
     )
 
+    # === Inbound GitHub webhooks + auto-merge (Phase 2.3) ===
+    webhook_secret: str = Field(
+        default="",
+        description=(
+            "HMAC-SHA256 shared secret for the inbound GitHub webhook "
+            "receiver. Set this to the same value configured in the "
+            "GitHub repo's webhook settings. Empty string = webhooks "
+            "disabled (the route returns 503). The value is NEVER "
+            "logged or echoed in error messages — only the env var "
+            "NAME is surfaced. The HMAC verification uses stdlib "
+            "``hmac.compare_digest`` for timing-safe comparison."
+        ),
+    )
+    webhook_path: str = Field(
+        default="/api/v1/agents/webhooks/github",
+        description=(
+            "URL path where the GitHub webhook receiver is mounted. "
+            "Configure this in the GitHub repo's webhook settings "
+            "exactly. Default: ``/api/v1/agents/webhooks/github``."
+        ),
+    )
+    webhook_max_payload_kb: int = Field(
+        default=256,
+        ge=1,
+        le=10240,
+        description=(
+            "Maximum accepted webhook payload size in KB. GitHub "
+            "webhook payloads are typically <5KB, but ``check_run`` "
+            "events with verbose annotations can be larger. 256KB "
+            "is a generous cap; the route returns 413 on overflow."
+        ),
+    )
+    auto_merge_label: str = Field(
+        default="harness-auto-merge",
+        description=(
+            "Label required by ``gh pr merge --auto`` (GitHub "
+            "branch-protection typically requires a specific label "
+            "to enable auto-merge). Set per-repo in the GitHub "
+            "branch-protection rule. The merge queue adds this "
+            "label automatically before calling ``enable_auto_merge``."
+        ),
+    )
+    auto_merge_method: str = Field(
+        default="squash",
+        description=(
+            "Default merge method for ``gh pr merge --auto``. One of "
+            "``squash`` (default), ``merge`` (merge commit), "
+            "``rebase`` (rebase + ff). Override per-job via the CLI "
+            "``--auto-merge-method`` flag."
+        ),
+    )
+    auto_merge_delete_branch: bool = Field(
+        default=True,
+        description=(
+            "Whether ``gh pr merge --auto`` should pass "
+            "``--delete-branch`` to clean up the head branch after "
+            "a successful merge. Default True (matches Phase 2.2 "
+            "behavior)."
+        ),
+    )
+
     @model_validator(mode="after")
     def _cascade_thresholds_ordered(self) -> "Settings":
         """Guard against a misconfigured cascade: low must be strictly below high.
@@ -237,6 +298,11 @@ class Settings(BaseSettings):
             raise ValueError(
                 f"pr_strategy must be one of 'auto' / 'strict' / 'off', "
                 f"got {self.pr_strategy!r}"
+            )
+        if self.auto_merge_method not in ("squash", "merge", "rebase"):
+            raise ValueError(
+                f"auto_merge_method must be one of 'squash' / 'merge' / 'rebase', "
+                f"got {self.auto_merge_method!r}"
             )
         return self
 

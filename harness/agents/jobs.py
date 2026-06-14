@@ -41,6 +41,9 @@ logger = logging.getLogger(__name__)
 #: jobs that opt into ``pr_mode="draft"`` or ``pr_mode="ready"``. They
 #: are terminal at the queue level (the job IS merged locally or
 #: waiting for a human to merge) but in-flight at the GitHub level.
+#: Phase 2.3 adds ``pr_auto_merge_enabled`` for jobs that called
+#: ``gh pr merge --auto`` (branch-protection-aware) and are waiting
+#: for an inbound webhook to mark them ``merged``.
 JOB_STATUSES: tuple[str, ...] = (
     "queued",
     "running_code",
@@ -51,6 +54,7 @@ JOB_STATUSES: tuple[str, ...] = (
     "pr_waiting_checks",
     "pr_waiting_review",
     "merging_pr",
+    "pr_auto_merge_enabled",
     "merged",
     "failed",
     "timeout",
@@ -62,9 +66,13 @@ JOB_STATUSES: tuple[str, ...] = (
 #: Phase 2.2: include the PR-phase statuses — a job waiting for CI
 #: checks is still in flight (a crash should mark it cancelled, not
 #: orphan the PR).
+#: Phase 2.3: include ``pr_auto_merge_enabled`` — a job waiting for
+#: GitHub's branch-protection conditions to clear is still in flight
+#: (a crash should mark it cancelled, not orphan the PR).
 _RUNNING_STATUSES: frozenset[str] = frozenset({
     "queued", "running_code", "running_review", "verifying",
-    "pr_creating", "pr_open", "pr_waiting_checks", "pr_waiting_review", "merging_pr",
+    "pr_creating", "pr_open", "pr_waiting_checks", "pr_waiting_review",
+    "merging_pr", "pr_auto_merge_enabled",
 })
 
 
@@ -82,6 +90,12 @@ class JobStatus(str, Enum):
     PR_WAITING_CHECKS = "pr_waiting_checks"
     PR_WAITING_REVIEW = "pr_waiting_review"
     MERGING_PR = "merging_pr"
+    #: Phase 2.3: ``gh pr merge --auto`` succeeded; the job is now
+    #: waiting for GitHub's branch-protection conditions to clear
+    #: (e.g. an outstanding approval). The actual ``merged`` transition
+    #: is delivered via the inbound webhook (see
+    #: :mod:`harness.agents.webhook_handler`).
+    PR_AUTO_MERGE_ENABLED = "pr_auto_merge_enabled"
     MERGED = "merged"
     FAILED = "failed"
     TIMEOUT = "timeout"
@@ -153,6 +167,12 @@ class JobEvent:
 #:   ``target_branch TEXT`` — ``"main"`` / ``"develop"`` / etc.
 #:   ``pr_mode TEXT NOT NULL DEFAULT 'off'`` — ``"off" | "draft" | "ready"``
 #:
+#: Phase 2.3 adds a sibling table ``webhook_events`` for inbound
+#: GitHub webhook idempotency tracking. See
+#: :mod:`harness.agents.webhook_store` for the wrapper class. The
+#: ``UNIQUE(delivery_id)`` constraint makes ``record_event`` a no-op
+#: on redelivery.
+#:
 #: For DBs that pre-date 2.2, the columns are added via idempotent
 #: ``ALTER TABLE ... ADD COLUMN`` migrations in :meth:`JobStore._ensure_schema`
 #: (guarded by ``PRAGMA table_info`` so it's safe to run on fresh DBs
@@ -186,6 +206,18 @@ CREATE TABLE IF NOT EXISTS merge_events (
     FOREIGN KEY (job_id) REFERENCES merge_jobs(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_merge_events_job ON merge_events(job_id, id);
+
+CREATE TABLE IF NOT EXISTS webhook_events (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    delivery_id   TEXT NOT NULL UNIQUE,
+    event_type    TEXT NOT NULL,
+    action        TEXT,
+    received_at   TEXT NOT NULL,
+    processed     INTEGER NOT NULL DEFAULT 0,
+    payload       TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_webhook_events_delivery ON webhook_events(delivery_id);
+CREATE INDEX IF NOT EXISTS idx_webhook_events_processed ON webhook_events(processed, received_at);
 """
 
 #: ALTER TABLE statements applied on existing DBs that pre-date
@@ -258,7 +290,8 @@ class JobStore:
         self._initialized = True
 
     async def _apply_phase22_migrations(self, db: aiosqlite.Connection) -> None:
-        """Add Phase 2.2 columns to a pre-existing ``merge_jobs`` table.
+        """Add Phase 2.2 columns + Phase 2.3 index to a pre-existing
+        ``merge_jobs`` table.
 
         For each column in :data:`_PR22_ALTER_COLUMNS`, check
         ``PRAGMA table_info(merge_jobs)`` and issue an ``ALTER TABLE``
@@ -266,6 +299,13 @@ class JobStore:
         standard SQLite pattern (the ``ADD COLUMN`` itself is not
         idempotent — the ``IF NOT EXISTS`` form is only supported in
         SQLite 3.35+ and we want to support older versions too).
+
+        Phase 2.3: also creates ``idx_merge_jobs_pr_number`` AFTER
+        the columns are added. We can't put this index in
+        :data:`SCHEMA` because on a legacy (pre-2.2) DB, the column
+        doesn't exist yet and the index creation would fail. The
+        index is for the Phase 2.3 webhook handler's
+        ``find_job_by_pr_number`` lookup.
         """
         async with db.execute("PRAGMA table_info(merge_jobs)") as cur:
             existing = {row[1] async for row in cur}
@@ -278,6 +318,13 @@ class JobStore:
             await db.execute(
                 f"ALTER TABLE merge_jobs ADD COLUMN {col_name} {col_type}"
             )
+        # Phase 2.3: index on pr_number for the webhook handler's
+        # ``find_job_by_pr_number`` lookup. Idempotent — IF NOT EXISTS
+        # means subsequent runs are a no-op.
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_merge_jobs_pr_number "
+            "ON merge_jobs(pr_number)"
+        )
 
     # --- create / update ---
 
@@ -417,6 +464,46 @@ class JobStore:
                 FROM merge_jobs WHERE id = ?
                 """,
                 (job_id,),
+            ) as cur:
+                row = await cur.fetchone()
+        if row is None:
+            return None
+        return JobRecord(
+            id=row["id"], worktree_id=row["worktree_id"],
+            status=row["status"], started_at=row["started_at"],
+            finished_at=row["finished_at"], cost=row["cost"],
+            error=row["error"], model=row["model"], prompt=row["prompt"],
+            repo=row["repo"], pr_url=row["pr_url"],
+            pr_number=row["pr_number"], target_branch=row["target_branch"],
+            pr_mode=row["pr_mode"] or "off",
+        )
+
+    async def find_job_by_pr_number(self, pr_number: int) -> JobRecord | None:
+        """Look up a job by its ``pr_number`` column.
+
+        Phase 2.3: used by the inbound webhook handler to dispatch
+        ``pull_request`` and ``check_run`` events to the originating
+        job. There should be at most ONE active job per ``pr_number``
+        (the queue holds a per-repo lock; an enqueued job holds the
+        PR until the webhook arrives), so we return the most recent
+        match. Returns ``None`` if no job has this ``pr_number`` —
+        webhooks can fire for PRs that the queue did not create (e.g.
+        a human-opened PR), and the handler should ignore those.
+        """
+        await self._ensure_schema()
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                """
+                SELECT id, worktree_id, status, started_at, finished_at,
+                       cost, error, model, prompt,
+                       repo, pr_url, pr_number, target_branch, pr_mode
+                FROM merge_jobs
+                WHERE pr_number = ?
+                ORDER BY started_at DESC
+                LIMIT 1
+                """,
+                (int(pr_number),),
             ) as cur:
                 row = await cur.fetchone()
         if row is None:
