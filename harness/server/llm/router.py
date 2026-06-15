@@ -123,6 +123,10 @@ class LLMRouter:
             CompletionResult with content, tool_calls, usage, and cost.
         """
         logger.debug("completion: model=%s tools=%s", model, bool(tools))
+        # Phase 3 v1.4.0: Anthropic prompt caching (router-level
+        # cache_control injection). No-op when disabled or for
+        # non-Anthropic models. See ``_maybe_inject_cache_control``.
+        messages = self._maybe_inject_cache_control(messages, model)
         call_kwargs: dict[str, Any] = dict(kwargs)
         if tools is not None:
             call_kwargs["tools"] = tools
@@ -289,6 +293,10 @@ class LLMRouter:
         so callers can persist a complete record.
         """
         logger.debug("streaming_completion: model=%s tools=%s", model, bool(tools))
+        # Phase 3 v1.4.0: Anthropic prompt caching (router-level
+        # cache_control injection). No-op when disabled or for
+        # non-Anthropic models.
+        messages = self._maybe_inject_cache_control(messages, model)
         call_kwargs: dict[str, Any] = dict(kwargs)
         call_kwargs["stream"] = True
         if tools is not None:
@@ -474,6 +482,93 @@ class LLMRouter:
             completion / 1_000_000.0
         ) * spec.pricing_output
         return round(cost, 9)
+
+    # --- Prompt caching (Phase 3 v1.4.0) ---
+
+    def _maybe_inject_cache_control(
+        self,
+        messages: list[dict[str, Any]],
+        model: str,
+    ) -> list[dict[str, Any]]:
+        """Return messages with Anthropic ``cache_control`` markers.
+
+        Phase 3 v1.4.0 "Prompt caching" strategy (Anthropic 4-strategy
+        playbook). When ``settings.prompt_cache_enabled`` is ``True``
+        AND ``settings.prompt_cache_strategy == "anthropic"`` AND the
+        model id starts with ``"anthropic/"`` we mark:
+
+        * the first message (typically the system prompt) with
+          ``{"type": "ephemeral"}``
+        * the last two messages (latest user turn + trailing assistant
+          context) with the same marker
+
+        Anything else (strategy ``"vllm"``, ``"off"``, non-Anthropic
+        model, disabled setting) → returns the input unchanged. The
+        ``vllm`` strategy is a no-op here because vLLM prefix caching
+        is an engine-level feature the operator configures outside
+        the harness.
+
+        Why inject at the router level (not the provider level)? The
+        plan agent review (Phase 3 v1.4.0) flagged that adding an
+        Anthropic provider module is out of scope for the 12-week
+        roadmap. The router is the only place that already knows
+        about the model id, and it forwards the message list as-is to
+        litellm. We mutate a *copy* of the list / message dicts so
+        callers are not surprised by side effects.
+
+        Args:
+            messages: The OpenAI-style message list.
+            model: The model id passed to ``completion()`` or
+                ``streaming_completion()``. Compared with
+                ``startswith("anthropic/")`` after the
+                ``_to_litellm_model_id`` pass — we accept both
+                catalog and pre-prefixed ids.
+
+        Returns:
+            A new list with the markers injected, or the original
+            list if the strategy is not active.
+        """
+        # Read settings defensively — the import is local to keep
+        # the router importable in tests where settings is patched
+        # before instantiation.
+        try:
+            from harness.config import settings as _settings
+        except Exception:  # noqa: BLE001 — settings unavailable
+            return messages
+
+        if not getattr(_settings, "prompt_cache_enabled", False):
+            return messages
+        if getattr(_settings, "prompt_cache_strategy", "off") != "anthropic":
+            return messages
+        # Accept both catalog ids (e.g. "MiniMax-M2.7") and pre-prefixed
+        # litellm ids (e.g. "anthropic/claude-sonnet-4-6").
+        catalog_id = model
+        if "/" not in catalog_id:
+            # Map to litellm form so we can compare prefixes.
+            try:
+                catalog_id = self._to_litellm_model_id(model)
+            except Exception:  # noqa: BLE001 — unknown model id
+                return messages
+        if not catalog_id.startswith("anthropic/"):
+            return messages
+        if not messages:
+            return messages
+
+        cache_control = {"type": "ephemeral"}
+        # Shallow-copy each message dict so we can mutate without
+        # surprising the caller. We also need a new list because we
+        # only mark specific indices.
+        out: list[dict[str, Any]] = []
+        last_idx = len(messages) - 1
+        for i, msg in enumerate(messages):
+            if not isinstance(msg, dict):
+                out.append(msg)
+                continue
+            new_msg = dict(msg)
+            if i == 0 or i == last_idx or i == last_idx - 1:
+                new_msg["cache_control"] = cache_control
+            out.append(new_msg)
+        return out
 
 
 __all__ = ["LLMRouter", "CompletionResult", "StreamEvent", "get_truncation_counts", "reset_truncation_counts"]
