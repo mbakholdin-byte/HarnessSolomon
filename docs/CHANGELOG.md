@@ -1,5 +1,50 @@
 # Changelog — Solomon Harness
 
+## Phase 3 v1.2.0 — Write context (ЗАКРЫТО v1.2.0, 2026-06-15)
+
+**Phase 3 v1.2.0 — 5 шагов / 5 коммитов / +44 net new тестов (1032 → 1076) / 0 new required deps / 0 breaking changes**
+
+Реализует **"Write context"** стратегию из Anthropic context-engineing
+playbook: persistent per-`(session_id, agent_id)` scratchpad для
+заметок и плана задачи.
+
+**Step 0 — Scratchpad module + storage** (`499a6fd`)
+- `harness/agents/scratchpad.py` — `Note`, `PlanStep` dataclasses, `NoteLevel` (L0/L1/L2), `PlanStatus` enum
+- `harness/agents/scratchpad_store.py` — `ScratchpadStore` (2 tables, WAL + busy_timeout=5000)
+- 4 settings: `scratchpad_enabled`, `scratchpad_max_notes_per_session`, `scratchpad_l0_max_bytes`, `scratchpad_audit_log`
+- 17 tests (dataclass marshalling + schema + L0 cap + plan basics)
+
+**Step 1 — Tools + audit + denylist** (`39ee284`)
+- `harness/context/scratchpad_audit.py` — JSONL mirror (mirror `CompactionAudit`)
+- 4 tool schemas в `TOOL_SCHEMAS` (`scratchpad_write_note` / `_read_notes` / `_plan_step` / `_mark_done`)
+- 4 `_method` в `ToolRuntime` + extended `ToolName` Literal + `scratchpad` + `scratchpad_audit` kwargs
+- `_READ_ONLY_DENY` обновлён: 3 write tools в denylist, `read_notes` остаётся доступным
+- 10 tests (schemas + dispatch + fail-open + denylist)
+
+**Step 2 — AgentRunner factory + session_id threading** (`42bd0ff`)
+- `scratchpad_factory: Callable[[AgentSpec, str | None], Any] | None = None` kwarg в `AgentRunner.__init__`
+- `scratchpad_audit: Any = None` kwarg
+- `session_id: str | None = None` kwarg в `run()` / `stream()` / `_drive()` / `_stream_drive()`
+- Fail-open в `_drive` / `_stream_drive`: factory exception → `logger.warning` + `scratchpad=None`
+- Trust boundary test: `test_runner_does_not_import_scratchpad` (grep-forbidden)
+- 6 factory tests + 1 trust boundary test
+
+**Step 3 — CLI + observability** (`d0575db`)
+- `harness context {read,write,plan}` subcommand (mirror `_cmd_agents_jobs` style)
+- 3 handlers: `_cmd_context_read`, `_cmd_context_write`, `_cmd_context_plan`
+- 7 tests (parser + read/write/plan/mark-done/help)
+
+**Step 4 — Docs + tag v1.2.0**
+- `docs/PHASE3-write.md` (~330 LoC, 6 sections: Overview / Architecture / Settings / Tools / CLI / Storage / Trust boundary / Lessons / Out of scope / Files)
+- `docs/CHANGELOG.md` (this section)
+- `_output/.../roadmap.md` (Phase 3 v1.2.0 row → done, 6/12 closed)
+- `tests/test_phase3_v1_2_integration.py` (5 e2e tests)
+- Annotated tag `v1.2.0`
+
+**Trust boundary preserved**: `runner.py` continues to NOT import
+`ScratchpadStore` / `Note` / `PlanStep` / `ScratchpadAudit` (verified
+by `test_runner_does_not_import_scratchpad`).
+
 ## Phase 3.5 — Persistent Compact Store (ЗАКРЫТО v1.1.0, 2026-06-15)
 
 **Phase 3.5 (v1.1.0) — 4 шага / 4 коммита / +58 net new тестов (968 → 1026) / 0 new required deps / 0 breaking changes**
