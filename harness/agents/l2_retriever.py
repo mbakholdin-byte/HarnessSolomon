@@ -28,6 +28,7 @@ continues to NOT import this module from ``runner.py``.
 """
 from __future__ import annotations
 
+import json
 import logging
 import math
 import re
@@ -135,6 +136,26 @@ class _Embedder(Protocol):
     dim: int
 
     async def embed_query(self, text: str) -> list[float]: ...
+
+
+@runtime_checkable
+class _CuratorRouter(Protocol):
+    """Minimal LLM router protocol for the LLM-curator (Step 2).
+
+    The harness's :class:`harness.server.llm.router.LLMRouter`
+    conforms via its ``completion(messages, model, ...) -> CompletionResult``
+    method. We only need ``.completion`` here; the protocol
+    intentionally omits ``streaming_completion`` to keep the
+    surface narrow.
+    """
+
+    async def completion(
+        self,
+        messages: list[dict[str, Any]],
+        model: str,
+        tools: list[dict[str, Any]] | None = None,
+        **kwargs: Any,
+    ) -> Any: ...
 
 
 class _DenseRetriever:
@@ -256,6 +277,93 @@ class L2Retriever:
             bm25_hits, dense_hits, top_k=top_k, rrf_k=self._rrf_k,
         )
 
+    async def curated_search(
+        self,
+        query: str,
+        top_k: int = 10,
+        candidate_k: int = 50,
+        *,
+        notes: list[Note] | None = None,
+        router: _CuratorRouter | None = None,
+        model: str = "qwen3:8b",
+    ) -> list[tuple[Note, float]]:
+        """LLM-curator re-rank on top of the hybrid search.
+
+        The flow is:
+          1. Pull ``candidate_k`` notes via the plain hybrid
+             :meth:`search` (BM25 + dense + RRF).
+          2. Build a single-shot curator prompt that asks the
+             model to score each note 0-100 by relevance.
+          3. Parse the JSON response and re-rank.
+          4. On any failure (no router, malformed JSON, model
+             refuses) we fall back to the plain hybrid top-K —
+             the LLM-curator is a precision enhancement, not a
+             correctness gate.
+
+        Args:
+            query:       Free-text query.
+            top_k:       Final list size.
+            candidate_k: How many candidates to hand the LLM. The
+                         LLM-curator's value proposition is
+                         "narrow N candidates to top-K"; passing
+                         the whole corpus defeats the purpose.
+            notes:       In-memory L2 notes (same as ``search``).
+            router:      An LLM router (duck-typed). When ``None``,
+                         we skip the curator and return the plain
+                         hybrid result.
+            model:       Model id for the curator call. Default
+                         ``qwen3:8b`` (T1 in the cost cascade).
+
+        Returns:
+            A list of ``(Note, score)`` sorted by score descending.
+            Scores are in ``[0, 100]`` after the curator pass, or
+            RRF scores ``[0, ~0.05]`` when the curator was skipped.
+        """
+        if top_k <= 0:
+            return []
+        # Step 1: hybrid search to get candidates.
+        candidates = await self.search(
+            query, top_k=candidate_k, notes=notes,
+        )
+        if not candidates:
+            return []
+        # Step 2: curator (with fail-open to plain hybrid).
+        if router is None:
+            logger.debug(
+                "L2 curated_search: no router, returning plain hybrid top-%d",
+                top_k,
+            )
+            return candidates[:top_k]
+        prompt = _build_curator_prompt(query, [n for n, _ in candidates])
+        messages = [
+            {"role": "system", "content": "You are a precise relevance scorer."},
+            {"role": "user", "content": prompt},
+        ]
+        try:
+            response = await router.completion(
+                messages=messages, model=model, tools=None,
+            )
+            content = getattr(response, "content", None) or ""
+        except Exception as exc:  # noqa: BLE001 — fail-open
+            logger.warning(
+                "L2 curated_search: curator LLM call failed (%s); "
+                "falling back to plain hybrid top-%d",
+                exc, top_k,
+            )
+            return candidates[:top_k]
+        # Step 3: parse + re-rank.
+        scored = parse_curator_response(content, [n for n, _ in candidates])
+        if not scored:
+            logger.warning(
+                "L2 curated_search: curator returned no usable scores "
+                "(content=%r); falling back to plain hybrid top-%d",
+                content[:200], top_k,
+            )
+            return candidates[:top_k]
+        # Sort by curator score descending, then take top_k.
+        scored.sort(key=lambda ns: -ns[1])
+        return scored[:top_k]
+
 
 def _rrf_fuse(
     bm25_hits: list[tuple[Note, float]],
@@ -287,4 +395,117 @@ def _rrf_fuse(
     return [(notes[nid], score) for nid, score in ranked[:top_k]]
 
 
-__all__ = ["L2Retriever"]
+# === LLM-curator (Step 2) ===
+
+#: Prompt for the LLM-curator re-ranker. The curator sees the
+#: query and the top-N candidate notes, and returns a JSON
+#: list of ``{id, score}`` pairs in ``[0, 100]``. We keep the
+#: scoring rubric in the prompt so a model swap doesn't break
+#: the contract — the harness enforces the contract by parsing
+#: the JSON, not by trusting the free-form reasoning.
+_CURATOR_PROMPT = (
+    "You are a relevance scorer for an agent's scratchpad L2 archive.\n"
+    "Given a query and a list of notes, score each note's relevance "
+    "to the query on a 0-100 scale.\n"
+    "\n"
+    "Scoring rubric:\n"
+    "  - 90-100: directly answers the query\n"
+    "  - 50-89:  related, useful context\n"
+    "  - 10-49:  tangentially related\n"
+    "  - 0-9:    unrelated\n"
+    "\n"
+    "Be strict — only notes that DIRECTLY address the query should "
+    "score above 50. Prefer precision over recall.\n"
+    "\n"
+    "Query: __QUERY__\n"
+    "\n"
+    "Notes:\n"
+    "__NOTES__\n"
+    "\n"
+    'Return ONLY a JSON list: [{"id": 42, "score": 85}, '
+    '{"id": 43, "score": 30}]\n'
+)
+
+
+def _format_curator_notes(notes: list[Note]) -> str:
+    """Render the candidate notes for the curator prompt.
+
+    The format is intentionally minimal (id + tags + content) so a
+    small model (T1 = Qwen3 8B) can scan the list quickly. We
+    truncate each note's content to 500 chars to keep the prompt
+    bounded for ``candidate_k=50`` candidates.
+    """
+    lines: list[str] = []
+    for n in notes:
+        tags = f" [{','.join(n.tags)}]" if n.tags else ""
+        content = (n.content or "")[:500]
+        lines.append(f"- (id={int(n.id)}){tags} {content}")
+    return "\n".join(lines) if lines else "(no candidates)"
+
+
+def _build_curator_prompt(query: str, candidates: list[Note]) -> str:
+    # Use ``replace`` rather than ``str.format`` so the curly braces
+    # in the example-JSON (``[{"id": 42, ...}]``) don't trip the
+    # format-spec parser. The two placeholders below are unique
+    # enough that a literal collision is essentially impossible.
+    return (
+        _CURATOR_PROMPT
+        .replace("__QUERY__", query)
+        .replace("__NOTES__", _format_curator_notes(candidates))
+    )
+
+
+def parse_curator_response(
+    response_text: str, candidates: list[Note],
+) -> list[tuple[Note, float]]:
+    """Parse the LLM-curator's JSON response into ``(Note, score)`` pairs.
+
+    Defensive: the LLM may return markdown-fenced JSON (triple-backtick
+    ``json ... `` blocks), a trailing newline, a leading "Sure!" preamble,
+    or plain malformed output. We strip the common wrappers, attempt
+    ``json.loads``, and fall back to an empty list on any error so
+    the caller can degrade to the plain hybrid search.
+    """
+    if not response_text:
+        return []
+    # Strip common markdown fences and leading prose.
+    text = response_text.strip()
+    # Find the first '[' and last ']' — keeps JSON even when the
+    # model adds pre/postamble.
+    start = text.find("[")
+    end = text.rfind("]")
+    if start < 0 or end < 0 or end <= start:
+        return []
+    candidate_str = text[start:end + 1]
+    try:
+        parsed = json.loads(candidate_str)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(parsed, list):
+        return []
+    # Build an id → Note map for fast lookup.
+    by_id = {int(n.id): n for n in candidates}
+    scored: list[tuple[Note, float]] = []
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        # Both ``id`` and ``score`` are required — missing either
+        # means the LLM didn't follow the schema for this item,
+        # so we skip it rather than guessing a default.
+        if "id" not in item or "score" not in item:
+            continue
+        try:
+            nid = int(item["id"])
+            score = float(item["score"])
+        except (TypeError, ValueError):
+            continue
+        if nid in by_id and 0.0 <= score <= 100.0:
+            scored.append((by_id[nid], score))
+    return scored
+
+
+__all__ = [
+    "L2Retriever",
+    "_build_curator_prompt",
+    "parse_curator_response",
+]
