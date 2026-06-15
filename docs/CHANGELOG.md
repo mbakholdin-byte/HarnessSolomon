@@ -1,5 +1,84 @@
 # Changelog — Solomon Harness
 
+## Phase 3.5 — Persistent Compact Store (ЗАКРЫТО v1.1.0, 2026-06-15)
+
+**Phase 3.5 (v1.1.0) — 4 шага / 4 коммита / +58 net new тестов (968 → 1026) / 0 new required deps / 0 breaking changes**
+
+Расширение Phase 3. Persistent compact cache: на cache hit — summariser LLM call skip, zero cost, instant reconnect.
+
+**Что закрыто:**
+
+1. **Persistent compact store** — `harness/agents/compact_store.py` (NEW, ~200 LoC). SQLite `compact_store` table в существующей `agent-jobs.db` (sibling `merge_jobs`/`merge_events`/`webhook_events`). Keyed on `(session_id, source_hash)`. Auto-versioned per session. WAL + `busy_timeout=5000` для contention с JobStore.
+2. **Compactor DI + cache lookup** — `ContextCompactor` принимает `store: CompactStore | None = None` + `session_id` kwarg в `maybe_compact()`. Cache hit → return rebuilt (zero LLM cost). Cache miss → existing slow path + persist.
+3. **UnifiedMemory wiring** — закрыт Phase 3 placeholder `app.py:117`. `UnifiedMemory` + `CompactStore` инстанциируются в lifespan и DI'ятся в compactor. Best-effort init (failure → `None`).
+4. **Observability** — `harness/context/compaction_audit.py` (NEW, ~70 LoC). `CompactionAudit` с JSONL mirror в `data/audit/compaction-YYYY-MM-DD.ndjson`. Mirrors `RedactionAudit` pattern. Opt-in via `compaction_audit_log=True` (default OFF).
+5. **Settings (3 new)** — `compaction_persistent_store` (default True), `compaction_cache_max_versions` (default 5, `ge=1`), `compaction_audit_log` (default False). Validator rejects `cache_max_versions < 1` when `persistent_store=True`.
+
+**Архитектурные решения:**
+
+- **Source hash cache key** — `sha256(json.dumps(messages, sort_keys=True))[:16]`. Новая история → новый hash → автоматическая cache invalidation (no explicit invalidator needed). Collision risk ~2^-64 (negligible).
+- **Fail-open** — cache lookup и persist failures логируются и fall through к slow path. Compactor never raises из-за cache. 8 из 25 cache тестов проверяют error paths.
+- **Lifespan construction** — `CompactStore(settings.db_path.parent / "agent-jobs.db")`. Тот же файл, что JobStore + WebhookEventStore (sibling tables). WAL mode + `busy_timeout=5000` для contention.
+- **Reconstruction** — cache хранит только summary, не полный message list. Reconstruct через `_rebuild_from_cache(messages, cached.summary)` = sliding window + inject summary.
+- **Backward compat** — `store=None` default preserves pre-Phase-3.5 in-memory behavior. `session_id` kwarg in `maybe_compact` is keyword-only (backward compat: positional args unchanged).
+- **Trust boundary preserved** — `runner.py` continues to NOT import `CompactStore` или `CompactionAudit` (verified by `test_agent_runner.py:516-575`).
+
+**Trust boundary verification (Step 0..4):**
+
+- `runner.py`: 0 top-level imports of new modules (static test passes)
+- `merge_queue.py`: 0 top-level imports
+- `outbound.py`: 0 top-level imports
+- `webhook_handler.py`: 0 top-level imports (Phase 3 redaction sink #9 intact)
+- `compaction.py`: `TYPE_CHECKING` import only, runtime uses injected `store`/`audit`
+- `app.py`: lazy imports in lifespan only
+
+**Out of scope (Phase 4+):**
+
+- API endpoint `POST /api/v1/sessions/{id}/compact` (manual operator trigger)
+- Background worker (cron-style scan for over-threshold sessions)
+- Cross-session handoff через L2 (continuity across sessions)
+- Pruning implementation для `compaction_cache_max_versions`
+- Prometheus counters для cache hit rate
+- Audit log rotation (currently append-only)
+- Compaction policy DSL (per-session settings override)
+- Compaction replay/rollback UI
+
+**Step 0 — CompactStore module** (`5a6fe6b`)
+- `harness/agents/compact_store.py` (NEW)
+- `tests/test_compact_store.py` (25 tests)
+- Schema migration idempotency, lookup/insert/list_for_session/count
+- 993 → 968+25 = 993 passed, 0 regressions
+
+**Step 1 — Compactor DI + cache lookup** (`f9a5d0a`)
+- `harness/context/compaction.py`: `store=` param, `_source_hash`, `_rebuild_from_cache`, `_persist_compact`
+- `harness/server/agent/session.py`: pass `session_id=self.session_id` в `maybe_compact`
+- `tests/test_compactor_cache.py` (12 tests): cache hit/miss, source_hash determinism, persistent_store=False, lookup/persist errors, session_id kwargs, rebuild
+- 993 → 1005 passed, 0 regressions
+
+**Step 2 — UnifiedMemory wiring + app.py:117 closure** (`5741dbf`)
+- `harness/config.py`: 3 new settings + validator
+- `harness/server/app.py`: lifespan instantiates UnifiedMemory + CompactStore, DI в compactor
+- `tests/test_phase35_wiring.py` (11 tests): settings defaults/overrides/validation, lifespan integration
+- 1005 → 1016 passed, 0 regressions
+
+**Step 3 — Observability + audit** (`122857a`)
+- `harness/context/compaction_audit.py` (NEW)
+- `harness/context/compaction.py`: audit call sites (cache_hit, run, persist_failed)
+- `harness/server/app.py`: instantiate CompactionAudit в lifespan
+- `tests/test_compactor_observability.py` (10 tests): structured logs, JSONL audit, fallback to logger
+- 1016 → 1026 passed, 0 regressions
+
+**Step 4 — Docs + tag v1.1.0** (TBD)
+- `docs/PHASE3.5.md` (NEW, ~250 LoC operator guide)
+- `docs/CHANGELOG.md`: this section
+- `docs/roadmap.md`: Phase 3.5 → ЗАКРЫТО v1.1.0
+- `C:\MyAI\_output\2026-06\12.06 Harness-Claude-Code-Architecture\roadmap.md`: Phase 3.5 row sync
+- `C:\Users\mbakh\.claude\projects\C--MyAI\memory\harness-phase-3-5-complete-2026-06-15.md`: full summary
+- `MEMORY.md` index: entry added
+- Tag `v1.1.0` annotated
+
+---
+
 ## Phase 3 — Compaction + Embeddings + Privacy (ЗАКРЫТО v1.0.0, 2026-06-15)
 
 **Phase 3 (v1.0.0) — 4 шага / 4 коммита / +140 net new тестов (822 → 962) / 0 new required deps / 2 new optional deps (`onnxruntime`, `numpy` via `[embeddings]` extra)**
