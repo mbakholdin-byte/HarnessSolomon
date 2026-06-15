@@ -675,6 +675,28 @@ class Settings(BaseSettings):
             "(LLM must call ``scratchpad_read_notes`` to consult L0)."
         ),
     )
+    scratchpad_l2_qdrant_url: str | None = Field(
+        default=None,
+        description=(
+            "Phase 3 v1.3.0: optional Qdrant server URL (e.g. "
+            "``http://localhost:6333``) for L2 note embeddings. When "
+            "set AND the server is reachable, L2 notes are stored in "
+            "a dedicated Qdrant collection for dense+BM25 hybrid "
+            "retrieval. When ``None`` (default) OR the server is "
+            "unreachable, the harness falls back to the in-SQLite "
+            "``SqliteL2Store`` (vector column in ``scratchpad_notes`` "
+            "as BLOB) — no new required dependencies, works offline."
+        ),
+    )
+    scratchpad_l2_qdrant_collection: str = Field(
+        default="scratchpad_l2",
+        description=(
+            "Phase 3 v1.3.0: Qdrant collection name for L2 note "
+            "embeddings. Default ``scratchpad_l2``. Override to "
+            "share a single Qdrant instance across multiple Harness "
+            "deployments (one collection per environment)."
+        ),
+    )
 
     # === Phase 3: Embeddings (ONNX local) ===
     embeddings_dir: Path = Field(
