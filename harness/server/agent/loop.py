@@ -233,8 +233,15 @@ class AgentLoop:
         # if it exceeds the configured threshold. The compactor returns
         # a NEW list; we rebind so the in-place ``messages.append``
         # below still works against the compacted set.
+        # Phase 3 v1.5.0: pass ``force_idle_check=True`` so the
+        # time/turn/hybrid trigger can fire BEFORE the token threshold
+        # (Plan agent BLOCKER B8 — AgentLoop is the "active session"
+        # path; ``Session.load_history`` is the "resume" path and
+        # passes ``force_idle_check=False`` by default).
         if self.compactor is not None:
-            messages = await self.compactor.maybe_compact(messages, model)
+            messages = await self.compactor.maybe_compact(
+                messages, model, force_idle_check=True,
+            )
         # Phase 3: redact any PII / secrets in the message list before
         # the LLM call. ``redact_dict`` is a no-op for non-string
         # content and idempotent (running twice yields the same

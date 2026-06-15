@@ -211,6 +211,36 @@ async def lifespan(app: FastAPI):
                 )
                 compact_store = None
             app.state.compact_store = compact_store
+            # Phase 3 v1.5.0: optional time/turn/hybrid trigger. The
+            # trigger is constructed here (lifespan scope) and
+            # passed to the compactor; the compactor only sees a
+            # duck-typed handle so it never imports the idle_trigger
+            # module. The trigger is a no-op (returns False) when
+            # ``compaction_trigger == "token"`` (default) — the
+            # classic token-threshold behaviour is preserved.
+            idle_trigger = None
+            try:
+                trigger_mode = getattr(
+                    settings, "compaction_trigger", "token",
+                )
+                if trigger_mode in ("turn", "time", "hybrid"):
+                    from harness.agents.idle_trigger import (
+                        TimeBasedCompactionTrigger,
+                    )
+                    idle_trigger = TimeBasedCompactionTrigger(settings=settings)
+                    print(
+                        f"[harness] idle_trigger: mode={trigger_mode} "
+                        f"(turn_interval="
+                        f"{getattr(settings, 'compaction_turn_interval', 20)}, "
+                        f"idle_minutes="
+                        f"{getattr(settings, 'compaction_time_idle_minutes', 30)})"
+                    )
+            except Exception as trigger_exc:
+                print(
+                    f"[harness] idle_trigger disabled (init failed: "
+                    f"{type(trigger_exc).__name__}: {trigger_exc})"
+                )
+                idle_trigger = None
             # Wire everything into the compactor.
             # Phase 3.5: optional audit writer. The audit log is
             # best-effort and opt-in via ``compaction_audit_log``;
@@ -232,6 +262,7 @@ async def lifespan(app: FastAPI):
                     if settings.pre_compact_enabled
                     else None
                 ),
+                idle_trigger=idle_trigger,
             )
             app.state.compactor = compactor
             print(

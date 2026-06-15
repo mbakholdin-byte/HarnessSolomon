@@ -119,9 +119,15 @@ class ChatSession:
         # Phase 3 plan §10 "JSONL session mirror rewrites").
         # Phase 3.5: pass ``session_id`` so the compactor can use its
         # persistent cache (``CompactStore``) keyed on this session.
+        # Phase 3 v1.5.0: pass ``force_idle_check=False`` explicitly
+        # so a session resume does NOT trigger an idle compact —
+        # the resume path is "load what we had" (Plan agent BLOCKER
+        # B8 — resume vs active distinction).
         if self.compactor is not None:
             history = await self.compactor.maybe_compact(
-                history, self.model, session_id=self.session_id,
+                history, self.model,
+                session_id=self.session_id,
+                force_idle_check=False,
             )
         return history
 

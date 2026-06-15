@@ -197,11 +197,19 @@ class ContextCompactor:
         store: "CompactStore | None" = None,
         audit: "CompactionAudit | None" = None,
         pre_compact_hook: "Callable[..., Any] | None" = None,
+        idle_trigger: Any = None,
     ) -> None:
         self._settings = settings
         self._router = router
         self._memory = memory
         self._session_id = session_id or "unknown"
+        # Phase 3 v1.5.0: optional time/turn/hybrid trigger. Typed as
+        # ``Any`` to keep the compactor free of any import of
+        # :mod:`harness.agents.idle_trigger` — the compactor only
+        # calls ``.should_trigger(...)`` and ``.mark_compacted(...)``
+        # on the duck-typed instance. ``None`` → no idle evaluation
+        # (pure token mode, pre-v1.5.0 behaviour).
+        self._idle_trigger = idle_trigger
         # Phase 3.5: optional persistent cache. ``store=None`` preserves
         # the pre-Phase-3.5 in-memory behavior (no cache, re-summarise
         # on every call). When provided AND ``compaction_persistent_store``
@@ -251,6 +259,7 @@ class ContextCompactor:
         model: str,
         *,
         session_id: str | None = None,
+        force_idle_check: bool = False,
     ) -> list[dict[str, Any]]:
         """Compact ``messages`` if over threshold. Returns a NEW list.
 
@@ -286,11 +295,86 @@ class ContextCompactor:
         """
         if not self._settings.compaction_enabled or not messages:
             return messages
+        # Phase 3 v1.5.0: time/turn/hybrid trigger fires BEFORE the
+        # token threshold check (Plan agent BLOCKER B3, B8). The
+        # trigger is consulted only when:
+        #   * the compactor was constructed with an ``idle_trigger``
+        #   * ``force_idle_check`` is True (AgentLoop sets this;
+        #     Session.load_history does NOT — see Plan agent B8 for
+        #     the resume vs active distinction)
+        #   * the configured ``compaction_trigger`` is one of
+        #     ``"turn" / "time" / "hybrid"`` (legacy ``"token"``
+        #     skips the idle check, preserving pre-v1.5.0 semantics)
+        # On trigger fire we skip the token threshold check and go
+        # straight to the slow path — the trigger is itself a
+        # "must compact now" decision. After the slow path runs
+        # we call ``mark_compacted`` for the bookkeeping and
+        # return early.
+        effective_session_id = session_id or self._session_id
+        if self._idle_trigger is not None and force_idle_check:
+            idle_fired = False
+            try:
+                if self._idle_trigger.should_trigger(
+                    session_id=effective_session_id,
+                    messages=messages,
+                ):
+                    ctx = _model_ctx(model, self._settings)
+                    target = int(ctx * self._settings.compaction_target_ratio)
+                    tokens = _estimate_tokens(messages)
+                    compacted = await self._run_slow_path(
+                        messages, model,
+                        effective_session_id=effective_session_id,
+                        target=target,
+                        tokens=tokens,
+                        cache_enabled=False,
+                    )
+                    try:
+                        self._idle_trigger.mark_compacted(
+                            session_id=effective_session_id,
+                            messages=compacted,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(
+                            "compactor: idle_trigger.mark_compacted failed: %s",
+                            exc,
+                        )
+                    return compacted
+            except Exception as exc:  # noqa: BLE001 — fail-open
+                logger.warning(
+                    "compactor: idle_trigger check failed: %s; "
+                    "falling back to token threshold",
+                    exc,
+                )
+            try:
+                if self._idle_trigger.should_trigger(
+                    session_id=effective_session_id,
+                    messages=messages,
+                ):
+                    ctx = _model_ctx(model, self._settings)
+                    target = int(ctx * self._settings.compaction_target_ratio)
+                    tokens = _estimate_tokens(messages)
+                    # NOTE: do NOT return directly — bind to a
+                    # variable so the post-slow-path bookkeeping
+                    # (mark_compacted, fail-open logging) runs.
+                    messages = await self._run_slow_path(
+                        messages, model,
+                        effective_session_id=effective_session_id,
+                        target=target,
+                        tokens=tokens,
+                        cache_enabled=False,
+                    )
+            except Exception as exc:  # noqa: BLE001 — fail-open
+                logger.warning(
+                    "compactor: idle_trigger check failed: %s; "
+                    "falling back to token threshold",
+                    exc,
+                )
+                # On idle trigger failure, fall through to the
+                # normal token-threshold path below.
         # Phase 3.5: resolve the effective session id for the cache.
         # The caller may pass a per-call override (e.g. when
         # ``ChatSession.session_id`` becomes available after
         # construction); we fall back to the constructor value.
-        effective_session_id = session_id or self._session_id
         ctx = _model_ctx(model, self._settings)
         threshold = int(ctx * self._settings.compaction_threshold_ratio)
         target = int(ctx * self._settings.compaction_target_ratio)
@@ -352,13 +436,29 @@ class ContextCompactor:
                 )
                 # Fall through to the slow path.
         # Slow path: sliding window → summarise → persist.
-        return await self._run_slow_path(
+        compacted = await self._run_slow_path(
             messages, model,
             effective_session_id=effective_session_id,
             target=target,
             tokens=tokens,
             cache_enabled=cache_enabled,
         )
+        # Phase 3 v1.5.0: tell the idle trigger we just ran a
+        # compact so the next ``should_trigger`` call sees a fresh
+        # baseline. Best-effort: any exception in the trigger is
+        # logged but never raised (fail-open — the compactor's
+        # output is correct even if the bookkeeping fails).
+        if self._idle_trigger is not None:
+            try:
+                self._idle_trigger.mark_compacted(
+                    session_id=effective_session_id,
+                    messages=compacted,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "compactor: idle_trigger.mark_compacted failed: %s", exc,
+                )
+        return compacted
 
     async def _run_slow_path(
         self,
