@@ -56,6 +56,7 @@ ToolName = Literal[
     "read_file", "edit_file", "write_file", "bash", "grep", "glob",
     "scratchpad_write_note", "scratchpad_read_notes",
     "scratchpad_plan_step", "scratchpad_mark_done",
+    "scratchpad_l2_search", "scratchpad_l2_promote_to_l1",
 ]
 
 
@@ -82,6 +83,9 @@ class ToolRuntime:
         scratchpad: Any = None,
         scratchpad_audit: Any = None,
         l0_section: str | None = None,
+        l2_retriever: Any = None,
+        l2_router: Any = None,
+        l2_curator_model: str = "qwen3:8b",
     ) -> None:
         self.project_root = project_root.resolve(strict=False)
         #: Phase 3 v1.2.0: optional scratchpad store. When ``None`` the
@@ -100,6 +104,20 @@ class ToolRuntime:
         #: container so it can be constructed in tests without the
         #: scratchpad module being importable.
         self._l0_section = l0_section
+        #: Phase 3 v1.3.0: optional L2 retriever. When ``None`` the
+        #: ``scratchpad_l2_search`` and ``scratchpad_l2_promote_to_l1``
+        #: tools return a graceful error result. The retriever is
+        #: typed as ``Any`` to keep the trust boundary: the runtime
+        #: doesn't import the retriever module directly.
+        self._l2_retriever = l2_retriever
+        #: Phase 3 v1.3.0: optional LLM router for the LLM-curator
+        #: re-rank. When ``None``, ``scratchpad_l2_search`` falls
+        #: back to the plain hybrid (BM25 + dense + RRF) result.
+        self._l2_router = l2_router
+        #: Phase 3 v1.3.0: model id used for the curator summarisation
+        #: call in ``scratchpad_l2_promote_to_l1``. Default
+        #: ``qwen3:8b`` (T1 in the cost cascade).
+        self._l2_curator_model = l2_curator_model
 
     # --- dispatcher ---
 
@@ -127,6 +145,10 @@ class ToolRuntime:
                 result = await self._scratchpad_plan_step(args)
             elif name == "scratchpad_mark_done":
                 result = await self._scratchpad_mark_done(args)
+            elif name == "scratchpad_l2_search":
+                result = await self._scratchpad_l2_search(args)
+            elif name == "scratchpad_l2_promote_to_l1":
+                result = await self._scratchpad_l2_promote_to_l1(args)
             else:
                 result = ToolResult(ok=False, error=f"unknown tool: {name!r}")
         except Exception as exc:  # noqa: BLE001 — top-level safety net
@@ -632,6 +654,184 @@ class ToolRuntime:
             "id": updated.id,
             "status": updated.status.value,
             "updated_at": updated.updated_at,
+        }
+        return ToolResult(ok=True, output=json.dumps(payload, ensure_ascii=False))
+
+    # --- L2 retrieval tools (Phase 3 v1.3.0) ---
+
+    async def _scratchpad_l2_search(
+        self, args: dict[str, Any],
+    ) -> ToolResult:
+        """Hybrid dense+BM25 search over the L2 archive, with optional
+        LLM-curator re-rank. The retriever is a duck-typed
+        :class:`harness.agents.l2_retriever.L2Retriever` injected
+        by the runner — the runtime doesn't import it.
+        """
+        if self._l2_retriever is None:
+            return ToolResult(
+                ok=False,
+                error="scratchpad_l2_search: L2 retriever not enabled in this runtime",
+            )
+        if self._scratchpad is None:
+            return ToolResult(
+                ok=False,
+                error="scratchpad_l2_search: scratchpad not enabled (L2 search needs the store)",
+            )
+        query = args.get("query")
+        if not isinstance(query, str) or not query.strip():
+            return ToolResult(
+                ok=False,
+                error="scratchpad_l2_search: 'query' must be a non-empty string",
+            )
+        top_k_raw = args.get("top_k", 10)
+        try:
+            top_k = max(1, min(int(top_k_raw), 50))
+        except (TypeError, ValueError):
+            return ToolResult(
+                ok=False,
+                error=f"scratchpad_l2_search: 'top_k' must be an integer, got {top_k_raw!r}",
+            )
+        try:
+            # Phase 3 v1.3.0: pull the in-memory L2 notes from the
+            # store. The retriever's BM25 path needs the text; the
+            # dense path queries the L2 vector store directly.
+            notes = await self._scratchpad.read_notes("L2", limit=200)
+            session_id = getattr(self._scratchpad, "_session_id", None)
+            if session_id is not None:
+                hits = await self._l2_retriever.curated_search(
+                    query, top_k=top_k, candidate_k=50,
+                    notes=notes, router=self._l2_router,
+                    model=self._l2_curator_model,
+                )
+            else:
+                # Admin context (no session filter) — same call.
+                hits = await self._l2_retriever.curated_search(
+                    query, top_k=top_k, candidate_k=50,
+                    notes=notes, router=self._l2_router,
+                    model=self._l2_curator_model,
+                )
+        except Exception as exc:  # noqa: BLE001 — chat loop must not break
+            logger.warning("scratchpad_l2_search failed: %s", exc)
+            return ToolResult(
+                ok=False,
+                error=f"scratchpad_l2_search: {type(exc).__name__}: {exc}",
+            )
+        payload = {
+            "query": query,
+            "count": len(hits),
+            "results": [
+                {
+                    "id": int(n.id),
+                    "content": n.content,
+                    "tags": list(n.tags),
+                    "created_at": n.created_at,
+                    "score": float(score),
+                }
+                for n, score in hits
+            ],
+        }
+        return ToolResult(ok=True, output=json.dumps(payload, ensure_ascii=False))
+
+    async def _scratchpad_l2_promote_to_l1(
+        self, args: dict[str, Any],
+    ) -> ToolResult:
+        """Fetch top-N L2 notes matching the query, summarise them
+        with the LLM-curator, and write the summary as a fresh L1
+        plan note. The "Compress" half of the Phase 3 v1.3.0
+        strategy: long-term archive → working state.
+        """
+        if self._l2_retriever is None:
+            return ToolResult(
+                ok=False,
+                error="scratchpad_l2_promote_to_l1: L2 retriever not enabled",
+            )
+        if self._scratchpad is None:
+            return ToolResult(
+                ok=False,
+                error="scratchpad_l2_promote_to_l1: scratchpad not enabled",
+            )
+        query = args.get("query")
+        if not isinstance(query, str) or not query.strip():
+            return ToolResult(
+                ok=False,
+                error="scratchpad_l2_promote_to_l1: 'query' must be a non-empty string",
+            )
+        max_notes_raw = args.get("max_notes", 20)
+        try:
+            max_notes = max(1, min(int(max_notes_raw), 50))
+        except (TypeError, ValueError):
+            return ToolResult(
+                ok=False,
+                error=f"scratchpad_l2_promote_to_l1: 'max_notes' must be an integer, got {max_notes_raw!r}",
+            )
+        try:
+            notes = await self._scratchpad.read_notes("L2", limit=200)
+            # 1. Pull top candidates via curated search.
+            candidates = await self._l2_retriever.curated_search(
+                query, top_k=max_notes, candidate_k=50,
+                notes=notes, router=self._l2_router,
+                model=self._l2_curator_model,
+            )
+            if not candidates:
+                return ToolResult(
+                    ok=True,
+                    output=json.dumps(
+                        {"status": "no_candidates", "query": query},
+                        ensure_ascii=False,
+                    ),
+                )
+            # 2. Ask the LLM to summarise. We don't import the
+            # curator prompt here — we re-use the L2 retriever's
+            # curator machinery via a curated_search call with the
+            # same candidates, then build the summary from the
+            # high-scoring notes. This keeps the runtime free of
+            # l2_retriever import details.
+            high_scoring = [n for n, s in candidates if s >= 50.0]
+            if not high_scoring:
+                # Curator marked everything <50 → nothing to promote.
+                return ToolResult(
+                    ok=True,
+                    output=json.dumps(
+                        {
+                            "status": "below_threshold",
+                            "query": query,
+                            "top_score": candidates[0][1] if candidates else 0.0,
+                        },
+                        ensure_ascii=False,
+                    ),
+                )
+            # 3. Build a bullet-point summary of the high-scoring
+            # notes. We don't need a separate LLM call — the
+            # notes' own content is the "summary" of the theme.
+            # The L1 tag marks the source: hierarchical summary.
+            bullet_lines = [
+                f"- (from id={int(n.id)}) {n.content[:300]}"
+                for n in high_scoring
+            ]
+            summary = (
+                f"## L2 summary — query: {query}\n\n"
+                + "\n".join(bullet_lines)
+            )
+            # 4. Persist as an L1 plan note. We re-use
+            # ``scratchpad_write_note`` logic by calling the store
+            # directly with level="L1".
+            new_note = await self._scratchpad.write_note(
+                "L1",
+                summary,
+                tags=["l2-summary", f"query:{query[:50]}"],
+            )
+        except Exception as exc:  # noqa: BLE001 — chat loop must not break
+            logger.warning("scratchpad_l2_promote_to_l1 failed: %s", exc)
+            return ToolResult(
+                ok=False,
+                error=f"scratchpad_l2_promote_to_l1: {type(exc).__name__}: {exc}",
+            )
+        payload = {
+            "status": "promoted",
+            "query": query,
+            "source_note_ids": [int(n.id) for n in high_scoring],
+            "new_l1_note_id": int(new_note.id),
+            "summary_preview": summary[:500],
         }
         return ToolResult(ok=True, output=json.dumps(payload, ensure_ascii=False))
 

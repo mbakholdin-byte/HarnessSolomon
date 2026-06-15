@@ -134,6 +134,7 @@ class TestFactoryWiring:
             def __init__(  # type: ignore[no-untyped-def]
                 self, project_root, *,
                 scratchpad=None, scratchpad_audit=None, l0_section=None,
+                l2_retriever=None, l2_router=None, l2_curator_model="qwen3:8b",
             ):
                 captured["scratchpad"] = scratchpad
                 captured["scratchpad_audit"] = scratchpad_audit
@@ -143,6 +144,9 @@ class TestFactoryWiring:
                     scratchpad=scratchpad,
                     scratchpad_audit=scratchpad_audit,
                     l0_section=l0_section,
+                    l2_retriever=l2_retriever,
+                    l2_router=l2_router,
+                    l2_curator_model=l2_curator_model,
                 )
 
         fake = FakeScratchpad(session_id="sess-Y")

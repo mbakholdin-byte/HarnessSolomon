@@ -41,12 +41,16 @@ def runtime(project_root: Path) -> ToolRuntime:
 
 # === ToolResult + ToolRegistry smoke ===
 
-def test_tool_schemas_contains_six_tools() -> None:
-    """TOOL_SCHEMAS declares exactly 10 tools (6 file/shell + 4 scratchpad).
+def test_tool_schemas_contains_twelve_tools() -> None:
+    """TOOL_SCHEMAS declares exactly 12 tools (6 file/shell + 6 scratchpad).
 
     Phase 3 v1.2.0 added 4 scratchpad tools to the original 6:
     ``scratchpad_write_note``, ``scratchpad_read_notes``,
     ``scratchpad_plan_step``, ``scratchpad_mark_done``.
+
+    Phase 3 v1.3.0 added 2 L2 retrieval tools:
+    ``scratchpad_l2_search`` (hybrid dense+BM25 + LLM-curator)
+    and ``scratchpad_l2_promote_to_l1`` (hierarchical summary).
     """
     from harness.server.agent.tools import TOOL_SCHEMAS
 
@@ -55,6 +59,7 @@ def test_tool_schemas_contains_six_tools() -> None:
         "read_file", "edit_file", "write_file", "bash", "grep", "glob",
         "scratchpad_write_note", "scratchpad_read_notes",
         "scratchpad_plan_step", "scratchpad_mark_done",
+        "scratchpad_l2_search", "scratchpad_l2_promote_to_l1",
     }
 
 

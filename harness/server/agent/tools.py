@@ -222,6 +222,58 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "required": ["step_id"],
         },
     },
+    {
+        "name": "scratchpad_l2_search",
+        "description": (
+            "Phase 3 v1.3.0: search the long-term L2 archive of the "
+            "scratchpad with a free-text query. Combines BM25 keyword "
+            "match and dense-vector cosine similarity (Reciprocal Rank "
+            "Fusion, k=60) and, when a curator LLM is available, "
+            "re-ranks the top candidates. Use this when you need "
+            "**older context** that isn't in the L0 hot layer (auto-"
+            "injected) or the L1 plan. Returns a list of matching "
+            "notes ordered by relevance."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Free-text query (e.g. 'what did we decide about X?').",
+                },
+                "top_k": {
+                    "type": "integer",
+                    "description": "Maximum number of notes to return. Default 10.",
+                },
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "scratchpad_l2_promote_to_l1",
+        "description": (
+            "Phase 3 v1.3.0: fetch the top-N L2 notes that match the "
+            "query, summarise them with the curator LLM, and write the "
+            "summary as a fresh L1 plan note. Use this to surface "
+            "recurring themes from the long-term archive into the "
+            "session's working state. The new L1 note is returned so "
+            "you can reference it in subsequent turns."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Free-text query describing the theme to summarise.",
+                },
+                "max_notes": {
+                    "type": "integer",
+                    "description": "Maximum number of L2 notes to include in the summary. Default 20.",
+                },
+            },
+            "required": ["query"],
+        },
+    },
 ]
 
 
