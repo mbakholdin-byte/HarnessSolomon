@@ -1,5 +1,53 @@
 # Changelog — Solomon Harness
 
+## Phase 3 v1.4.0 — Reflection + Manual /compact + Prompt Caching (ЗАКРЫТО v1.4.0, 2026-06-15)
+
+**Phase 3 v1.4.0 — 6 шагов / 6 коммитов / +~95 net new tests (1186 → ~1281) / 0 new required deps / 0 breaking changes**
+
+Production extension поверх Phase 3 v1.3.1 (Tool Offload). Реализует финальные **3 стратегии Anthropic context engineering playbook** (Write / Select / Compress / Isolate): **Reflection** (background lesson extraction), **Manual /compact** (user-triggered), **Prompt caching** (Anthropic cache_control). Закрывает **Phase 3 = 11/12**.
+
+### Что закрыто
+
+- **Manual `/compact` (Anthropic "Manual compact")** — `ContextCompactor.force_compact()` + `CompactTrigger` (CLI + HTTP + WS). 1 публичный endpoint `POST /api/v1/sessions/{id}/compact` (requires `sessions.write` scope), CLI subcommand `harness sessions compact --session <id>`, WS message type `{"type": "compact"}`. Returns `CompactResult` (original_tokens, compacted_tokens, saved_tokens, summary_preview, cache_hit).
+- **Reflection loop (Anthropic "Background summarisation")** — `SessionLifecycle` async context manager + `ReflectionLoop` (T1 → T2 cascade, fail-open JSON parse, dual-write to scratchpad L1 + UnifiedMemory). Fires on WS disconnect / CLI exit / API session close via `__aexit__` hook. 3 audit events: `reflection_extracted`, `reflection_parse_failed`, `reflection_cascade_failed`.
+- **Prompt caching (Anthropic "cache_control" — Anthropic-specific strategy)** — Router-level `cache_control: {type: ephemeral}` injection в `LLMRouter.completion` и `LLMRouter.streaming_completion`. Marks system message (index 0) + last 2 messages. No-op для `prompt_cache_strategy ∈ {"off", "vllm"}` и non-Anthropic models.
+- **8 new settings** — `reflection_enabled/max_lessons/max_ms/model/fallback_model` + `manual_compact_max_ms` + `prompt_cache_enabled/strategy` (Literal `["anthropic", "vllm", "off"]`).
+- **1 new scope** — `Scope.SESSIONS_WRITE = "sessions.write"` for `POST /api/v1/sessions/{id}/compact`. Semantically separate от `memory.write` (session control, не memory write).
+- **SessionEvent collector** — `ToolRuntime.events_collector` kwarg. `AgentLoop._record_event` appends SessionEvent на каждый assistant + tool turn (с `offloaded_id` если tool был offload'нут). `SessionLifecycle` consumes список на `__aexit__`.
+- **`_extract_offloaded_note_id`** helper в `AgentLoop` — regex `id=N` из offload stub'а → `SessionEvent.offloaded_id`.
+
+### Trust boundary (preserved)
+
+- `runner.py` continues to NOT import any of: `ReflectionLoop`, `SessionLifecycle`, `CompactTrigger`, `force_compact`, `cache_control`. **3 new static tests** — `test_runner_does_not_import_reflection_loop`, `test_runner_does_not_import_session_lifecycle`, `test_runner_does_not_import_compact_trigger` — mirror v1.3.1 `test_runner_does_not_import_tool_offloader` pattern.
+- All new modules DI'd через factory closures в `server/app.py` lifespan
+- `events_collector=None` default в `ToolRuntime` — backward compat
+- `compact_trigger=None` default в `app.state` — `/compact` route returns clean 503 if unwired
+- Fail-open во всех reflection / compact / caching calls (try/except + logger.warning + return None)
+- Per-call timeout via `asyncio.wait_for(..., timeout=*_max_ms/1000)` — keeps LLM loop responsive
+- Reuse v1.0.0 `ContextCompactor` + v1.1.0 `CompactStore` (no new compact codepath)
+
+### Lessons
+
+1. **Plan agent review (recurring)** — caught 5 BLOCKERS в v1.4.0 plan (force_compact не существует → нужен отдельный метод; no end-of-session hook → нужен SessionLifecycle; runner factory pattern не wired → reflection_factory kwarg; no Anthropic/vLLM providers → router-level injection not new modules; "5 settings" count был wrong → 8 settings). Все 5 fixed перед coding. 2-3 hours saved.
+2. **Regex `id=N` extraction at module level** — `re.compile(r"\bid=(\d+)\b")` в `loop.py` для `offloaded_id` recovery из stub'а. Compile-once, reuse-on-every-tool-call.
+3. **Failure as defence-in-depth** — каждое новое constructor (ToolRuntime, AgentRunner, SessionLifecycle) сначала проверяет `getattr(self, "new_attr", None)` chain, потом уже импортирует. Trust boundary не "doesn't import" — он "imports nothing, uses getattr defaults".
+4. **WS handler lifecycle wrapper** — `async with SessionLifecycle(...)` оборачивает весь receive loop. На disconnect / error / normal close, `__aexit__` fires reflection. Cleaner чем `try/finally: await lifecycle.__aexit__()` (было бы boilerplate в 3+ местах).
+5. **Literal["a", "b", "c"] для enum-like settings** — `prompt_cache_strategy: Literal["anthropic", "vllm", "off"]` = fail-fast validation на startup. Pydantic валидирует при import.
+
+### Next
+
+Phase 3 v1.5.0 — **Privacy zones + Pre-compaction hook** (1 remaining, 12/12). Phase 4 — **12 hooks + observability (Prometheus) + /api/* → /api/v1/* migration**.
+
+### Files
+
+- NEW: `harness/server/agent/lifecycle.py` (~155 LoC), `reflection_loop.py` (~340 LoC), `compact_trigger.py` (~140 LoC)
+- NEW: `docs/PHASE3-reflection-compact.md` (~280 LoC, 6 sections)
+- MODIFIED: `harness/agents/runner.py` (+reflection_factory), `harness/server/agent/runtime.py` (+reflection + events_collector), `harness/server/agent/loop.py` (+_record_event + _extract_offloaded_note_id), `harness/server/llm/router.py` (+_maybe_inject_cache_control), `harness/server/routes/chat.py` (+lifecycle wrapper + compact message type), `harness/server/routes/sessions_v1.py` (+POST /compact), `harness/server/app.py` (+compact_trigger + reflection_factory closure), `harness/cli.py` (+sessions compact subcommand)
+- TESTS: `test_session_lifecycle.py` (19), `test_reflection_loop.py` (37), `test_compact_trigger.py` (13), `test_compact_route_v1.py` (13), `test_prompt_caching.py` (16), `test_session_event_integration.py` (19)
+- 3 new static tests in `test_agent_runner.py` for trust boundary
+
+---
+
 ## Phase 3 v1.3.1 — Tool Offload (>25k tokens → L2 scratchpad) (ЗАКРЫТО v1.3.1, 2026-06-15)
 
 **Phase 3 v1.3.1 — 5 шагов / 5 коммитов / +40 net new тестов (1146 → ~1186) / 0 new required deps / 0 breaking changes**
