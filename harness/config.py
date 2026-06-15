@@ -615,6 +615,52 @@ class Settings(BaseSettings):
         ),
     )
 
+    # === Phase 3 v1.2.0: Scratchpad (Write context) ===
+    scratchpad_enabled: bool = Field(
+        default=True,
+        description=(
+            "Phase 3 v1.2.0: when True, the agent runtime exposes "
+            "4 scratchpad tools (``scratchpad_write_note`` / "
+            "``scratchpad_read_notes`` / ``scratchpad_plan_step`` / "
+            "``scratchpad_mark_done``) bound to a per-``(session_id, "
+            "agent_id)`` ``ScratchpadStore``. Default True. Set "
+            "False to disable the scratchpad feature entirely "
+            "(tools return a graceful error when invoked)."
+        ),
+    )
+    scratchpad_max_notes_per_session: int = Field(
+        default=100,
+        ge=1,
+        description=(
+            "Phase 3 v1.2.0: hard cap on the total number of notes "
+            "(L0+L1+L2) for a single ``(session_id, agent_id)`` pair. "
+            "Older rows beyond the cap are pruned on insert. "
+            "Default 100. Must be >= 1."
+        ),
+    )
+    scratchpad_l0_max_bytes: int = Field(
+        default=1024,
+        ge=128,
+        description=(
+            "Phase 3 v1.2.0: maximum total size of L0 notes in bytes. "
+            "L0 is the hot layer injected into the system prompt on "
+            "every turn; keep tight. Default 1024 (1KB). Must be "
+            ">= 128. Writes / promotes that would push the L0 total "
+            "over the cap trigger an auto-prune of the oldest L0 row; "
+            "single notes larger than the cap are rejected."
+        ),
+    )
+    scratchpad_audit_log: bool = Field(
+        default=False,
+        description=(
+            "Phase 3 v1.2.0: when True, every scratchpad event "
+            "(``write`` / ``read`` / ``promote`` / ``plan_step`` / "
+            "``mark_done`` / ``l0_cap_exceeded``) is appended to "
+            "``data/audit/scratchpad-YYYY-MM-DD.ndjson``. Default "
+            "False (opt-in — enable for compliance / debugging)."
+        ),
+    )
+
     # === Phase 3: Embeddings (ONNX local) ===
     embeddings_dir: Path = Field(
         default=PROJECT_ROOT / "models" / "embeddings",
