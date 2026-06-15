@@ -1,5 +1,54 @@
 # Changelog — Solomon Harness
 
+## Phase 3 — Compaction + Embeddings + Privacy (ЗАКРЫТО v1.0.0, 2026-06-15)
+
+**Phase 3 (v1.0.0) — 4 шага / 4 коммита / +140 net new тестов (822 → 962) / 0 new required deps / 2 new optional deps (`onnxruntime`, `numpy` via `[embeddings]` extra)**
+
+Production milestone. Phase 3 closes three critical production gaps in a single release:
+context overflow on long sessions, lexical-only memory search, and PII/secrets leaking to
+external sinks (LLM provider, GitHub PR, webhook receivers).
+
+### Шаги
+
+- **Step 0 (commit `phase-3-step-0-foundation`)** — 15 new Pydantic v2 settings (8 compaction + 4 embeddings + 3 privacy); `qwen3:8b` added to `MODELS` catalog (T1, ctx=32768, $0); `harness/redaction/` NEW package (`patterns.py` with 12 stdlib regex — EMAIL, PHONE, IPV4, GITHUB_TOKEN, AWS_ACCESS_KEY, AWS_SECRET, OPENAI_KEY, ANTHROPIC_KEY, ENV_ASSIGNMENT, JWT, PEM_PRIVATE_KEY, SLACK_TOKEN; `engine.py` with `redact/scan/redact_dict` — pure, idempotent; `audit.py` with `RedactionAudit` for JobStore + JSONL mirror). **+40 tests** (`test_redaction.py`, `test_config_phase3.py`).
+- **Step 1 (commit `phase-3-step-1-compaction`)** — `harness/context/` NEW package (`compaction.py` with `ContextCompactor` — sliding window + LLM summary, tool-pair preservation, `keep_recent_turns` floor, T1 primary + T2 fallback, JSON serialised for cross-process handoff; `prompts.py` with `SUMMARY_SYSTEM_PROMPT`); insertion into `loop.py:189-197` (after system prompt, before completion) + `session.py:55-106` (on history load); `AgentLoop.__init__(compactor=)` + `ChatSession.__init__(compactor=)` DI; `server/app.py` lifespan instantiates `ContextCompactor` and stores in `app.state.compactor`; `routes/chat.py` picks it up at WS connect. Summary persisted to L2 with tag `#compact`. **+25 tests.**
+- **Step 2 (commit `phase-3-step-2-privacy`)** — redaction wired at all 9 sinks: LLM messages (runner + loop), PR title, PR body, commit msg, branch name, JobStore prompt, outbound webhook payload, `read_file` tool output, inbound webhook payload (post-HMAC verify, pre-persistence). `redact_dict` extended to accept lists at top level (OpenAI message lists). **+13 tests.**
+- **Step 3 (commit `phase-3-step-3-embeddings`)** — `harness/memory/embeddings/` NEW package (`base.py` Protocol, `onnx_backend.py` lazy-loaded `OnnxEmbedder` for multilingual-e5-small with mean-pooling + L2-normalise + asymmetric `query:` / `passage:` prefixes + `asyncio.Lock` thread-safety, `privacy.py` `PrivacyAwareEmbedder` wrapper); `harness/memory/retrieval/dense.py` `DenseRetriever` (cosine over `metadata.embedding`, filters mismatched `embedding_version`); `harness/memory/retrieval/hybrid.py` `HybridRetriever` (RRF k=60 fusion); `harness/memory/retrieval/versioning.py` `EMBEDDING_MODEL_VERSION` constant; `UnifiedMemory` extended with optional `embedder=` kwarg, `write()` embeds-on-write (best-effort), new `search_scored()` method. **+24 tests.**
+
+### Final metrics
+
+- **Test count**: 822 → 962 mock tests (0 regressions, +140 new)
+- **New files**: 14 (context/, redaction/, memory/embeddings/, retrieval/dense,hybrid,versioning, docs/PHASE3.md)
+- **Modified files**: 12 (config.py, models.py, loop.py, session.py, runner.py, merge_queue.py, cli.py, outbound.py, webhook_handler.py, runtime.py, unified.py, routes/chat.py, server/app.py, test_models.py)
+- **New LoC**: ~1200 production + ~900 tests
+- **New required deps**: 0
+- **New optional deps**: `onnxruntime>=1.18`, `numpy>=1.26` via `pip install -e ".[embeddings]"`
+- **Tag**: `v1.0.0`
+
+### Архитектурные решения (Phase 3)
+
+- **3 одновременных фичи** в одном релизе потому что каждая — critical production gap, и они не конфликтуют (compaction работает на `messages` shape, privacy — на `messages` content, embeddings — на `Memory` storage). Тег v1.0.0 = production milestone.
+- **Compactor returns NEW list** — Phase 0 contract: caller passes list in, loop mutates in place; compactor does NOT mutate. Loop rebinds `messages = compactor.maybe_compact(...)` before completion. Sliding window: drop oldest non-system, preserve tool-call ↔ tool-result pairs, `keep_recent_turns` floor.
+- **T1 (Qwen3 8B local) summariser** = free + offline-capable + good enough for 200-400-word summary of dropped turns. T2 fallback for fresh installs without Ollama.
+- **Privacy default ON** (opt-out) = safe baseline для open-source tool. 12 stdlib `re` patterns (zero deps). Category-labeled placeholders (`<EMAIL>`, `<GITHUB_TOKEN>`) — LLM benefits from category for reasoning.
+- **9 sink points** — every external surface (LLM, GitHub PR, Git commit, webhooks, file I/O) is a redaction point. Redaction happens AFTER compaction so we don't double-process.
+- **ONNX local embeddings** — `intfloat/multilingual-e5-small` (RU+EN, 384-dim, ~120MB disk). PrivacyAwareEmbedder wraps OnnxEmbedder and runs redaction BEFORE embedding (defense in depth).
+- **DenseRetriever pre-computes matrix** from `metadata.embedding` (no re-embed at construction). Filters mismatched `embedding_version` so model swaps don't corrupt retrieval.
+- **HybridRetriever via RRF k=60** — standard cheap hybrid that beats either retriever alone. Documents in BOTH retrievers rank above those in only one.
+- **UnifiedMemory `search()` unchanged** (backward compat) — new `search_scored()` method for dense retrieval. Breaking change rejected in implementation to keep Phase 2.5 callers working.
+- **Trust boundary preserved** — `runner.py` continues to not import `LLMRouterClassifier`/`MergeQueue`/`AdversarialVerify`. Compactor + Privacy + Embeddings all DI'd through constructors, not top-level imports.
+- **`asyncio.Lock` in OnnxEmbedder** — `tokenizers` is not thread-safe; we serialise calls to keep a single instance safe under concurrent asyncio use.
+
+### Out of scope (явно, Phase 3.5+)
+
+- Privacy bypass via base64/hex encoding (documented in `docs/PHASE3.md` known limitations).
+- Multi-tenant `gh` config.
+- Embedding re-computation migration tool (when model version bumps).
+- Real-time redaction UI dashboard.
+- Cross-session compaction handoff (in-session only for v1.0.0).
+- Full plug-in custom pattern loader (Phase 5).
+- ONNX `directml` GPU provider (Windows GPU optional, requires DX11/12 driver).
+
 ## Phase 2.5 — Cross-Repo Stacks + Outbound Webhooks + Auto-Label + Rate Limit (ЗАКРЫТО v0.9.0, 2026-06-14)
 
 **Phase 2.5 (v0.9.0) — 4 шага / 4 коммита / +58 net new тестов (759 → 817) / 0 new deps**
