@@ -1,5 +1,69 @@
 # Changelog — Solomon Harness
 
+## Phase 3 v1.5.0 — Privacy zones + Pre-compaction hook + Time-based trigger (ЗАКРЫТО v1.5.0, 2026-06-15) — Phase 3 = 12/12 closed (FINAL)
+
+**Phase 3 v1.5.0 — 5 шагов / 5 коммитов / +~150 net new tests (1281 → ~1434, +2 skip) / 0 new required deps / 0 breaking changes**
+
+Production extension поверх Phase 3 v1.4.0 (Reflection + Manual /compact + Prompt Caching). Реализует финальные 3 фичи Phase 3 (11/12 → 12/12) из Anthropic context engineering playbook: **Privacy zones** (Isolate sensitive context), **PreCompact hook** (PreCompact), **Time-based trigger** (расширение Manual compact). Закрывает **Phase 3 = 12/12 = FULL Phase 3 done**.
+
+### Что закрыто
+
+- **Privacy zones (Anthropic Isolate sensitive context)** — `PrivacyZoneFilter` + `match_glob` (single source of truth, extracted from `pr_templating.py:262-299`) + 7 default patterns (private/**, *.env, .env/*, secrets/*, _credentials/*, .ssh/**, **/.ssh/**). 3 actions: `block` (ToolResult(ok=False, error=...)) / `redact` (ToolResult(ok=True, output="[PRIVATE: matched Y]")) / `skip` (ToolResult(ok=True, output="")). Tier 1 sink integration: read_file/grep/glob (Tier 2/3 DEFERRED to v1.6.0+). 4 fail-open layers (filter + audit + scratchpad + persist). 3 audit events: `privacy_zone_blocked`, `privacy_zone_redacted`, `privacy_zone_skipped`.
+- **PreCompact hook (Anthropic PreCompact hook)** — `PreCompactHook` async callable + `PreCompactState` frozen dataclass (session_id, messages_last_n, plan_step, hot_l0, metadata, captured_at). Configurable `pre_compact_save_fields` (comma-separated subset of 4). Fires ВНУТРИ `_run_slow_path` (Plan agent B4 location: AFTER cache-miss check, BEFORE `_sliding_window`). NOT fired on cache hit (state already saved at previous compact). Per-call timeout via `asyncio.wait_for(pre_compact_max_ms/1000)` (default 5s). Persistence tag: `#pre-compact-{session_id}` (namespaced from `#compact-{session_id}`). 3 audit events: `pre_compact_state_saved`, `pre_compact_failed`, `pre_compact_timeout`.
+- **Time-based trigger (Anthropic Manual compact extended)** — `TimeBasedCompactionTrigger` + per-session state (`_last_compact_at: dict[session_id, float]` + `_last_user_turn: dict[session_id, int]` + `_locks: dict[session_id, asyncio.Lock]` lazily created). 4 modes: `token` (default, legacy) / `turn` (every N user turns, default 20) / `time` (after M idle minutes, default 30) / `hybrid` (OR of turn + time). First-call seeds baseline (no false-positive on first turn). 3 audit events: not emitted (trigger evaluation is sync + sub-ms).
+- **Resume vs active distinction (Plan agent BLOCKER B8)** — `force_idle_check: bool = False` kwarg в `maybe_compact`. `Session.load_history` → `False` explicitly. `AgentLoop.run` → `True` explicitly. Opt-in design (default safe).
+
+### Trust boundary (preserved)
+
+- `runner.py` continues to NOT import any of: `PrivacyZoneFilter`, `PreCompactHook`, `TimeBasedCompactionTrigger`. **1 new parametrized test** — `test_runner_does_not_import_v150_module` (3 cases) — mirror v1.4.0 `test_runner_does_not_import_forbidden_modules` pattern.
+- All new modules DI'd через factory closures в `server/app.py` lifespan (PrivacyZoneFilter, PreCompactHook) or constructor kwargs (TimeBasedCompactionTrigger)
+- `privacy_zones=None` / `pre_compact_hook=None` / `idle_trigger=None` defaults — backward compat
+- Fail-open во всех privacy / pre-compact / time-trigger calls (try/except + logger.warning + return None)
+- Per-call timeout via `asyncio.wait_for(..., timeout=*_max_ms/1000)` — keeps LLM loop responsive
+
+### Settings (11 new, 45 → 56)
+
+- Privacy zones (5): `privacy_zones_enabled`, `privacy_zone_patterns`, `privacy_zone_default_action` (Literal["block", "redact", "skip"]), `privacy_zone_per_action`, `privacy_zones_audit_log`
+- Pre-compact (3): `pre_compact_enabled`, `pre_compact_max_ms`, `pre_compact_save_fields`
+- Time-based trigger (3): `compaction_trigger` (Literal["token", "turn", "time", "hybrid"]), `compaction_turn_interval`, `compaction_time_idle_minutes`
+
+### Lessons
+
+1. **Plan agent review (recurring) caught 8 BLOCKERS** в v1.5.0 plan (single source of truth glob → extract match_glob; per-session state for time trigger → dict + asyncio.Lock; pre-compact hook location → AFTER cache-miss BEFORE sliding window; tier-prioritization for 9 sinks → Tier 1 MUST, Tier 2/3 DEFERRED; comma-separated parser → settings.pre_compact_save_fields; per-call timeout → asyncio.wait_for; resume vs active distinction → force_idle_check kwarg; trust boundary → 1 parametrized test). Все 8 fixed перед coding. 2-3 hours saved.
+2. **`match_glob` extraction from `pr_templating.py:262-299`** — single source of truth для glob semantics. Recursive `**` extension via `fnmatch.translate` + `**` → `.*` placeholder substitution. 21 pr_templating tests green (zero-drift with Phase 2.5).
+3. **Privacy filter MUST fail-open at filter AND audit boundary** — 3 fail-open layers в одной sink integration (filter.check, audit.record, scratchpad.read). Privacy feature ценна только если **никогда** не ломает основной flow. Тест: `test_audit_backend_raises → no exception propagates`.
+4. **Privacy zone block returns `ToolResult(ok=False, ...)` (NOT silent)** — LLM должен знать что путь в privacy zone, иначе будет retry / infinite loop. Reject pattern, not skip pattern.
+5. **Pre-compact hook fires AFTER cache-miss check, BEFORE sliding window** — fires per slow-path ENTRY, не per LLM call, не per cache miss+hit. На cache hit — НЕ fired (state уже сохранён при прошлом compact).
+6. **Compactor test for router called must check trigger state, not completion count** — `router.completion` НЕ эквивалентно "slow path отработал". Правильный ассерт: `mark_compacted called` или `len(result) < original_count`. Compactor: `_sliding_window` → if trimmed ≤ target → RETURN (no router call).
+7. **idle_trigger branch — early return обходит mark_compacted** — нужно inline `mark_compacted` + try/except в каждой ветке, нельзя полагаться на post-block. Pattern: bind к переменной `messages` + inline update.
+8. **`force_idle_check=False` default (opt-in, not opt-out)** — Plan agent B8: Session.load_history default = False, AgentLoop explicit True. Регрессия предотвращена explicit kwarg pattern.
+9. **Per-session asyncio.Lock created lazily** — `_lock_for(session_id) → asyncio.Lock() if missing`. Не pop в reset() — старый lock GC'нется когда ссылки уйдут. Потокобезопасно.
+10. **fnmatch `*` matches `/`, `**` is NOT recursive** — recursive-glob нужен через `fnmatch.translate` + `**` → `.*` placeholder substitution. **`**` requires BOTH `X` AND `**/X`** to cover root + nested (fnmatch `**` is anchored).
+
+### Next
+
+**Phase 3 = 12/12 closed (FINAL).** Phase 4 — **12 hooks (PreToolUse/PostToolUse/Stop/etc.) + observability (Prometheus) + /api/* → /api/v1/* migration**. v1.6.0+ — Hierarchical summarization, LLMLingua, Tier 2/3 privacy sinks, per-session privacy override, `harness privacy zones` CLI.
+
+### Files
+
+- NEW: `harness/privacy/{__init__,path_match,zone_config,zone_filter}.py` (~330 LoC)
+- NEW: `harness/agents/pre_compact.py` (~280 LoC)
+- NEW: `harness/agents/idle_trigger.py` (~250 LoC)
+- MODIFIED: `harness/context/compaction.py` (+~150 LoC), `harness/server/agent/runtime.py` (+~80 LoC), `harness/server/agent/loop.py` (+~10 LoC), `harness/server/agent/session.py` (+~5 LoC), `harness/agents/pr_templating.py` (~5 LoC), `harness/server/app.py` (+~60 LoC), `harness/config.py` (+~80 LoC, 11 new settings)
+- TESTS: 7 new test files (~1,920 LoC, 110+ tests):
+  - `tests/test_privacy_path_match.py` (15)
+  - `tests/test_privacy_zone_config.py` (12)
+  - `tests/test_privacy_zones.py` (18)
+  - `tests/test_privacy_zones_sinks.py` (14 + 1 skip)
+  - `tests/test_pre_compact_hook.py` (21)
+  - `tests/test_idle_trigger.py` (22)
+  - `tests/test_compactor_v150_integration.py` (7)
+  - `tests/test_runner_does_not_import_v150.py` (1 parametrized = 3 cases)
+- DOCS: `docs/PHASE3-privacy-precompact-time.md` (NEW, ~350 LoC)
+- 1 new static test in `tests/test_runner_does_not_import_v150.py` for trust boundary (3 cases)
+
+---
+
 ## Phase 3 v1.4.0 — Reflection + Manual /compact + Prompt Caching (ЗАКРЫТО v1.4.0, 2026-06-15)
 
 **Phase 3 v1.4.0 — 6 шагов / 6 коммитов / +~95 net new tests (1186 → ~1281) / 0 new required deps / 0 breaking changes**
