@@ -152,6 +152,16 @@ async def lifespan(app: FastAPI):
         if settings.compaction_enabled:
             from harness.server.llm.router import LLMRouter
             compactor_router = LLMRouter()
+            # Phase 3 v1.5.0: build the pre_compact_hook closure
+            # that the compactor will call before each slow-path
+            # run. Imports :mod:`harness.agents.pre_compact` here
+            # (lifespan scope) so the compactor never has to.
+            def _build_pre_compact_hook(unified_memory: Any) -> Any:
+                from harness.agents.pre_compact import PreCompactHook
+                return PreCompactHook(
+                    memory=unified_memory,
+                    settings=settings,
+                )
             # Phase 3.5: optional UnifiedMemory injection. Used for
             # the L2 #compact tag mirror (cross-session retrieval of
             # compaction summaries). The compactor treats memory as
@@ -217,6 +227,11 @@ async def lifespan(app: FastAPI):
                 memory=unified_memory,
                 store=compact_store,
                 audit=audit,
+                pre_compact_hook=(
+                    _build_pre_compact_hook(unified_memory)
+                    if settings.pre_compact_enabled
+                    else None
+                ),
             )
             app.state.compactor = compactor
             print(

@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import asyncio
 import logging
 import time
 from dataclasses import dataclass
@@ -195,6 +196,7 @@ class ContextCompactor:
         session_id: str | None = None,
         store: "CompactStore | None" = None,
         audit: "CompactionAudit | None" = None,
+        pre_compact_hook: "Callable[..., Any] | None" = None,
     ) -> None:
         self._settings = settings
         self._router = router
@@ -217,6 +219,15 @@ class ContextCompactor:
         # constructed without an audit writer and still respect
         # runtime config changes.
         self._audit = audit
+        # Phase 3 v1.5.0: optional pre-compact hook (async callable).
+        # Fires in ``_run_slow_path`` AFTER the cache-miss check but
+        # BEFORE the sliding window — so the hook can save high-signal
+        # state (last messages, plan step, hot L0) before the trim
+        # throws it away. Typed as ``Callable | None`` to keep the
+        # trust boundary: the compactor does NOT import the
+        # ``harness.agents.pre_compact`` module. ``None`` → no-op
+        # (pre-compact is disabled).
+        self._pre_compact_hook = pre_compact_hook
         # Resolve summariser model ids: empty string → fallback to
         # the cascade defaults (T1 = Qwen3 8B, T2 = cloud mid-tier).
         self._summariser = (
@@ -367,6 +378,16 @@ class ContextCompactor:
         Pure refactor: identical behavior to the previous inline block.
         """
         run_start = time.monotonic()
+        # Phase 3 v1.5.0: pre-compact hook fires AFTER cache-miss
+        # check (the caller already short-circuited on hit) but
+        # BEFORE the sliding window throws away messages. This is
+        # the Plan-agent-recommended location (BLOCKER B4) — fires
+        # once per slow path entry, with per-call timeout, fail-open
+        # at hook + audit boundaries.
+        await self._safe_pre_compact_hook(
+            messages=messages,
+            session_id=effective_session_id,
+        )
         # Step 1: sliding window.
         trimmed = self._sliding_window(messages, target)
         if _estimate_tokens(trimmed) <= target:
@@ -434,6 +455,47 @@ class ContextCompactor:
                         error=str(e),
                     )
         return compacted
+
+    async def _safe_pre_compact_hook(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        session_id: str,
+    ) -> None:
+        """Phase 3 v1.5.0: fire the pre-compact hook with timeout + fail-open.
+
+        The hook is optional (``self._pre_compact_hook is None`` → no-op).
+        When wired, it runs with ``asyncio.wait_for(timeout=pre_compact_max_ms/1000)``
+        — a slow hook MUST NOT delay the chat loop. Timeout and exceptions
+        are logged but never raised.
+        """
+        hook = getattr(self, "_pre_compact_hook", None)
+        if hook is None:
+            return
+        # Read timeout at call time (mirror v1.4.0 reflection pattern).
+        max_ms = int(getattr(self._settings, "pre_compact_max_ms", 5000))
+        try:
+            await asyncio.wait_for(
+                hook(
+                    session_id=session_id,
+                    messages=messages,
+                    metadata={
+                        "model": getattr(self, "_summariser", ""),
+                        "session_id": session_id,
+                    },
+                ),
+                timeout=max_ms / 1000.0,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "pre_compact_hook timeout (%dms) for session=%s",
+                max_ms, session_id,
+            )
+        except Exception as exc:  # noqa: BLE001 — hook MUST fail-open
+            logger.warning(
+                "pre_compact_hook failed for session=%s: %s",
+                session_id, exc,
+            )
 
     async def force_compact(
         self,
