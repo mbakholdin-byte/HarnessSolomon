@@ -81,8 +81,34 @@ async def chat_ws(websocket: WebSocket, session_id: str, model: str) -> None:
         return
 
     # --- per-connection objects ---
+    # Phase 3 v1.4.0: collect SessionEvents as the session progresses
+    # so end-of-session reflection can see them. The list is wired
+    # into the runtime below; SessionLifecycle.__aexit__ reads it.
+    events_collector: list[Any] = []
+    # Resolve the reflection loop via the lifespan-wired factory.
+    # We import inside the handler to keep the route's module-level
+    # import surface small (and to avoid pulling the reflection
+    # module into a no-reflection deployment).
+    reflection_factory = getattr(
+        websocket.app.state, "reflection_factory", None,
+    )
+    reflection = None
+    if reflection_factory is not None:
+        try:
+            reflection = reflection_factory(
+                spec=None, session_id=session_id, scratchpad=None,
+            )
+        except Exception as exc:  # noqa: BLE001 — best-effort wiring
+            logger.warning(
+                "WS bootstrap: reflection_factory failed: %s", exc,
+            )
+            reflection = None
     try:
-        runtime = ToolRuntime(project_root=settings.project_root)
+        runtime = ToolRuntime(
+            project_root=settings.project_root,
+            reflection=reflection,
+            events_collector=events_collector,
+        )
         llm_router = LLMRouter()
         # Phase 3: pick up the compactor from app.state (set in
         # ``lifespan``). The compactor is process-wide and safe to
@@ -102,6 +128,18 @@ async def chat_ws(websocket: WebSocket, session_id: str, model: str) -> None:
             await websocket.close()
         return
 
+    # Phase 3 v1.4.0: the SessionLifecycle wraps the entire receive
+    # loop. On disconnect / error / normal close the lifecycle's
+    # __aexit__ fires end-of-session reflection (best-effort,
+    # fail-open — see ``SessionLifecycle``).
+    from harness.server.agent.lifecycle import SessionLifecycle
+    lifecycle = SessionLifecycle(
+        runtime=runtime,
+        events=events_collector,
+        settings=settings,
+        audit=getattr(websocket.app.state, "compactor", None),
+    )
+
     chat_session = ChatSession(
         session_id=session_id,
         model=model,
@@ -112,60 +150,158 @@ async def chat_ws(websocket: WebSocket, session_id: str, model: str) -> None:
 
     # --- receive loop ---
     try:
-        while True:
-            try:
-                data = await websocket.receive_json()
-            except WebSocketDisconnect:
-                logger.info("WS client disconnected: session_id=%s", session_id)
-                return
-
-            if not isinstance(data, dict):
-                await websocket.send_json(
-                    {"type": "error", "content": "expected JSON object"}
-                )
-                continue
-
-            msg_type = data.get("type")
-            if msg_type != "user_message":
-                # Silently ignore non-user messages for now (e.g. pings).
-                continue
-
-            content = data.get("content", "")
-            if not isinstance(content, str):
-                await websocket.send_json(
-                    {"type": "error", "content": "'content' must be a string"}
-                )
-                continue
-
-            try:
-                await _run_one_turn(
-                    websocket=websocket,
-                    chat_session=chat_session,
-                    loop_obj=loop_obj,
-                    model=model,
-                    user_content=content,
-                )
-            except WebSocketDisconnect:
-                logger.info("WS client disconnected mid-turn: session_id=%s", session_id)
-                return
-            except Exception as exc:  # noqa: BLE001 - surface to client
-                logger.exception("WS turn failed: session_id=%s", session_id)
+        # Phase 3 v1.4.0: enter the lifecycle context. On exit
+        # (disconnect, error, or normal close) ``__aexit__`` fires
+        # end-of-session reflection.
+        async with lifecycle:
+            while True:
                 try:
-                    await websocket.send_json(
-                        {"type": "error", "content": f"{type(exc).__name__}: {exc}"}
-                    )
-                except Exception:  # noqa: BLE001 - socket may already be closed
-                    pass
-                # Continue serving — don't kill the connection on a single bad turn.
+                    data = await websocket.receive_json()
+                except WebSocketDisconnect:
+                    logger.info("WS client disconnected: session_id=%s", session_id)
+                    return
 
-            # Mark end of this turn. WS stays open for the next user message.
-            try:
-                await websocket.send_json({"type": "session_done"})
-            except WebSocketDisconnect:
-                return
+                if not isinstance(data, dict):
+                    await websocket.send_json(
+                        {"type": "error", "content": "expected JSON object"}
+                    )
+                    continue
+
+                msg_type = data.get("type")
+                # Phase 3 v1.4.0: explicit ``compact`` message type.
+                # Client sends ``{"type": "compact", "bypass_cache": false}``
+                # to trigger a manual /compact. Server replies with a
+                # ``compact_done`` event carrying the saved_tokens count.
+                if msg_type == "compact":
+                    await _handle_compact_message(
+                        websocket=websocket,
+                        session_id=session_id,
+                        chat_session=chat_session,
+                        compact_trigger=getattr(
+                            websocket.app.state, "compact_trigger", None,
+                        ),
+                        bypass_cache=bool(data.get("bypass_cache", False)),
+                    )
+                    continue
+                if msg_type != "user_message":
+                    # Silently ignore non-user messages for now (e.g. pings).
+                    continue
+
+                content = data.get("content", "")
+                if not isinstance(content, str):
+                    await websocket.send_json(
+                        {"type": "error", "content": "'content' must be a string"}
+                    )
+                    continue
+
+                try:
+                    await _run_one_turn(
+                        websocket=websocket,
+                        chat_session=chat_session,
+                        loop_obj=loop_obj,
+                        model=model,
+                        user_content=content,
+                    )
+                except WebSocketDisconnect:
+                    logger.info(
+                        "WS client disconnected mid-turn: session_id=%s",
+                        session_id,
+                    )
+                    return
+                except Exception as exc:  # noqa: BLE001 - surface to client
+                    logger.exception("WS turn failed: session_id=%s", session_id)
+                    try:
+                        await websocket.send_json(
+                            {"type": "error", "content": f"{type(exc).__name__}: {exc}"}
+                        )
+                    except Exception:  # noqa: BLE001 - socket may already be closed
+                        pass
+                    # Continue serving — don't kill the connection on a single bad turn.
+
+                # Mark end of this turn. WS stays open for the next user message.
+                try:
+                    await websocket.send_json({"type": "session_done"})
+                except WebSocketDisconnect:
+                    return
     except WebSocketDisconnect:
         logger.info("WS outer disconnect: session_id=%s", session_id)
         return
+
+
+# === Compact message handler (Phase 3 v1.4.0) ===
+
+async def _handle_compact_message(
+    *,
+    websocket: WebSocket,
+    session_id: str,
+    chat_session: ChatSession,
+    compact_trigger: Any,
+    bypass_cache: bool,
+) -> None:
+    """Handle a WS ``{"type": "compact"}`` message.
+
+    Phase 3 v1.4.0: clients can ask for a manual /compact mid-session.
+    We load the full history, hand it to the ``CompactTrigger``, and
+    send a ``compact_done`` event with the saved tokens + cache hit
+    flag. On failure we send ``compact_failed`` so the client can
+    retry.
+    """
+    if compact_trigger is None:
+        try:
+            await websocket.send_json({
+                "type": "compact_failed",
+                "error": "compact trigger not wired on server",
+            })
+        except Exception:  # noqa: BLE001
+            pass
+        return
+    try:
+        history = await chat_session.load_history()
+    except Exception as exc:  # noqa: BLE001
+        try:
+            await websocket.send_json({
+                "type": "compact_failed",
+                "error": f"load_history: {type(exc).__name__}: {exc}",
+            })
+        except Exception:  # noqa: BLE001
+            pass
+        return
+    try:
+        result = await compact_trigger.compact_now(
+            history,
+            model=getattr(chat_session, "model", "qwen3:8b") or "qwen3:8b",
+            session_id=session_id,
+            bypass_cache=bypass_cache,
+        )
+    except Exception as exc:  # noqa: BLE001
+        try:
+            await websocket.send_json({
+                "type": "compact_failed",
+                "error": f"{type(exc).__name__}: {exc}",
+            })
+        except Exception:  # noqa: BLE001
+            pass
+        return
+    if result is None:
+        try:
+            await websocket.send_json({
+                "type": "compact_failed",
+                "error": "trigger returned None (see audit log)",
+            })
+        except Exception:  # noqa: BLE001
+            pass
+        return
+    try:
+        await websocket.send_json({
+            "type": "compact_done",
+            "session_id": session_id,
+            "original_tokens": result.original_tokens,
+            "compacted_tokens": result.compacted_tokens,
+            "saved_tokens": result.saved_tokens,
+            "cache_hit": result.cache_hit,
+        })
+    except Exception:  # noqa: BLE001 — socket may already be closed
+        pass
 
 
 # === Per-turn driver ===

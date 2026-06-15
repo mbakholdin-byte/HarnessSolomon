@@ -89,6 +89,7 @@ class ToolRuntime:
         l2_curator_model: str = "qwen3:8b",
         tool_offloader: Any = None,
         reflection: Any = None,
+        events_collector: Any = None,
     ) -> None:
         self.project_root = project_root.resolve(strict=False)
         #: Phase 3 v1.2.0: optional scratchpad store. When ``None`` the
@@ -137,6 +138,15 @@ class ToolRuntime:
         #: attribute via ``getattr`` so the runtime can be constructed
         #: in tests without the reflection module being importable.
         self._reflection = reflection
+        #: Phase 3 v1.4.0: optional mutable list that ``AgentLoop``
+        #: appends ``SessionEvent`` records to as the session
+        #: progresses. ``SessionLifecycle.__aexit__`` reads this
+        #: list (via ``getattr(runtime, "_events_collector", None)``)
+        #: and passes it to ``ReflectionLoop.reflect``. ``None``
+        #: disables event collection (no reflection on exit).
+        #: Typed as ``Any`` so the collector does not need to be
+        #: ``list[SessionEvent]`` — duck-typed ``.append(...)``.
+        self._events_collector = events_collector
 
     # --- dispatcher ---
 

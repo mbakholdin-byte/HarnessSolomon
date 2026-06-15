@@ -28,6 +28,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, AsyncIterator
 
@@ -46,6 +48,14 @@ logger = logging.getLogger(__name__)
 # === Defaults ===
 
 DEFAULT_MAX_ITERATIONS = 5
+
+# === Regex (Phase 3 v1.4.0) ===
+
+#: Matches the ``id=N`` fragment in an offload stub produced by
+#: ``ToolOffloader.build_stub``. We use this in
+#: :meth:`AgentLoop._extract_offloaded_note_id` so reflection lessons
+#: can reference the L2 storage by note id.
+_OFFLOADED_ID_RE = re.compile(r"\bid=(\d+)\b")
 
 
 # === Helpers ===
@@ -299,6 +309,11 @@ class AgentLoop:
                 )
                 yield assistant_event
                 last_event = assistant_event
+                # Phase 3 v1.4.0: record the assistant turn for
+                # end-of-session reflection. The collected events are
+                # consumed by ``SessionLifecycle.__aexit__`` which
+                # passes them to ``ReflectionLoop.reflect``.
+                self._record_event(kind="assistant", content=content)
 
                 # 2. Record the assistant turn in the message history.
                 assistant_msg: dict[str, Any] = {
@@ -342,6 +357,20 @@ class AgentLoop:
                         content=content,
                         name=name,
                         tool_call_id=tool_call.get("id"),
+                    )
+                    # Phase 3 v1.4.0: record this tool turn for reflection.
+                    # The offloader returned either the original content
+                    # (offload disabled / failed) or a stub. We record
+                    # the *stored* content (stub when offloaded) so the
+                    # lesson extractor sees the pointer, not the body.
+                    offloaded_id = self._extract_offloaded_note_id(
+                        content=content, original_full=tool_result.output,
+                    )
+                    self._record_event(
+                        kind="tool",
+                        content=content,
+                        tool_name=name,
+                        offloaded_id=offloaded_id,
                     )
 
                     result_event = StreamEvent(
@@ -462,6 +491,102 @@ class AgentLoop:
         return offloader.build_stub(
             content, note_id=note_id, tool_name=name,
         )
+
+    # --- Phase 3 v1.4.0: SessionEvent collection for reflection ---
+
+    def _extract_offloaded_note_id(
+        self,
+        *,
+        content: str,
+        original_full: str,
+    ) -> int | None:
+        """Return the L2 note id if ``content`` is an offload stub.
+
+        The offloader builds a stub like::
+
+            (offloaded 27123 bytes; id=42; tool=bash; read via
+            scratchpad_read_offloaded(id=42))
+
+        We detect the stub by comparing byte length — if the
+        ``content`` we ended up with is much shorter than the
+        ``original_full`` output, an offload must have happened. We
+        then extract the integer ``id=N`` with a regex.
+
+        Returns ``None`` when no offload happened (full content kept
+        inline) or when the stub format is unrecognised.
+        """
+        if not isinstance(content, str) or not isinstance(original_full, str):
+            return None
+        # Quick reject: offload only fires when the result is large.
+        if len(content) >= len(original_full):
+            return None
+        m = _OFFLOADED_ID_RE.search(content)
+        if m is None:
+            return None
+        try:
+            return int(m.group(1))
+        except (ValueError, TypeError):
+            return None
+
+    def _record_event(
+        self,
+        *,
+        kind: str,
+        content: str,
+        tool_name: str | None = None,
+        offloaded_id: int | None = None,
+    ) -> None:
+        """Append a ``SessionEvent`` to the runtime's collector.
+
+        Phase 3 v1.4.0: the collector is a plain list wired into
+        ``ToolRuntime`` at construction. ``SessionLifecycle.__aexit__``
+        reads it (via ``getattr(runtime, "_events_collector", None)``)
+        and passes it to ``ReflectionLoop.reflect``.
+
+        We construct ``SessionEvent`` instances defensively:
+        * If the loop has been imported without the reflection module
+          (test path), we fall back to a duck-typed dict-like object
+          with the same field names. Reflection / lifecycle are the
+          only consumers of this list, and both use ``getattr`` /
+          dataclass field access.
+        * Collector being ``None`` is a no-op (backward compat with
+          v1.3.x runtimes that did not collect events).
+
+        The function is intentionally best-effort — losing an event
+        is not a failure mode the user should ever see. We log and
+        swallow any error (e.g. collector is a frozen tuple).
+        """
+        collector = getattr(self.runtime, "_events_collector", None)
+        if collector is None:
+            return
+        # Build a SessionEvent when possible, fall back to a simple
+        # namespace-like dict for test paths.
+        try:
+            from harness.server.agent.reflection_loop import SessionEvent
+            event = SessionEvent(
+                kind=kind,  # type: ignore[arg-type]
+                content=content,
+                ts=time.time(),
+                tool_name=tool_name,
+                offloaded_id=offloaded_id,
+            )
+        except Exception:  # noqa: BLE001 — module unavailable, fall back
+            event = {
+                "kind": kind,
+                "content": content,
+                "ts": time.time(),
+                "tool_name": tool_name,
+                "offloaded_id": offloaded_id,
+            }
+        try:
+            append = getattr(collector, "append", None)
+            if append is None:
+                return
+            append(event)
+        except Exception as exc:  # noqa: BLE001 — best-effort
+            logger.warning(
+                "AgentLoop: failed to record %s event: %s", kind, exc,
+            )
 
 
 __all__ = ["AgentLoop", "DEFAULT_MAX_ITERATIONS"]

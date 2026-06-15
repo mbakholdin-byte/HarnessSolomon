@@ -13,6 +13,7 @@ and lets the dependency layer short-circuit auth in dev mode
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from typing import Any
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -206,6 +207,60 @@ async def lifespan(app: FastAPI):
         app.state.compactor = None
         app.state.compact_store = None
         app.state.unified_memory = None
+
+    # Phase 3 v1.4.0: wire the ``CompactTrigger`` for manual /compact.
+    # The trigger wraps the compactor with per-call timeout + audit
+    # so the HTTP route, CLI subcommand, and WebSocket message
+    # handler can all share the same failure semantics. If the
+    # compactor was disabled at init we still create a trigger
+    # pointed at ``None`` so the /compact route can return a clean
+    # 503 rather than 500-ing on AttributeError.
+    from harness.server.agent.compact_trigger import CompactTrigger
+    audit = getattr(app.state, "compactor", None)
+    if audit is not None:
+        # The trigger wants the same audit writer the compactor uses.
+        try:
+            compactor_audit = getattr(audit, "_audit", None)
+        except Exception:
+            compactor_audit = None
+    else:
+        compactor_audit = None
+    app.state.compact_trigger = CompactTrigger(
+        compactor=getattr(app.state, "compactor", None),
+        settings=settings,
+        audit=compactor_audit,
+    )
+    if app.state.compact_trigger._compactor is not None:
+        print("[harness] compact_trigger: enabled")
+    else:
+        print("[harness] compact_trigger: disabled (no compactor)")
+
+    # Phase 3 v1.4.0: build the ``reflection_factory`` closure for
+    # the runner. The factory constructs a ``ReflectionLoop`` on
+    # demand per-session. The closure keeps ``app.state.unified_memory``
+    # and the audit writer in scope without leaking them into the
+    # runner module (trust boundary — the runner only sees a
+    # ``Callable[..., Any]``).
+    def _reflection_factory(*, spec: Any, session_id: str,
+                            scratchpad: Any = None) -> Any:
+        """Closure: build a ReflectionLoop with lifespan-bound deps.
+
+        Mirrors the ``offloader_factory`` / ``scratchpad_factory``
+        pattern from Phase 3 v1.3.1 / v1.2.0. We import the
+        reflection module here (lifespan scope) so the runner never
+        has to.
+        """
+        from harness.server.agent.reflection_loop import ReflectionLoop
+        return ReflectionLoop(
+            scratchpad=scratchpad,
+            settings=settings,
+            router=router_inst if "router_inst" in dir() else None,
+            unified_memory=getattr(app.state, "unified_memory", None),
+            audit=compactor_audit,
+        )
+
+    app.state.reflection_factory = _reflection_factory
+    print("[harness] reflection_factory: enabled (closure ready)")
 
     # Phase 1.6: scope-gated API — initialise the auth token store.
     # The store lives at <db_path.parent>/harness-scope.db (sibling
