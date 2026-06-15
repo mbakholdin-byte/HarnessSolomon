@@ -114,10 +114,16 @@ class UnifiedMemory:
         dual_write_policy: dict[str, Any] | None = None,
         *,
         agent_id: str = "solomon",
+        embedder: Any = None,
     ) -> None:
         if not agent_id or not isinstance(agent_id, str):
             raise ValueError(f"agent_id must be a non-empty string, got {agent_id!r}")
         self.agent_id = agent_id
+        # Phase 3: optional embedder. When set, ``write()`` computes
+        # the embedding and stores it in ``metadata.embedding`` so a
+        # future ``DenseRetriever`` can use it. When None, ``write()``
+        # is unchanged (backward compat).
+        self.embedder = embedder
         self.hmem = HmemAdapter(memory_dir=Path(hmem_dir), agent=agent_id)
         self.mem0 = Mem0Adapter(
             storage_dir=Path(mem0_dir),
@@ -194,6 +200,28 @@ class UnifiedMemory:
         if memory.layer == L1_OVERRIDE_TARGET:
             self._safe_write(self.hmem, memory)
             return
+
+        # Phase 3: embedder-on-write. If an embedder was injected at
+        # __init__, compute the embedding for the new memory and
+        # store it in ``metadata.embedding`` with a version stamp.
+        # Best-effort — a failed embed is logged but does not block
+        # the write (the BM25 path will still find the memory).
+        if self.embedder is not None:
+            try:
+                import asyncio
+                vec = asyncio.run(
+                    self.embedder.embed_documents([memory.content])
+                )
+                if vec.shape[0] > 0:
+                    memory.metadata["embedding"] = vec[0].tolist()
+                    memory.metadata["embedding_version"] = (
+                        self.embedder.model_id
+                    )
+            except Exception as e:  # noqa: BLE001 — best-effort
+                import logging
+                logging.getLogger(__name__).warning(
+                    "embedder.embed_documents failed: %s", e,
+                )
 
         primary_layer = self.policy["primary"]
         primary_adapter = _resolve_adapter_for_layer(
@@ -314,6 +342,35 @@ class UnifiedMemory:
                 seen.add(mem.id)
                 out.append(mem)
         return out
+
+    def search_scored(
+        self, query: str, k: int = 5,
+    ) -> list[tuple[Memory, float]]:
+        """Phase 3: scored semantic search.
+
+        Returns ``list[tuple[Memory, float]]`` ordered by descending
+        score. Falls back to ``self.search(query)`` (with score 0.0
+        on every hit) when no embedder is configured. This is the
+        method the ``DenseRetriever`` / ``HybridRetriever`` call.
+
+        Score semantics:
+          - Dense path: cosine similarity in ``[0, 1]``.
+          - BM25 path: ad-hoc 0.0 / 1.0 (just the substring presence).
+        """
+        if self.embedder is None:
+            return [(m, 0.0) for m in self.search(query)[:k]]
+        # Build a dense retriever over all entries that already
+        # have a current-version embedding. Older vectors are
+        # skipped here (the caller can fall back to ``search()``).
+        from harness.memory.retrieval.dense import DenseRetriever
+
+        all_mems = self.read()
+        retriever = DenseRetriever(
+            corpus=all_mems, embedder=self.embedder,
+        )
+        # ``DenseRetriever.retrieve`` is async; we run it inline.
+        import asyncio
+        return asyncio.run(retriever.retrieve(query, k=k))
 
     # --- recent ---
 
