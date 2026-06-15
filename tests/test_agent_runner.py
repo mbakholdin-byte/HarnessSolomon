@@ -706,6 +706,45 @@ def test_runner_does_not_import_reflection_loop() -> None:
             )
 
 
+def test_runner_does_not_import_compact_trigger() -> None:
+    """The runner must not import CompactTrigger directly (Phase 3 v1.4.0).
+
+    Trust boundary: the compact trigger is wired directly by the HTTP
+    route, the CLI subcommand, and the WebSocket handler — not by the
+    agent runner. The runner is part of the trust boundary and must
+    not pull in the trigger module; doing so would couple the runner
+    to a feature that only the surface layers need.
+
+    Mirrors ``test_runner_does_not_import_tool_offloader`` from
+    Phase 3 v1.3.1 and ``test_runner_does_not_import_reflection_loop``
+    from Step 2.
+    """
+    import harness.agents.runner as runner_mod
+    src = Path(runner_mod.__file__).read_text(encoding="utf-8")
+    for line in src.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#") or stripped.startswith('"""') or stripped.startswith("'''"):
+            continue
+        if ":class:" in stripped or ":func:" in stripped or ":meth:" in stripped:
+            continue
+        if stripped.startswith(
+            "from harness.server.agent.compact_trigger import",
+        ):
+            pytest.fail(
+                f"runner.py has a real import of compact_trigger: {line!r}"
+            )
+        if stripped.startswith(
+            "import harness.server.agent.compact_trigger",
+        ):
+            pytest.fail(
+                f"runner.py has a real import of compact_trigger: {line!r}"
+            )
+        if "CompactTrigger" in stripped and not stripped.startswith("#"):
+            pytest.fail(
+                f"runner.py references CompactTrigger directly: {line!r}"
+            )
+
+
 # === RunResult dataclass ===
 
 def test_run_result_default_usage() -> None:

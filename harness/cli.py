@@ -866,6 +866,67 @@ def _cmd_auth_test(args: argparse.Namespace) -> int:
         return 1
 
 
+def _cmd_sessions_compact(args: argparse.Namespace) -> int:
+    """Phase 3 v1.4.0: ``harness sessions compact --session <id>``.
+
+    Manual /compact via the CLI. Posts to the running server's
+    ``POST /api/v1/sessions/{id}/compact`` endpoint and prints
+    a one-line summary plus the structured JSON.
+
+    The CLI does NOT do the compact itself — the server is the
+    owner of the compactor. This avoids the need to bootstrap a
+    full app in the CLI process just to summarise a session.
+    """
+    import json
+    import urllib.error
+    import urllib.request
+
+    url = f"{args.base_url.rstrip('/')}/api/v1/sessions/{args.session}/compact"
+    body = b""
+    if args.bypass_cache:
+        url += "?bypass_cache=true"
+
+    req = urllib.request.Request(url, data=body, method="POST")
+    req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        try:
+            detail = json.loads(exc.read().decode("utf-8")).get("detail", str(exc))
+        except Exception:
+            detail = str(exc)
+        print(
+            f"error: HTTP {exc.code} from server: {detail}",
+            file=sys.stderr,
+        )
+        return 1
+    except (urllib.error.URLError, ConnectionError, TimeoutError) as exc:
+        print(
+            f"error: cannot reach {args.base_url}: {exc}. "
+            f"Is `harness serve` running?",
+            file=sys.stderr,
+        )
+        return 1
+
+    # Print human summary + structured JSON.
+    saved = payload.get("saved_tokens", 0)
+    orig = payload.get("original_tokens", 0)
+    comp = payload.get("compacted_tokens", 0)
+    cache = payload.get("cache_hit", False)
+    print(
+        f"compacted session={args.session}: "
+        f"{orig}->{comp} tokens (saved {saved}, cache_hit={cache})"
+    )
+    if payload.get("summary_preview"):
+        preview = payload["summary_preview"]
+        if len(preview) > 200:
+            preview = preview[:200] + "…"
+        print(f"  preview: {preview}")
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
 def _dispatch_auth(args: argparse.Namespace) -> int:
     """Dispatch on ``auth`` sub-subcommand + run bootstrap when needed.
 
@@ -1294,6 +1355,37 @@ def _build_parser() -> argparse.ArgumentParser:
         "--base-url", default="http://127.0.0.1:8765",
         help="Base URL of the harness server (default: %(default)s).",
     )
+
+    # Phase 3 v1.4.0: ``sessions`` subcommand (manual /compact via CLI).
+    sessions_p = sub.add_parser(
+        "sessions",
+        help=(
+            "Session control (Phase 3 v1.4.0). "
+            "See `harness sessions --help`."
+        ),
+    )
+    sessions_sub = sessions_p.add_subparsers(dest="sessions_command")
+    compact_p = sessions_sub.add_parser(
+        "compact",
+        help=(
+            "Force-compact a session's context (manual /compact). "
+            "Calls the running server's POST /api/v1/sessions/{id}/compact "
+            "via HTTP — so the server must be running."
+        ),
+    )
+    compact_p.add_argument(
+        "--session", required=True,
+        help="Session id to compact (UUID or any string).",
+    )
+    compact_p.add_argument(
+        "--bypass-cache", action="store_true",
+        help="Re-summarise even if a cached compact exists.",
+    )
+    compact_p.add_argument(
+        "--base-url", default="http://127.0.0.1:8765",
+        help="Base URL of the harness server (default: %(default)s).",
+    )
+    compact_p.set_defaults(func=_cmd_sessions_compact)
 
     return parser
 
