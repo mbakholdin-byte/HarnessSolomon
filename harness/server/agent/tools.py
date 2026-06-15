@@ -124,6 +124,104 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "required": ["pattern"],
         },
     },
+    # === Phase 3 v1.2.0: Scratchpad (Write context) ===
+    {
+        "name": "scratchpad_write_note",
+        "description": (
+            "Persist a note to the per-(session, agent) scratchpad. "
+            "Use 'L0' for hot facts that should appear in the system "
+            "prompt on every turn (1KB cap, oldest auto-pruned). Use "
+            "'L1' for plan / decision context. Use 'L2' for archive "
+            "notes (dense+BM25 retrieval in v1.3.0)."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "level": {
+                    "type": "string",
+                    "enum": ["L0", "L1", "L2"],
+                    "description": "Memory layer (L0=hot, L1=plan, L2=archive).",
+                },
+                "content": {
+                    "type": "string",
+                    "description": "Note text. Markdown-friendly.",
+                },
+                "tags": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional tags for retrieval / grouping.",
+                },
+            },
+            "required": ["level", "content"],
+        },
+    },
+    {
+        "name": "scratchpad_read_notes",
+        "description": (
+            "Read notes from the per-(session, agent) scratchpad, "
+            "newest first. Filter by 'level' (L0/L1/L2) or omit to "
+            "read all levels. Returns up to 50 notes with id, level, "
+            "content, tags, created_at."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "level": {
+                    "type": "string",
+                    "enum": ["L0", "L1", "L2"],
+                    "description": "Filter by level (default: all).",
+                },
+            },
+        },
+    },
+    {
+        "name": "scratchpad_plan_step",
+        "description": (
+            "Add a step to the per-(session, agent) plan. Steps have a "
+            "description, an optional list of dependency step ids, and a "
+            "status lifecycle (pending → in_progress → done / blocked). "
+            "Use deps to express ordering: this step waits on the listed "
+            "step ids reaching 'done'."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string",
+                    "description": "What this step accomplishes.",
+                },
+                "deps": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "description": "Optional list of plan_step ids this step depends on.",
+                },
+            },
+            "required": ["description"],
+        },
+    },
+    {
+        "name": "scratchpad_mark_done",
+        "description": (
+            "Update the status of a plan step. Default status is 'done' "
+            "but you can also set 'in_progress', 'blocked', or revert to "
+            "'pending'."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "step_id": {
+                    "type": "integer",
+                    "description": "Plan step id (from scratchpad_plan_step or scratchpad_read_notes).",
+                },
+                "status": {
+                    "type": "string",
+                    "enum": ["pending", "in_progress", "done", "blocked"],
+                    "description": "New status. Default 'done'.",
+                },
+            },
+            "required": ["step_id"],
+        },
+    },
 ]
 
 

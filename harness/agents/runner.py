@@ -38,7 +38,14 @@ logger = logging.getLogger(__name__)
 #: regardless of whether they appear in ``spec.tools``. This is defence in
 #: depth: a typo or hallucination cannot enable write access for an
 #: agent declared as read-only.
-_READ_ONLY_DENY: frozenset[str] = frozenset({"write_file", "edit_file"})
+#:
+#: Phase 3 v1.2.0 also strips the 3 scratchpad *write* tools from
+#: read-only agents. ``scratchpad_read_notes`` stays — a read-only
+#: agent can still consult its own notes / plan.
+_READ_ONLY_DENY: frozenset[str] = frozenset({
+    "write_file", "edit_file",
+    "scratchpad_write_note", "scratchpad_plan_step", "scratchpad_mark_done",
+})
 
 
 def permissions_denylist(permissions: str) -> frozenset[str]:

@@ -15,6 +15,7 @@ Design notes:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import shutil
 import time
@@ -51,7 +52,11 @@ class ToolResult(BaseModel):
 
 # === Tool name type (for IDE/type-checker friendliness) ===
 
-ToolName = Literal["read_file", "edit_file", "write_file", "bash", "grep", "glob"]
+ToolName = Literal[
+    "read_file", "edit_file", "write_file", "bash", "grep", "glob",
+    "scratchpad_write_note", "scratchpad_read_notes",
+    "scratchpad_plan_step", "scratchpad_mark_done",
+]
 
 
 # === Default tunables ===
@@ -66,11 +71,25 @@ class ToolRuntime:
     """Executes tools against a sandboxed ``project_root``.
 
     Instantiate one runtime per agent session. The runtime is stateless
-    beyond the project_root reference.
+    beyond the project_root reference and the optional scratchpad hooks
+    (Phase 3 v1.2.0).
     """
 
-    def __init__(self, project_root: Path) -> None:
+    def __init__(
+        self,
+        project_root: Path,
+        *,
+        scratchpad: Any = None,
+        scratchpad_audit: Any = None,
+    ) -> None:
         self.project_root = project_root.resolve(strict=False)
+        #: Phase 3 v1.2.0: optional scratchpad store. When ``None`` the
+        #: 4 scratchpad tools return a graceful error result.
+        self._scratchpad = scratchpad
+        #: Phase 3 v1.2.0: optional audit writer. When ``None`` the
+        #: scratchpad tool calls are not audited (structured logs still
+        #: emitted by the store).
+        self._scratchpad_audit = scratchpad_audit
 
     # --- dispatcher ---
 
@@ -90,6 +109,14 @@ class ToolRuntime:
                 result = await self._grep(args)
             elif name == "glob":
                 result = await self._glob(args)
+            elif name == "scratchpad_write_note":
+                result = await self._scratchpad_write_note(args)
+            elif name == "scratchpad_read_notes":
+                result = await self._scratchpad_read_notes(args)
+            elif name == "scratchpad_plan_step":
+                result = await self._scratchpad_plan_step(args)
+            elif name == "scratchpad_mark_done":
+                result = await self._scratchpad_mark_done(args)
             else:
                 result = ToolResult(ok=False, error=f"unknown tool: {name!r}")
         except Exception as exc:  # noqa: BLE001 — top-level safety net
@@ -377,6 +404,226 @@ class ToolRuntime:
         if not matches:
             return ToolResult(ok=True, output="(no matches)")
         return ToolResult(ok=True, output="\n".join(matches))
+
+    # --- scratchpad tools (Phase 3 v1.2.0) ---
+
+    async def _scratchpad_write_note(
+        self, args: dict[str, Any],
+    ) -> ToolResult:
+        if self._scratchpad is None:
+            return ToolResult(
+                ok=False, error="scratchpad not enabled in this runtime",
+            )
+        level_raw = args.get("level")
+        content = args.get("content")
+        if not isinstance(level_raw, str) or level_raw not in ("L0", "L1", "L2"):
+            return ToolResult(
+                ok=False,
+                error=(
+                    "scratchpad_write_note: 'level' must be one of "
+                    "'L0', 'L1', 'L2'"
+                ),
+            )
+        if not isinstance(content, str) or not content:
+            return ToolResult(
+                ok=False,
+                error="scratchpad_write_note: 'content' must be a non-empty string",
+            )
+        tags = args.get("tags")
+        if tags is not None and not (
+            isinstance(tags, list) and all(isinstance(t, str) for t in tags)
+        ):
+            return ToolResult(
+                ok=False,
+                error="scratchpad_write_note: 'tags' must be a list[str] or omitted",
+            )
+        # Lazy import: avoid hard-coupling runtime.py to scratchpad_store.
+        from harness.agents.scratchpad import NoteLevel
+        try:
+            note = await self._scratchpad.write_note(
+                NoteLevel(level_raw), content, tags=tags,
+            )
+        except Exception as exc:  # noqa: BLE001 — scratchpad never breaks the chat loop
+            logger.warning(
+                "scratchpad.write_note failed: %s", exc,
+            )
+            return ToolResult(
+                ok=False,
+                error=f"scratchpad: {type(exc).__name__}: {exc}",
+            )
+        if self._scratchpad_audit is not None:
+            try:
+                self._scratchpad_audit.record(
+                    "write",
+                    self._scratchpad._session_id,  # type: ignore[attr-defined]
+                    level=level_raw,
+                    note_id=note.id,
+                    size_bytes=len(content.encode("utf-8")),
+                    tags_count=len(tags) if tags else 0,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("scratchpad audit write failed: %s", exc)
+        payload = {
+            "id": note.id,
+            "level": level_raw,
+            "created_at": note.created_at,
+        }
+        return ToolResult(ok=True, output=json.dumps(payload, ensure_ascii=False))
+
+    async def _scratchpad_read_notes(
+        self, args: dict[str, Any],
+    ) -> ToolResult:
+        if self._scratchpad is None:
+            return ToolResult(
+                ok=False, error="scratchpad not enabled in this runtime",
+            )
+        level_raw = args.get("level")
+        if level_raw is not None and level_raw not in ("L0", "L1", "L2"):
+            return ToolResult(
+                ok=False,
+                error=(
+                    "scratchpad_read_notes: 'level' must be one of "
+                    "'L0', 'L1', 'L2' or omitted"
+                ),
+            )
+        from harness.agents.scratchpad import NoteLevel
+        level_enum = NoteLevel(level_raw) if level_raw is not None else None
+        try:
+            notes = await self._scratchpad.read_notes(
+                level_enum, limit=50,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("scratchpad.read_notes failed: %s", exc)
+            return ToolResult(
+                ok=False,
+                error=f"scratchpad: {type(exc).__name__}: {exc}",
+            )
+        if self._scratchpad_audit is not None:
+            try:
+                self._scratchpad_audit.record(
+                    "read",
+                    self._scratchpad._session_id,  # type: ignore[attr-defined]
+                    level_filter=level_raw,
+                    result_count=len(notes),
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("scratchpad audit read failed: %s", exc)
+        payload = [
+            {
+                "id": n.id,
+                "level": n.level.value,
+                "content": n.content,
+                "tags": n.tags,
+                "created_at": n.created_at,
+            }
+            for n in notes
+        ]
+        if not payload:
+            return ToolResult(ok=True, output="(no notes)")
+        return ToolResult(ok=True, output=json.dumps(payload, ensure_ascii=False))
+
+    async def _scratchpad_plan_step(
+        self, args: dict[str, Any],
+    ) -> ToolResult:
+        if self._scratchpad is None:
+            return ToolResult(
+                ok=False, error="scratchpad not enabled in this runtime",
+            )
+        description = args.get("description")
+        if not isinstance(description, str) or not description:
+            return ToolResult(
+                ok=False,
+                error="scratchpad_plan_step: 'description' is required",
+            )
+        deps = args.get("deps")
+        if deps is not None and not (
+            isinstance(deps, list) and all(isinstance(d, int) for d in deps)
+        ):
+            return ToolResult(
+                ok=False,
+                error="scratchpad_plan_step: 'deps' must be a list[int] or omitted",
+            )
+        try:
+            step = await self._scratchpad.add_plan_step(
+                description, deps=deps,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("scratchpad.plan_step failed: %s", exc)
+            return ToolResult(
+                ok=False,
+                error=f"scratchpad: {type(exc).__name__}: {exc}",
+            )
+        if self._scratchpad_audit is not None:
+            try:
+                self._scratchpad_audit.record(
+                    "plan_step",
+                    self._scratchpad._session_id,  # type: ignore[attr-defined]
+                    step_id=step.id,
+                    deps_count=len(deps) if deps else 0,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("scratchpad audit plan_step failed: %s", exc)
+        payload = {
+            "id": step.id,
+            "status": step.status.value,
+            "created_at": step.created_at,
+        }
+        return ToolResult(ok=True, output=json.dumps(payload, ensure_ascii=False))
+
+    async def _scratchpad_mark_done(
+        self, args: dict[str, Any],
+    ) -> ToolResult:
+        if self._scratchpad is None:
+            return ToolResult(
+                ok=False, error="scratchpad not enabled in this runtime",
+            )
+        step_id = args.get("step_id")
+        if not isinstance(step_id, int) or isinstance(step_id, bool):
+            return ToolResult(
+                ok=False,
+                error="scratchpad_mark_done: 'step_id' must be an integer",
+            )
+        status_raw = args.get("status", "done")
+        if status_raw not in ("pending", "in_progress", "done", "blocked"):
+            return ToolResult(
+                ok=False,
+                error=(
+                    "scratchpad_mark_done: 'status' must be one of "
+                    "'pending', 'in_progress', 'done', 'blocked'"
+                ),
+            )
+        from harness.agents.scratchpad import PlanStatus
+        try:
+            updated = await self._scratchpad.mark_done(
+                step_id, status=PlanStatus(status_raw),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("scratchpad.mark_done failed: %s", exc)
+            return ToolResult(
+                ok=False,
+                error=f"scratchpad: {type(exc).__name__}: {exc}",
+            )
+        if updated is None:
+            return ToolResult(
+                ok=False,
+                error=f"scratchpad_mark_done: no plan_step with id={step_id}",
+            )
+        if self._scratchpad_audit is not None:
+            try:
+                self._scratchpad_audit.record(
+                    "mark_done",
+                    self._scratchpad._session_id,  # type: ignore[attr-defined]
+                    step_id=step_id,
+                    status=status_raw,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("scratchpad audit mark_done failed: %s", exc)
+        payload = {
+            "id": updated.id,
+            "status": updated.status.value,
+            "updated_at": updated.updated_at,
+        }
+        return ToolResult(ok=True, output=json.dumps(payload, ensure_ascii=False))
 
 
 __all__ = ["ToolResult", "ToolRuntime", "ToolName"]
