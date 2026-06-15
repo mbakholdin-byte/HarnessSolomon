@@ -311,6 +311,147 @@ def _cmd_agents_run(args: argparse.Namespace) -> int:
     return 0
 
 
+# === Phase 3 v1.2.0: scratchpad (notes + plan) inspector ===
+
+def _cmd_context_read(args: argparse.Namespace) -> int:
+    """``harness context read`` — list notes for a session/agent."""
+    import asyncio
+    from harness.agents.scratchpad import NoteLevel
+    from harness.agents.scratchpad_store import ScratchpadStore
+    from harness.config import settings
+
+    store = ScratchpadStore(
+        settings.db_path.parent / "agent-jobs.db",
+        session_id=args.session,
+        agent_id=args.agent,
+    )
+
+    level_enum: NoteLevel | None = None
+    if args.level is not None:
+        level_enum = NoteLevel(args.level)
+
+    async def _run() -> int:
+        notes = await store.read_notes(level_enum, limit=50)
+        if not notes:
+            print("(no notes)", file=sys.stderr)
+            return 0
+        print(
+            f"{'id':>4}  {'level':4s}  {'tags':20s}  "
+            f"{'created_at':>10s}  content"
+        )
+        print("-" * 100)
+        for n in notes:
+            tags_short = ",".join(n.tags)[:18]
+            content_short = n.content.replace("\n", " ")[:60]
+            print(
+                f"{n.id:>4}  {n.level.value:4s}  {tags_short:20s}  "
+                f"{n.created_at:>10.0f}  {content_short}"
+            )
+        return 0
+
+    try:
+        return asyncio.run(_run())
+    except Exception as exc:  # noqa: BLE001 — surface to operator, don't crash CLI
+        print(f"error: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+
+
+def _cmd_context_write(args: argparse.Namespace) -> int:
+    """``harness context write`` — append a note to the scratchpad."""
+    import asyncio
+    from harness.agents.scratchpad import NoteLevel
+    from harness.agents.scratchpad_store import ScratchpadStore
+    from harness.config import settings
+
+    tags = [t.strip() for t in args.tags.split(",") if t.strip()] if args.tags else None
+
+    store = ScratchpadStore(
+        settings.db_path.parent / "agent-jobs.db",
+        session_id=args.session,
+        agent_id=args.agent,
+    )
+
+    async def _run() -> int:
+        note = await store.write_note(
+            NoteLevel(args.level), args.content, tags=tags,
+        )
+        print(f"wrote note id={note.id} level={note.level.value} "
+              f"size={len(note.content.encode('utf-8'))}B")
+        return 0
+
+    try:
+        return asyncio.run(_run())
+    except Exception as exc:  # noqa: BLE001
+        print(f"error: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+
+
+def _cmd_context_plan(args: argparse.Namespace) -> int:
+    """``harness context plan`` — list plan steps or mark one done."""
+    import asyncio
+    from harness.agents.scratchpad import PlanStatus
+    from harness.agents.scratchpad_store import ScratchpadStore
+    from harness.config import settings
+
+    store = ScratchpadStore(
+        settings.db_path.parent / "agent-jobs.db",
+        session_id=args.session,
+        agent_id=args.agent,
+    )
+
+    async def _list() -> int:
+        status_enum = PlanStatus(args.status) if args.status else None
+        steps = await store.list_plan_steps(status=status_enum)
+        if not steps:
+            print("(no plan steps)", file=sys.stderr)
+            return 0
+        print(
+            f"{'id':>4}  {'status':12s}  {'deps':10s}  "
+            f"{'updated_at':>10s}  description"
+        )
+        print("-" * 100)
+        for s in steps:
+            deps_short = ",".join(str(d) for d in s.deps)[:8]
+            desc_short = s.description.replace("\n", " ")[:60]
+            print(
+                f"{s.id:>4}  {s.status.value:12s}  {deps_short:10s}  "
+                f"{s.updated_at:>10.0f}  {desc_short}"
+            )
+        return 0
+
+    async def _mark() -> int:
+        if args.step_id is None:
+            print("error: --step-id is required for --mark-done", file=sys.stderr)
+            return 1
+        status_enum = PlanStatus(args.status) if args.status else PlanStatus.DONE
+        updated = await store.mark_done(args.step_id, status=status_enum)
+        if updated is None:
+            print(f"error: no plan_step with id={args.step_id}", file=sys.stderr)
+            return 1
+        print(f"marked step {updated.id} → {updated.status.value}")
+        return 0
+
+    try:
+        return asyncio.run(_mark() if args.mark_done else _list())
+    except Exception as exc:  # noqa: BLE001
+        print(f"error: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+
+
+def _cmd_context(args: argparse.Namespace) -> int:
+    """Dispatcher for the ``context`` subcommand (Phase 3 v1.2.0)."""
+    if args.context_command == "read":
+        return _cmd_context_read(args)
+    if args.context_command == "write":
+        return _cmd_context_write(args)
+    if args.context_command == "plan":
+        return _cmd_context_plan(args)
+    print("error: 'harness context' requires a subcommand "
+          "(read | write | plan). See `harness context --help`.",
+          file=sys.stderr)
+    return 1
+
+
 def _cmd_agents_jobs(args: argparse.Namespace) -> int:
     """Inspect background job status. ``agents jobs <id>`` or
     ``agents jobs --recent N`` to list."""
@@ -1011,6 +1152,66 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     agents.set_defaults(func=_cmd_agents)
+
+    # Phase 3 v1.2.0: scratchpad inspector. Reads directly from
+    # ``agent-jobs.db`` (no HTTP) so the operator can inspect state
+    # even when the server is down.
+    ctx = sub.add_parser(
+        "context",
+        help=(
+            "Scratchpad (notes + plan) inspector (Phase 3 v1.2.0). "
+            "Reads directly from the agent-jobs.db SQLite file. "
+            "See `harness context --help`."
+        ),
+    )
+    ctx_sub = ctx.add_subparsers(dest="context_command")
+
+    ctx_read = ctx_sub.add_parser(
+        "read", help="List scratchpad notes for a session",
+    )
+    ctx_read.add_argument("--session", required=True, help="Session id")
+    ctx_read.add_argument(
+        "--agent", default=None,
+        help="Agent id (default: any agent / admin context)",
+    )
+    ctx_read.add_argument(
+        "--level", choices=["L0", "L1", "L2"], default=None,
+        help="Filter by memory layer (default: all)",
+    )
+
+    ctx_write = ctx_sub.add_parser(
+        "write", help="Append a note to the scratchpad",
+    )
+    ctx_write.add_argument("--session", required=True)
+    ctx_write.add_argument("--agent", default=None)
+    ctx_write.add_argument(
+        "--level", required=True, choices=["L0", "L1", "L2"],
+    )
+    ctx_write.add_argument("--content", required=True, help="Note text")
+    ctx_write.add_argument(
+        "--tags", default="",
+        help="Comma-separated tags (optional)",
+    )
+
+    ctx_plan = ctx_sub.add_parser(
+        "plan", help="List plan steps or mark one done",
+    )
+    ctx_plan.add_argument("--session", required=True)
+    ctx_plan.add_argument("--agent", default=None)
+    ctx_plan.add_argument(
+        "--status", choices=["pending", "in_progress", "done", "blocked"],
+        default=None, help="Filter by status (default: all)",
+    )
+    ctx_plan.add_argument(
+        "--mark-done", action="store_true",
+        help="Mark a step done (requires --step-id)",
+    )
+    ctx_plan.add_argument(
+        "--step-id", type=int, default=None,
+        help="Plan step id (for --mark-done)",
+    )
+
+    ctx.set_defaults(func=_cmd_context)
 
     # Phase 1.6: auth subcommand for managing scope-gated API tokens.
     auth = sub.add_parser(
