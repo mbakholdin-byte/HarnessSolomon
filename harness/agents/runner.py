@@ -22,6 +22,7 @@ from typing import Any, AsyncIterator, Callable
 
 from harness.agents.spec import AgentSpec
 from harness.agents.worktree import WorktreeInfo, WorktreeSession
+from harness.config import settings
 from harness.redaction import redact
 from harness.server.agent.loop import AgentLoop, DEFAULT_MAX_ITERATIONS
 from harness.server.agent.prompts import build_system_prompt
@@ -30,6 +31,48 @@ from harness.server.agent.tools import TOOL_SCHEMAS
 from harness.server.llm.router import LLMRouter, StreamEvent
 
 logger = logging.getLogger(__name__)
+
+
+# === L0 injection (Phase 3 v1.2.1) ===
+
+#: Heading for the auto-injected L0 section in the system prompt. Kept
+#: short so the cap-tight L0 layer still leaves room for the model to
+#: breathe (the cap is ``scratchpad_l0_max_bytes`` = 1024 by default).
+L0_SECTION_HEADING: str = "## Hot context (L0 notes — this session, auto-injected)"
+
+
+def _format_l0_section(notes: list[Any]) -> str | None:
+    """Format L0 notes as a Markdown section for the system prompt.
+
+    Phase 3 v1.2.1: this is the ``L0``-layer fulfilment of the
+    Anthropic "Write context" strategy. Hot facts / plan / state are
+    visible to the model on every turn without requiring an extra
+    ``scratchpad_read_notes`` tool call.
+
+    Args:
+        notes: L0 notes for the current ``(session_id, agent_id)``,
+            typically the result of ``await store.read_notes(
+            NoteLevel.L0, limit=50)``. Order is preserved as supplied
+            (the store returns ``ORDER BY created_at DESC, id DESC``,
+            so the first item is the newest).
+
+    Returns:
+        A formatted section string ready to prepend to the system
+        prompt, or ``None`` if ``notes`` is empty (caller should
+        skip injection in that case). Cap safety: the store
+        enforces ``scratchpad_l0_max_bytes`` on write with FIFO
+        auto-prune, so we trust the cap is honoured; this function
+        does NOT add its own truncation.
+    """
+    if not notes:
+        return None
+    lines = [L0_SECTION_HEADING]
+    for n in notes:
+        tags = f" [{','.join(n.tags)}]" if getattr(n, "tags", None) else ""
+        content = getattr(n, "content", "") or ""
+        nid = getattr(n, "id", 0)
+        lines.append(f"- (id={nid}){tags} {content}")
+    return "\n".join(lines)
 
 
 # === Permissions → denylist ===
@@ -70,16 +113,32 @@ def filter_tools(spec: AgentSpec) -> list[dict[str, Any]]:
 
 def build_system_prompt_for(
     spec: AgentSpec, project_root: Path, tools: list[dict[str, Any]],
+    *,
+    l0_section: str | None = None,
 ) -> str:
     """Compose ``spec.system_prompt`` + the standard system prompt.
 
     The spec's prompt is the role description; the standard prompt adds
     the project_root and tool catalogue. We put the role description FIRST
     so it sets the tone before the LLM sees the tool list.
+
+    Phase 3 v1.2.1: when ``l0_section`` is provided (and non-empty),
+    it is prepended to the system message as a ``## Hot context``
+    block. The L0 layer is the "hot" slice of the Write-context
+    strategy — small (cap ``scratchpad_l0_max_bytes`` = 1024 by
+    default), structured, and always visible to the model without
+    requiring an extra tool call. The section sits BEFORE the role
+    description so the model reads the working state first and then
+    the operating rules.
     """
-    if spec.system_prompt:
-        return f"{spec.system_prompt}\n\n{build_system_prompt(project_root, tools)}"
-    return build_system_prompt(project_root, tools)
+    base = (
+        f"{spec.system_prompt}\n\n{build_system_prompt(project_root, tools)}"
+        if spec.system_prompt
+        else build_system_prompt(project_root, tools)
+    )
+    if l0_section:
+        return f"{l0_section}\n\n{base}"
+    return base
 
 
 # === Proxy runtime (defence in depth) ===
@@ -298,10 +357,31 @@ class AgentRunner:
             except Exception as exc:  # noqa: BLE001 — fail-open: scratchpad must never break the chat loop
                 logger.warning("scratchpad factory/init failed: %s", exc)
                 scratchpad = None
+        # Phase 3 v1.2.1: L0 → system prompt injection. We read L0
+        # notes for the current (spec, session) tuple, format them as
+        # a Markdown section, and prepend to the system message. We
+        # use ``NoteLevel`` from the scratchpad module WITHOUT a static
+        # import — the value is a string ``"L0"`` (str-valued Enum)
+        # so the store accepts it either way. This keeps the trust
+        # boundary: ``harness.agents.runner`` does NOT import the
+        # scratchpad module.
+        l0_section: str | None = None
+        if (
+            settings.scratchpad_inject_l0_to_system_prompt
+            and scratchpad is not None
+            and session_id is not None
+        ):
+            try:
+                l0_notes = await scratchpad.read_notes("L0", limit=50)
+                l0_section = _format_l0_section(l0_notes)
+            except Exception as exc:  # noqa: BLE001 — fail-open: L0 read must never break the chat loop
+                logger.warning("L0 read failed: %s", exc)
+                l0_section = None
         runtime = ToolRuntime(
             project_root=wt.path,
             scratchpad=scratchpad,
             scratchpad_audit=self._scratchpad_audit,
+            l0_section=l0_section,
         )
         wrapped = filter_runtime(spec, runtime)
         tools = filter_tools(spec)
@@ -312,7 +392,9 @@ class AgentRunner:
         )
 
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": build_system_prompt_for(spec, wt.path, tools)},
+            {"role": "system", "content": build_system_prompt_for(
+                spec, wt.path, tools, l0_section=l0_section,
+            )},
             # Phase 3: redact the user prompt before it reaches the LLM.
             # Idempotent + cheap (~1ms); the redacted text preserves
             # the structure so the LLM can still reason about email
@@ -428,10 +510,26 @@ class AgentRunner:
             except Exception as exc:  # noqa: BLE001 — fail-open
                 logger.warning("scratchpad factory/init failed: %s", exc)
                 scratchpad = None
+        # Phase 3 v1.2.1: L0 injection (mirror of _drive). See the
+        # rationale in _drive — same fail-open, same trust-boundary
+        # preservation (no static import of scratchpad module).
+        l0_section: str | None = None
+        if (
+            settings.scratchpad_inject_l0_to_system_prompt
+            and scratchpad is not None
+            and session_id is not None
+        ):
+            try:
+                l0_notes = await scratchpad.read_notes("L0", limit=50)
+                l0_section = _format_l0_section(l0_notes)
+            except Exception as exc:  # noqa: BLE001 — fail-open
+                logger.warning("L0 read failed: %s", exc)
+                l0_section = None
         runtime = ToolRuntime(
             project_root=wt.path,
             scratchpad=scratchpad,
             scratchpad_audit=self._scratchpad_audit,
+            l0_section=l0_section,
         )
         wrapped = filter_runtime(spec, runtime)
         tools = filter_tools(spec)
@@ -441,7 +539,9 @@ class AgentRunner:
             max_iterations=spec.max_iterations or DEFAULT_MAX_ITERATIONS,
         )
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": build_system_prompt_for(spec, wt.path, tools)},
+            {"role": "system", "content": build_system_prompt_for(
+                spec, wt.path, tools, l0_section=l0_section,
+            )},
             # Phase 3: see _drive() — redact the user prompt before
             # passing it to the LLM.
             {"role": "user", "content": redact(prompt)},

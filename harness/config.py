@@ -660,6 +660,21 @@ class Settings(BaseSettings):
             "False (opt-in — enable for compliance / debugging)."
         ),
     )
+    scratchpad_inject_l0_to_system_prompt: bool = Field(
+        default=True,
+        description=(
+            "Phase 3 v1.2.1: when True (default), the runner reads L0 "
+            "notes from the scratchpad on every ``run`` / ``stream`` "
+            "call and prepends them to the system prompt as a "
+            "``## Hot context (L0 notes — this session, "
+            "auto-injected)`` section. This is the ``L0``-layer "
+            "fulfilment of the Anthropic \"Write context\" strategy: "
+            "hot facts / plan / state are visible to the model "
+            "without needing an extra ``scratchpad_read_notes`` tool "
+            "round-trip. Set False to fall back to v1.2.0 behaviour "
+            "(LLM must call ``scratchpad_read_notes`` to consult L0)."
+        ),
+    )
 
     # === Phase 3: Embeddings (ONNX local) ===
     embeddings_dir: Path = Field(

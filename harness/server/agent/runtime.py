@@ -81,6 +81,7 @@ class ToolRuntime:
         *,
         scratchpad: Any = None,
         scratchpad_audit: Any = None,
+        l0_section: str | None = None,
     ) -> None:
         self.project_root = project_root.resolve(strict=False)
         #: Phase 3 v1.2.0: optional scratchpad store. When ``None`` the
@@ -90,6 +91,15 @@ class ToolRuntime:
         #: scratchpad tool calls are not audited (structured logs still
         #: emitted by the store).
         self._scratchpad_audit = scratchpad_audit
+        #: Phase 3 v1.2.1: pre-formatted L0 section string to inject
+        #: into the system prompt on the first turn. ``None`` (the
+        #: default) disables injection. ``AgentLoop.run`` reads this
+        #: attribute directly and prepends it to the system message.
+        #: The runner is responsible for building the string from
+        #: ``store.read_notes("L0", ...)`` — this class is a dumb
+        #: container so it can be constructed in tests without the
+        #: scratchpad module being importable.
+        self._l0_section = l0_section
 
     # --- dispatcher ---
 
