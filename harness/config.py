@@ -698,6 +698,83 @@ class Settings(BaseSettings):
         ),
     )
 
+    # === Phase 3 v1.3.1: Tool result offload (>25k tokens) ===
+    tool_offload_enabled: bool = Field(
+        default=True,
+        description=(
+            "Phase 3 v1.3.1: when True, tool results that exceed "
+            "``tool_offload_threshold_bytes`` are persisted to L2 "
+            "scratchpad and replaced with a small stub in the message "
+            "history. The LLM can pull the full body via "
+            "``scratchpad_read_offloaded(id=N)`` or search across "
+            "offloaded content via ``scratchpad_search_offloaded(query)``. "
+            "Set False to disable offload entirely (the full content "
+            "is kept inline, which can blow past the context window "
+            "for large tool results)."
+        ),
+    )
+    tool_offload_threshold_bytes: int = Field(
+        default=25600,
+        ge=1024,
+        description=(
+            "Phase 3 v1.3.1: minimum byte count to trigger offload. "
+            "Default 25600 (25 KB) — matches the Anthropic "
+            "context-engineering playbook's '>25k tokens' rule of "
+            "thumb. Lower for stricter offload (preserves chat "
+            "budget), higher for fewer offloads (preserves the "
+            "inline preview)."
+        ),
+    )
+    tool_offload_preview_lines: int = Field(
+        default=3,
+        ge=1,
+        le=20,
+        description=(
+            "Phase 3 v1.3.1: number of non-empty lines from the "
+            "original tool output to include in the stub preview. "
+            "Default 3 — gives the LLM enough context to decide "
+            "whether to fetch the full body without spending more "
+            "than ~600 chars of the message budget."
+        ),
+    )
+    tool_offload_preview_max_chars: int = Field(
+        default=600,
+        ge=64,
+        le=4096,
+        description=(
+            "Phase 3 v1.3.1: hard cap on the stub preview size in "
+            "characters. Default 600. Combined with "
+            "``tool_offload_preview_lines`` (3) this bounds the "
+            "stub to ~3 lines × ~200 chars/line, well below the "
+            "25 KB threshold that triggered the offload."
+        ),
+    )
+    tool_offload_read_max_bytes: int = Field(
+        default=4096,
+        ge=256,
+        description=(
+            "Phase 3 v1.3.1: default chunk size for "
+            "``scratchpad_read_offloaded`` when the LLM does not "
+            "pass an explicit ``max_bytes``. Default 4096 (4 KB). "
+            "The LLM can request larger chunks by passing "
+            "``max_bytes`` explicitly."
+        ),
+    )
+    tool_offload_max_ms: int = Field(
+        default=2000,
+        ge=100,
+        le=60000,
+        description=(
+            "Phase 3 v1.3.1: per-call timeout (milliseconds) for the "
+            "offload write. When exceeded the loop keeps the full "
+            "tool content inline (fail-open) rather than blocking "
+            "the chat. Default 2000 (2 seconds) — most offloads "
+            "complete in <100 ms on a local SQLite store, the cap "
+            "is only relevant for very large writes or contended "
+            "disks."
+        ),
+    )
+
     # === Phase 3: Embeddings (ONNX local) ===
     embeddings_dir: Path = Field(
         default=PROJECT_ROOT / "models" / "embeddings",
