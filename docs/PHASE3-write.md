@@ -1,8 +1,8 @@
 # Phase 3 v1.2.0 — Write context (scratchpad + notes + plan.md per session)
 
-> **Status:** ЗАКРЫТО v1.2.0 (2026-06-15)
-> **Tag:** `v1.2.0` (annotated)
-> **Tests:** 1076 mock (от 1032 в v1.1.0, +44 net)
+> **Status:** ЗАКРЫТО v1.2.0 (2026-06-15) + v1.2.1 L0→system prompt (2026-06-15)
+> **Tag:** `v1.2.0` (v1.2.0 base) + `v1.2.1` (L0 injection)
+> **Tests:** 1076 mock (v1.2.0) + ~50 net (v1.2.1)
 
 ## TL;DR
 
@@ -240,3 +240,130 @@ scratchpad disabled (backward compat).
 - `C:\MyAI\_output\2026-06\12.06 Harness-Claude-Code-Architecture\roadmap.md`
   (Phase 3 v1.2.0 row → done, 6/12 closed)
 - Annotated tag `v1.2.0`
+
+---
+
+## Phase 3 v1.2.1 — L0 → system prompt injection
+
+> **Status:** ЗАКРЫТО v1.2.1 (2026-06-15)
+> **Tag:** `v1.2.1` (annotated)
+> **Tests:** ~50 net new (от v1.2.0 base)
+
+### TL;DR
+
+v1.2.0 дал агентам 4 scratchpad tools, но L0 notes были доступны
+**только** через `scratchpad_read_notes` tool — LLM должна была
+догадаться его вызвать. v1.2.1 закрывает L0-слой: горячие
+факты / план / состояние автоматически попадают в system prompt
+на каждом turn, и LLM видит их без дополнительного round-trip.
+
+### L0 → system prompt (hot injection)
+
+**Где:** `build_system_prompt_for()` (в `harness/agents/runner.py`)
+prepends L0 секцию к финальному system message. Дополнительно,
+`AgentLoop.run()` (в `harness/server/agent/loop.py`) читает
+`runtime._l0_section` и применяет его, когда caller не передал
+system message — defence in depth для прямых вызовов `AgentLoop`
+из WebSocket / CLI.
+
+**Формат секции:**
+
+```markdown
+## Hot context (L0 notes — this session, auto-injected)
+- (id=7) [pref] user prefers concise replies
+- (id=8) [pref,lang] always reply in Russian
+- (id=9) [plan] current plan: ship v1.2.1
+```
+
+**Поведение:**
+
+- `L0` пустой → секция НЕ добавляется (clean system prompt)
+- `L0` cap exceeded (>1KB) → injection всех нот, доверяем
+  `write_note` auto-prune FIFO
+- `read_notes` raises → log warning + пропуск injection
+  (fail-open: chat loop не ломается)
+- Setting `scratchpad_inject_l0_to_system_prompt=False` → полный
+  disable (откат к v1.2.0 поведению)
+
+**Setting:**
+
+```python
+scratchpad_inject_l0_to_system_prompt: bool = True   # default ON
+```
+
+### Composition strategy (двойная защита)
+
+| Caller | Path | L0 injection |
+|--------|------|--------------|
+| `AgentRunner.run()` / `stream()` | `runner._drive` builds L0 section → `build_system_prompt_for(..., l0_section=)` | Pre-built (1x) |
+| Direct `AgentLoop.run()` (WebSocket, CLI) | `loop.py` reads `runtime._l0_section` | Defence-in-depth (1x) |
+
+**Нет двойной инжекции:** `AgentLoop.run()` проверяет
+`messages[0].get("role") != "system"`. Если runner уже
+добавил system message (с L0), loop его не трогает.
+
+### Trust boundary (сохраняется)
+
+- `runner.py` continues to NOT import `ScratchpadStore` / `Note` /
+  `NoteLevel` — verified by `test_runner_does_not_import_scratchpad`
+- L0 notes читаются через `await scratchpad.read_notes("L0", limit=50)`
+  (store accepts str OR NoteLevel)
+- `loop.py` НЕ импортирует scratchpad модули — доступ через
+  `getattr(self.runtime, "_l0_section", None)`
+- Fail-open во всех L0 read calls (try/except + logger.warning +
+  l0_section=None)
+
+### Lessons (для будущих Solomon sessions)
+
+1. **`getattr(runtime, "new_attr", default)` для defence-in-depth
+   attrs** — `loop.py` читает `runtime._l0_section` через
+   `getattr(..., None)`, чтобы можно было конструировать
+   `ToolRuntime` в тестах без `_l0_section` поля. Mirror pattern
+   для `runtime._scratchpad` (v1.2.0).
+2. **Composition через `*` kwargs** — `build_system_prompt_for(spec,
+   project_root, tools, *, l0_section=None)` сохраняет обратную
+   совместимость с pre-v1.2.1 callers (positional args не сломан).
+3. **Test mirror pattern** — `SpyToolRuntime.__init__` в
+   `test_runner_scratchpad_factory.py` нужно обновлять при
+   добавлении нового kwarg в `ToolRuntime.__init__`. Lesson:
+   при `class X(real_X): def __init__(...)` в test — синхронизировать
+   сигнатуру.
+4. **Setting при major additions** — `scratchpad_inject_l0_to_system_prompt`
+   default True (opt-out). L0 — hot layer, default ON помогает
+   агентам из коробки.
+
+### Files (v1.2.1)
+
+**4 MODIFIED:**
+
+- `harness/agents/runner.py` (+~50 LoC, `_format_l0_section` + L0
+  fetch in `_drive`/`_stream_drive` + `l0_section` kwarg в
+  `build_system_prompt_for`)
+- `harness/server/agent/runtime.py` (+9 LoC, `l0_section` kwarg в
+  `__init__`)
+- `harness/server/agent/loop.py` (+11 LoC, defence-in-depth injection
+  в `run()`)
+- `harness/config.py` (+~16 LoC, `scratchpad_inject_l0_to_system_prompt`
+  setting)
+
+**4 NEW/MODIFIED TESTS:**
+
+- `tests/test_l0_injection.py` (NEW, 14 tests) — `_format_l0_section`
+  + `build_system_prompt_for(l0_section=)` + `ToolRuntime(l0_section=)`
+- `tests/test_agent_loop.py` (+3 tests) — AgentLoop applies L0
+- `tests/test_phase3_v1_2_1_integration.py` (NEW, 5 tests) — E2E
+  L0 injection через real `ScratchpadStore`
+- `tests/test_runner_scratchpad_factory.py` (+1 LoC, `SpyToolRuntime`
+  signature fix)
+
+**External synced:**
+
+- `C:\MyAI\_output\2026-06\12.06 Harness-Claude-Code-Architecture\roadmap.md`
+  (Phase 3 v1.2.1 row → done, 7/12 closed)
+- Annotated tag `v1.2.1`
+
+### Next steps (Phase 3 v1.3.0)
+
+- L2 dense+BM25 retrieval через `OnnxEmbedder` + `DenseRetriever`
+- Cross-session handoff через L2 (continuity)
+- Auto-promote L1 → L2 на size threshold

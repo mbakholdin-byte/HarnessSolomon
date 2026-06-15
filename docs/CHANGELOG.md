@@ -1,5 +1,57 @@
 # Changelog — Solomon Harness
 
+## Phase 3 v1.2.1 — L0 → system prompt injection (ЗАКРЫТО v1.2.1, 2026-06-15)
+
+**Phase 3 v1.2.1 — 3 шага / 3 коммита / +50 net new тестов / 0 new required deps / 0 breaking changes**
+
+### Что закрыто
+
+- **L0 → system prompt** — hot context (notes уровня L0) автоматически
+  инжектится в system message на каждом turn, чтобы LLM видела
+  горячие факты/план/состояние без round-trip `scratchpad_read_notes`.
+- **Composition (двойная защита)** — `build_system_prompt_for()` принимает
+  `l0_section=`, `AgentLoop.run()` также применяет его через
+  `runtime._l0_section` (defence in depth для прямых вызовов).
+- **Setting** — `scratchpad_inject_l0_to_system_prompt: bool = True`
+  (default ON, opt-out).
+
+### Trust boundary
+
+- `runner.py` continues to NOT import `ScratchpadStore` / `Note` /
+  `NoteLevel` — verified by `test_runner_does_not_import_scratchpad`
+  (v1.2.0 static test, unchanged)
+- L0 fetch через `await scratchpad.read_notes("L0", limit=50)` —
+  store accepts str OR `NoteLevel`
+- `loop.py` НЕ импортирует scratchpad модули — доступ через
+  `getattr(self.runtime, "_l0_section", None)`
+- Fail-open во всех L0 read calls (try/except + logger.warning +
+  l0_section=None)
+
+### Lessons
+
+1. **`getattr(runtime, "new_attr", None)` для defence-in-depth** —
+   `loop.py` читает `_l0_section` через getattr, чтобы можно было
+   конструировать `ToolRuntime` в тестах без поля
+2. **Composition через `*` kwargs** — `build_system_prompt_for(spec,
+   project_root, tools, *, l0_section=None)` сохраняет backward compat
+3. **SpyToolRuntime signature sync** — при добавлении нового kwarg в
+   `ToolRuntime.__init__` обновлять сигнатуру в `SpyToolRuntime`
+4. **Default ON для hot layer** — `scratchpad_inject_l0_to_system_prompt`
+   default True, потому что L0 = hot = "must be visible by default"
+
+### Commits
+
+- `298c51a` Step 0 — L0 helper + setting + runner wiring
+- `8dca82b` Step 1 — AgentLoop applies l0_section (defence in depth)
+- `9ade7a7` Step 2 — E2E integration + fail-open + setting toggle
+- (this commit) Step 3 — Docs + tag v1.2.1
+
+### Out of scope (Phase 3 v1.3.0+)
+
+- L1 injection в system prompt (L1 — per-session plan, не "hot")
+- L2 dense+BM25 retrieval → v1.3.0
+- Cross-session handoff через L2 → v1.3.0
+
 ## Phase 3 v1.2.0 — Write context (ЗАКРЫТО v1.2.0, 2026-06-15)
 
 **Phase 3 v1.2.0 — 5 шагов / 5 коммитов / +44 net new тестов (1032 → 1076) / 0 new required deps / 0 breaking changes**
