@@ -57,6 +57,7 @@ from harness.server.llm.router import LLMRouter
 
 if TYPE_CHECKING:
     from harness.agents.compact_store import CompactRecord, CompactStore
+    from harness.context.compaction_audit import CompactionAudit
     from harness.memory.unified import UnifiedMemory
 
 logger = logging.getLogger(__name__)
@@ -172,6 +173,7 @@ class ContextCompactor:
         *,
         session_id: str | None = None,
         store: "CompactStore | None" = None,
+        audit: "CompactionAudit | None" = None,
     ) -> None:
         self._settings = settings
         self._router = router
@@ -186,6 +188,14 @@ class ContextCompactor:
         #   3. on hit, skip the LLM summariser entirely
         #   4. on miss, run the full flow + persist the result
         self._store = store
+        # Phase 3.5: optional audit log writer. When provided AND
+        # ``compaction_audit_log`` is True, every cache hit / miss /
+        # persist event is recorded to ``data/audit/compaction-*.ndjson``.
+        # When ``audit=None``, the setting is read on each call via
+        # ``getattr`` (default False) so the compactor can be
+        # constructed without an audit writer and still respect
+        # runtime config changes.
+        self._audit = audit
         # Resolve summariser model ids: empty string → fallback to
         # the cascade defaults (T1 = Qwen3 8B, T2 = cloud mid-tier).
         self._summariser = (
@@ -284,14 +294,24 @@ class ContextCompactor:
                         messages, cached.summary,
                     )
                     cache_ms = (time.monotonic() - cache_lookup_start) * 1000
+                    saved_tokens = max(0, tokens - cached.compacted_tokens)
                     logger.info(
                         "compactor.cache_hit session_id=%s version=%d "
                         "saved_tokens=%d saved_ms=%.1f",
                         effective_session_id,
                         cached.version,
-                        max(0, tokens - cached.compacted_tokens),
+                        saved_tokens,
                         cache_ms,
                     )
+                    # Phase 3.5: audit log.
+                    if self._audit is not None:
+                        self._audit.record(
+                            "cache_hit",
+                            session_id=effective_session_id,
+                            version=cached.version,
+                            saved_tokens=saved_tokens,
+                            duration_ms=cache_ms,
+                        )
                     return rebuilt
             except Exception as e:  # noqa: BLE001 — cache is best-effort
                 logger.warning(
@@ -332,7 +352,7 @@ class ContextCompactor:
             and effective_session_id != "unknown"
         ):
             try:
-                await self._persist_compact(
+                version = await self._persist_compact(
                     session_id=effective_session_id,
                     source_hash=self._source_hash(messages),
                     original_tokens=tokens,
@@ -345,10 +365,28 @@ class ContextCompactor:
                     outcome="ok",
                     duration_ms=(time.monotonic() - run_start) * 1000,
                 )
+                # Phase 3.5: audit log for successful run.
+                if self._audit is not None and version is not None:
+                    self._audit.record(
+                        "run",
+                        session_id=effective_session_id,
+                        outcome="ok",
+                        version=version,
+                        original_tokens=tokens,
+                        compacted_tokens=_estimate_tokens(compacted),
+                        duration_ms=(time.monotonic() - run_start) * 1000,
+                    )
             except Exception as e:  # noqa: BLE001 — cache is best-effort
                 logger.warning(
                     "compactor: persist to compact_store failed: %s", e,
                 )
+                # Phase 3.5: audit log for failed persist.
+                if self._audit is not None:
+                    self._audit.record(
+                        "persist_failed",
+                        session_id=effective_session_id,
+                        error=str(e),
+                    )
         return compacted
 
     def _sliding_window(

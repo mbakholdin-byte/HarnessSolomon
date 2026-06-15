@@ -49,6 +49,8 @@ harness/.venv/
 # Test artifacts
 tests/fixtures/tmp/
 tests/integration/.cache/
+audit-test/
+test-audit.db
 
 # Local debug scripts
 run_chat_tests.py

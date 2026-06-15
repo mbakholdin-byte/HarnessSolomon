@@ -166,11 +166,21 @@ async def lifespan(app: FastAPI):
                 compact_store = None
             app.state.compact_store = compact_store
             # Wire everything into the compactor.
+            # Phase 3.5: optional audit writer. The audit log is
+            # best-effort and opt-in via ``compaction_audit_log``;
+            # when disabled, ``record()`` is a no-op so the audit
+            # writer has zero overhead.
+            from harness.context.compaction_audit import CompactionAudit
+            audit = CompactionAudit(
+                audit_dir=settings.session_dir / "audit",
+                enabled=getattr(settings, "compaction_audit_log", False),
+            )
             compactor = ContextCompactor(
                 settings=settings,
                 router=compactor_router,
                 memory=unified_memory,
                 store=compact_store,
+                audit=audit,
             )
             app.state.compactor = compactor
             print(
