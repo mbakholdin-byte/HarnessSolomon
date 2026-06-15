@@ -16,10 +16,13 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from harness.server.db import sqlite as db_sqlite
 from harness.server.db.models import Message, MessageUsage, Session, ToolCall, ToolResult
+
+if TYPE_CHECKING:
+    from harness.context.compaction import ContextCompactor
 
 logger = logging.getLogger(__name__)
 
@@ -44,11 +47,17 @@ class ChatSession:
         model: str,
         db: Any,
         project_root: Path,
+        compactor: "ContextCompactor | None" = None,
     ) -> None:
         self.session_id = session_id
         self.model = model
         self.db = db
         self.project_root = project_root
+        # Phase 3: optional compactor applied on history load. Default
+        # None → no-op (preserves pre-Phase-3 behaviour: load full
+        # history). Injected by ``server.app.lifespan`` when
+        # ``settings.compaction_enabled`` is True.
+        self.compactor = compactor
 
     # --- history ---
 
@@ -103,6 +112,13 @@ class ChatSession:
                 if name:
                     entry["name"] = name
             history.append(entry)
+        # Phase 3: compact the loaded history before returning if a
+        # compactor was injected. The compactor returns a NEW list;
+        # the persisted DB rows are unchanged (compaction is in-memory
+        # only — JSONL mirror and SQLite retain the full history, see
+        # Phase 3 plan §10 "JSONL session mirror rewrites").
+        if self.compactor is not None:
+            history = await self.compactor.maybe_compact(history, self.model)
         return history
 
     # --- persistence ---

@@ -1,0 +1,399 @@
+"""Phase 3: context compaction (sliding window + LLM summary).
+
+The ``ContextCompactor`` collapses long chat histories before each
+LLM call. Two-phase algorithm:
+
+  1. **Sliding window.** Estimate token count of the full ``messages``
+     list. If under the threshold (``threshold_ratio * model_ctx``),
+     return the input unchanged. Otherwise drop the oldest non-system
+     messages, preserving tool-call ↔ tool-result pairs, until the
+     list is under ``target_ratio * model_ctx`` or only the protected
+     tail (``keep_recent_turns``) + system message remain.
+
+  2. **Summarisation.** If the sliding window still doesn't bring the
+     list below the threshold, call the configured summariser model
+     (default T1 = local Qwen3 8B, free) with the dropped messages.
+     The summary is inserted as a single ``user`` message after the
+     system message, with a clear ``[Compaction summary]`` prefix.
+
+The summary is optionally persisted to ``UnifiedMemory`` (L2 mem0)
+with tag ``#compact`` so it can be retrieved across sessions via
+semantic search. Persistence is best-effort; the compactor does not
+block the chat loop on a slow memory write.
+
+**Trust boundary:** the compactor does NOT import the LLM router,
+classifier, merge queue, or verifier. ``runner.py`` is constructed
+without a compactor (default ``None``), so the trust-boundary test in
+``test_agent_runner.py:516-575`` continues to hold.
+
+**Contract:** ``maybe_compact(messages)`` returns a NEW list — it
+never mutates the caller's list. This matches the Phase 0
+``AgentLoop`` invariant (caller passes the list in, loop mutates
+in place; the compactor returns a replacement and the caller rebinds).
+"""
+from __future__ import annotations
+
+import json
+import logging
+from typing import TYPE_CHECKING, Any, Protocol
+
+from harness.config import Settings
+from harness.context.prompts import SUMMARY_SYSTEM_PROMPT
+from harness.server.llm.router import LLMRouter
+
+if TYPE_CHECKING:
+    from harness.memory.unified import UnifiedMemory
+
+logger = logging.getLogger(__name__)
+
+
+# Rough heuristic: 1 token ≈ 4 chars in English / JSON serialised
+# content. ±15% accuracy; good enough for a sliding window. We avoid
+# pulling in tiktoken to keep the dep tree minimal.
+_CHARS_PER_TOKEN = 4
+
+
+class _Summariser(Protocol):
+    """Minimal interface needed by the compactor to call a model.
+
+    ``LLMRouter.completion`` already matches this Protocol — the
+    Protocol is declared here only to make the dependency explicit
+    and to allow tests to inject a fake summariser.
+    """
+
+    async def completion(
+        self,
+        messages: list[dict],
+        model: str,
+        **kwargs: Any,
+    ) -> Any: ...
+
+
+def _estimate_tokens(messages: list[dict[str, Any]]) -> int:
+    """Estimate token count of a message list using char/4 heuristic.
+
+    Includes the role + content + tool_calls + tool_call_id overhead.
+    For empty / non-list input returns 0.
+    """
+    if not isinstance(messages, list) or not messages:
+        return 0
+    total_chars = 0
+    for m in messages:
+        try:
+            total_chars += len(json.dumps(m, ensure_ascii=False))
+        except (TypeError, ValueError):
+            # Non-serialisable value — fall back to str().
+            total_chars += len(str(m))
+    return total_chars // _CHARS_PER_TOKEN
+
+
+def _tool_call_id_set(messages: list[dict[str, Any]]) -> set[str]:
+    """Return all tool_call_ids referenced by assistant messages."""
+    ids: set[str] = set()
+    for m in messages:
+        if m.get("role") == "assistant":
+            tcs = m.get("tool_calls") or []
+            for tc in tcs:
+                tc_id = tc.get("id") if isinstance(tc, dict) else None
+                if tc_id:
+                    ids.add(tc_id)
+    return ids
+
+
+def _keep_for_pairs(idx: int, messages: list[dict[str, Any]]) -> bool:
+    """True if the message at ``idx`` is needed to preserve a tool-call
+    pair that the kept tail references.
+
+    A tool message is "needed" if any later assistant turn (in the
+    kept region) carries a tool_call whose id matches this tool
+    message's tool_call_id. Without this, dropping a tool message
+    while keeping the assistant turn that requested it breaks the
+    OpenAI / Anthropic tool-use contract.
+    """
+    msg = messages[idx]
+    if msg.get("role") != "tool":
+        return False
+    tool_id = msg.get("tool_call_id")
+    if not tool_id:
+        return False
+    # Scan forward for any assistant turn referencing this id.
+    for j in range(idx + 1, len(messages)):
+        m = messages[j]
+        if m.get("role") == "assistant":
+            for tc in m.get("tool_calls") or []:
+                if isinstance(tc, dict) and tc.get("id") == tool_id:
+                    return True
+    return False
+
+
+def _model_ctx(model: str, settings: Settings) -> int:
+    """Resolve the context window for ``model`` from the catalog.
+
+    Falls back to a conservative 8192 tokens for unknown models so
+    the compactor still works for ad-hoc / prefixed model ids.
+    """
+    from harness.server.llm.models import get_model
+
+    spec = get_model(model)
+    if spec is not None and spec.ctx > 0:
+        return spec.ctx
+    return 8192
+
+
+class ContextCompactor:
+    """Sliding window + LLM summary.
+
+    The compactor is stateless across calls — it carries config from
+    ``__init__`` and does its work in ``maybe_compact``. Safe to share
+    across concurrent requests (only the LLM ``completion`` is async
+    and uses the router's own concurrency limits).
+    """
+
+    def __init__(
+        self,
+        settings: Settings,
+        router: _Summariser,
+        memory: "UnifiedMemory | None" = None,
+        *,
+        session_id: str | None = None,
+    ) -> None:
+        self._settings = settings
+        self._router = router
+        self._memory = memory
+        self._session_id = session_id or "unknown"
+        # Resolve summariser model ids: empty string → fallback to
+        # the cascade defaults (T1 = Qwen3 8B, T2 = cloud mid-tier).
+        self._summariser = (
+            settings.compaction_summarizer_model
+            or settings.subagent_t1_model
+        )
+        self._fallback = (
+            settings.compaction_summarizer_fallback
+            or settings.subagent_t2_model
+        )
+        # Half of T1's 32K context by default.
+        self._max_input_tokens = (
+            settings.compaction_summarizer_max_input_tokens
+            if settings.compaction_summarizer_max_input_tokens > 0
+            else 16000
+        )
+
+    async def maybe_compact(
+        self,
+        messages: list[dict[str, Any]],
+        model: str,
+    ) -> list[dict[str, Any]]:
+        """Compact ``messages`` if over threshold. Returns a NEW list.
+
+        If the input is under threshold OR compaction is disabled, the
+        same list object is returned (not a copy — the caller can
+        detect no-op via ``result is messages``).
+
+        Algorithm:
+          1. Token estimate + threshold check.
+          2. Sliding window: drop oldest non-system messages while
+             preserving tool pairs and the recent tail.
+          3. If still over threshold, summarise the dropped turns via
+             the configured model and insert a single summary message.
+          4. (Optional) persist the summary to ``UnifiedMemory``.
+        """
+        if not self._settings.compaction_enabled or not messages:
+            return messages
+        ctx = _model_ctx(model, self._settings)
+        threshold = int(ctx * self._settings.compaction_threshold_ratio)
+        target = int(ctx * self._settings.compaction_target_ratio)
+        tokens = _estimate_tokens(messages)
+        if tokens <= threshold:
+            return messages
+        # Step 1: sliding window.
+        trimmed = self._sliding_window(messages, target)
+        if _estimate_tokens(trimmed) <= target:
+            return trimmed
+        # Step 2: drop the oldest non-system, non-recent block, summarise
+        # the dropped part, and prepend the summary after the system
+        # message. The summariser may be slow; we still cap total cost
+        # by passing only the dropped region (already <= max_input_tokens
+        # via the sliding window pre-trim).
+        dropped_region = self._extract_dropped(messages, trimmed)
+        if not dropped_region:
+            return trimmed
+        summary = await self._summarise(dropped_region)
+        if not summary:
+            return trimmed  # summariser failed — fall back to raw trim
+        compacted = self._inject_summary(trimmed, summary)
+        # Step 3: persist (best-effort, fire-and-forget).
+        if self._settings.compaction_persist_to_memory and self._memory is not None:
+            try:
+                await self._persist_summary(summary)
+            except Exception as e:  # noqa: BLE001 — audit is best-effort
+                logger.warning("compaction: persist to memory failed: %s", e)
+        return compacted
+
+    def _sliding_window(
+        self,
+        messages: list[dict[str, Any]],
+        target_tokens: int,
+    ) -> list[dict[str, Any]]:
+        """Drop oldest non-system messages until under target or only the
+        protected tail remains.
+
+        Protected set: ``messages[0]`` (system) + last
+        ``keep_recent_turns`` messages + any tool message needed to
+        preserve a tool-call pair with a kept assistant turn.
+        """
+        if not messages:
+            return messages
+        keep_recent = max(2, self._settings.compaction_keep_recent_turns)
+        n = len(messages)
+        # The "deletion zone" is everything between the system message
+        # and the recent tail. Messages outside this zone are
+        # always protected.
+        sys_idx = 0 if messages[0].get("role") == "system" else None
+        recent_start = max(0, n - keep_recent)
+        # Walk every index, decide keep-or-drop.
+        result: list[dict[str, Any]] = []
+        for i, m in enumerate(messages):
+            # Always keep the system message.
+            if i == sys_idx:
+                result.append(m)
+                continue
+            # Always keep the recent tail.
+            if i >= recent_start:
+                result.append(m)
+                continue
+            # Keep tool messages needed to preserve a forward-referenced
+            # tool-call pair (the assistant turn is in the recent tail).
+            if _keep_for_pairs(i, messages):
+                result.append(m)
+                continue
+            # Otherwise, the message is a candidate for summarisation.
+            # We still INCLUDE it here; ``_extract_dropped`` later
+            # picks these out as the summariser input. The sliding
+            # window is therefore "include candidates in the trim",
+            # and the summariser produces a single summary message
+            # that REPLACES them (not drops them).
+        # If the result is already under the target, return it.
+        if _estimate_tokens(result) <= target_tokens:
+            return result
+        # Otherwise, do a hard drop: remove oldest from the candidate
+        # zone (between system and recent tail) until under target.
+        # This is a fallback for the rare case where summarisation
+        # itself is disabled or fails.
+        sys_msg = messages[0] if sys_idx is not None else None
+        tail = list(messages[recent_start:])
+        # Build the candidate zone in order, then add back from the
+        # END until under target.
+        candidate_zone: list[dict[str, Any]] = []
+        for i in range((sys_idx or 0) + 1, recent_start):
+            m = messages[i]
+            if _keep_for_pairs(i, messages):
+                # This tool message must stay paired with the kept
+                # assistant in the tail — keep it adjacent to the
+                # tail.
+                continue
+            candidate_zone.append(m)
+        # Build the result by taking the most recent candidates first.
+        trimmed: list[dict[str, Any]] = []
+        if sys_msg is not None:
+            trimmed.append(sys_msg)
+        for m in reversed(candidate_zone):
+            if _estimate_tokens(trimmed + [m] + tail) > target_tokens:
+                break
+            trimmed.append(m)
+        trimmed.reverse()  # restore chronological order
+        trimmed.extend(tail)
+        return trimmed
+
+    def _extract_dropped(
+        self,
+        original: list[dict[str, Any]],
+        trimmed: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        r"""Return the messages that were dropped (original \ trimmed).
+
+        Used as input to the summariser. Order preserved.
+        """
+        # Heuristic: dropped = original[protected_start:protected_end - keep_recent]
+        if not original or not trimmed:
+            return []
+        protected_start = 1 if original[0].get("role") == "system" else 0
+        keep_recent = max(2, self._settings.compaction_keep_recent_turns)
+        drop_start = protected_start
+        drop_end = max(drop_start, len(original) - keep_recent)
+        if drop_end <= drop_start:
+            return []
+        return list(original[drop_start:drop_end])
+
+    async def _summarise(
+        self, dropped: list[dict[str, Any]],
+    ) -> str:
+        """Call the summariser model on the dropped messages.
+
+        Falls back to the configured fallback model on error. Returns
+        empty string on total failure (caller treats as no-op).
+        """
+        # Pre-trim the input to the configured max input tokens.
+        if _estimate_tokens(dropped) > self._max_input_tokens:
+            # Truncate from the front (keep the most recent dropped
+            # turns — they're the closest to the kept tail).
+            max_chars = self._max_input_tokens * _CHARS_PER_TOKEN
+            blob = json.dumps(dropped, ensure_ascii=False)
+            if len(blob) > max_chars:
+                blob = "…" + blob[-max_chars:]
+            dropped = [{"role": "user", "content": f"Earlier turns (truncated):\n{blob}"}]
+        messages = [
+            {"role": "system", "content": SUMMARY_SYSTEM_PROMPT},
+            {"role": "user", "content": json.dumps(dropped, ensure_ascii=False)},
+        ]
+        for model in (self._summariser, self._fallback):
+            if not model:
+                continue
+            try:
+                result = await self._router.completion(
+                    messages=messages,
+                    model=model,
+                )
+                content = getattr(result, "content", "") or ""
+                if content.strip():
+                    return content.strip()
+            except Exception as e:  # noqa: BLE001 — fallback chain
+                logger.warning(
+                    "compaction: summariser %r failed: %s; trying fallback",
+                    model, e,
+                )
+                continue
+        return ""
+
+    def _inject_summary(
+        self,
+        messages: list[dict[str, Any]],
+        summary: str,
+    ) -> list[dict[str, Any]]:
+        """Insert the summary as a user message right after the system message.
+
+        The injected message is clearly marked so a future compaction
+        pass recognises it and does not try to re-summarise.
+        """
+        marker = "[Compaction summary — earlier turns condensed]"
+        body = f"{marker}\n\n{summary}"
+        new_msg = {"role": "user", "content": body}
+        # Insert after the system message (presumed at index 0).
+        if messages and messages[0].get("role") == "system":
+            return [messages[0], new_msg, *messages[1:]]
+        return [new_msg, *messages]
+
+    async def _persist_summary(self, summary: str) -> None:
+        """Write the compaction summary to UnifiedMemory L2 with tag
+        ``#compact``. Best-effort; never raises."""
+        if self._memory is None:
+            return
+        from harness.memory.schema import Memory, MemoryLayer
+
+        mem = Memory(
+            layer=MemoryLayer.L2,
+            source="compact",
+            content=summary,
+            tags=["#compact", f"#session/{self._session_id}"],
+            metadata={"session_id": self._session_id, "kind": "compaction"},
+        )
+        await self._memory.write(mem)

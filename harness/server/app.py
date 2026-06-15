@@ -97,6 +97,44 @@ async def lifespan(app: FastAPI):
         print(f"[harness] merge_queue disabled (init failed: {type(e).__name__}: {e})")
         app.state.merge_queue = None
 
+    # Phase 3: instantiate the optional ``ContextCompactor``. The
+    # compactor is wired into ``AgentLoop`` (set in ``chat.py`` and
+    # any other caller that constructs an ``AgentLoop`` per-request)
+    # via ``app.state.compactor``. It is **not** injected here into
+    # ``MergeQueue`` / ``WebhookHandler`` — those work with full
+    # prompts and don't need sliding-window compaction. Construction
+    # is best-effort: if the LLM router is unavailable we leave
+    # ``app.state.compactor = None`` so the chat path remains a
+    # no-op (pre-Phase-3 behaviour).
+    from harness.context.compaction import ContextCompactor
+    try:
+        if settings.compaction_enabled:
+            from harness.server.llm.router import LLMRouter
+            compactor_router = LLMRouter()
+            compactor = ContextCompactor(
+                settings=settings,
+                router=compactor_router,
+                memory=None,  # Phase 3.5 will wire UnifiedMemory
+            )
+            app.state.compactor = compactor
+            print(
+                f"[harness] compactor: enabled "
+                f"(summariser={settings.compaction_summarizer_model or settings.subagent_t1_model}, "
+                f"threshold={settings.compaction_threshold_ratio}, "
+                f"target={settings.compaction_target_ratio})"
+            )
+        else:
+            app.state.compactor = None
+            print("[harness] compactor: disabled")
+    except Exception as e:
+        # LLM router construction may fail when no API keys are set.
+        # Compaction is non-critical — leave disabled.
+        print(
+            f"[harness] compactor disabled (init failed: "
+            f"{type(e).__name__}: {e})"
+        )
+        app.state.compactor = None
+
     # Phase 1.6: scope-gated API — initialise the auth token store.
     # The store lives at <db_path.parent>/harness-scope.db (sibling
     # of agent-jobs.db). Initialisation is idempotent (CREATE TABLE

@@ -28,12 +28,15 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import TYPE_CHECKING, Any, AsyncIterator
 
 from harness.server.agent.prompts import build_system_prompt
 from harness.server.agent.runtime import ToolRuntime
 from harness.server.agent.tools import TOOL_SCHEMAS
 from harness.server.llm.router import LLMRouter, StreamEvent
+
+if TYPE_CHECKING:
+    from harness.context.compaction import ContextCompactor
 
 logger = logging.getLogger(__name__)
 
@@ -135,12 +138,18 @@ class AgentLoop:
         runtime: ToolRuntime,
         router: LLMRouter,
         max_iterations: int = DEFAULT_MAX_ITERATIONS,
+        compactor: "ContextCompactor | None" = None,
     ) -> None:
         if max_iterations < 1:
             raise ValueError(f"max_iterations must be >= 1, got {max_iterations}")
         self.runtime = runtime
         self.router = router
         self.max_iterations = max_iterations
+        # Phase 3: optional compactor. Default None → no-op (the loop
+        # runs without context-size management, matching the pre-Phase-3
+        # contract). The compactor is injected by ``server.app.lifespan``
+        # when ``settings.compaction_enabled`` is True.
+        self.compactor = compactor
         # Cache whether router supports streaming; checked once at __init__
         # so the per-iteration hot path doesn't pay the hasattr cost.
         self._router_supports_streaming = hasattr(router, "streaming_completion")
@@ -195,6 +204,13 @@ class AgentLoop:
                 0,
                 {"role": "system", "content": system_content},
             )
+
+        # Phase 3: compact the message list before the first LLM call
+        # if it exceeds the configured threshold. The compactor returns
+        # a NEW list; we rebind so the in-place ``messages.append``
+        # below still works against the compacted set.
+        if self.compactor is not None:
+            messages = await self.compactor.maybe_compact(messages, model)
 
         # Effective streaming mode: requested AND router supports it.
         # Falling back to completion() avoids AttributeError on test fakes.

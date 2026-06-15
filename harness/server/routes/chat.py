@@ -84,7 +84,14 @@ async def chat_ws(websocket: WebSocket, session_id: str, model: str) -> None:
     try:
         runtime = ToolRuntime(project_root=settings.project_root)
         llm_router = LLMRouter()
-        loop_obj = AgentLoop(runtime=runtime, router=llm_router)
+        # Phase 3: pick up the compactor from app.state (set in
+        # ``lifespan``). The compactor is process-wide and safe to
+        # share across concurrent WebSocket connections (it carries
+        # only config + a router reference; no per-session state).
+        compactor = getattr(websocket.app.state, "compactor", None)
+        loop_obj = AgentLoop(
+            runtime=runtime, router=llm_router, compactor=compactor,
+        )
     except Exception as exc:  # noqa: BLE001 - bootstrap must not kill the server
         logger.exception("WS bootstrap failed: session_id=%s", session_id)
         try:
@@ -100,6 +107,7 @@ async def chat_ws(websocket: WebSocket, session_id: str, model: str) -> None:
         model=model,
         db=db_sqlite,
         project_root=settings.project_root,
+        compactor=getattr(websocket.app.state, "compactor", None),
     )
 
     # --- receive loop ---
