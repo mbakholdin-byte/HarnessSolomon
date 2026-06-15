@@ -631,6 +631,38 @@ def test_runner_does_not_import_tool_offloader() -> None:
             )
 
 
+def test_runner_does_not_import_session_lifecycle() -> None:
+    """The runner must not import SessionLifecycle directly (Phase 3 v1.4.0).
+
+    Trust boundary: the lifecycle is wired via factory DI
+    (``reflection_factory`` kwarg on ``AgentRunner.__init__``, planned
+    for Step 2). The runner must not import the lifecycle module
+    itself; it gets a callable that returns the wired lifecycle (or
+    ``None``) and passes the result into ``ToolRuntime(reflection=...)``.
+
+    Mirrors ``test_runner_does_not_import_tool_offloader`` from
+    Phase 3 v1.3.1.
+    """
+    import harness.agents.runner as runner_mod
+    src = Path(runner_mod.__file__).read_text(encoding="utf-8")
+    for line in src.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("from harness.server.agent.lifecycle import"):
+            pytest.fail(
+                f"runner.py has a real import of lifecycle: {line!r}"
+            )
+        if stripped.startswith("import harness.server.agent.lifecycle"):
+            pytest.fail(
+                f"runner.py has a real import of lifecycle: {line!r}"
+            )
+        if "SessionLifecycle" in stripped and " " not in stripped.split("#")[0].strip():
+            # catch `import SessionLifecycle` and `from X import SessionLifecycle`
+            # but skip docstrings/comments.
+            pytest.fail(
+                f"runner.py references SessionLifecycle directly: {line!r}"
+            )
+
+
 # === RunResult dataclass ===
 
 def test_run_result_default_usage() -> None:

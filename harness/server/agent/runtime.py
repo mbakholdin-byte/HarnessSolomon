@@ -88,6 +88,7 @@ class ToolRuntime:
         l2_router: Any = None,
         l2_curator_model: str = "qwen3:8b",
         tool_offloader: Any = None,
+        reflection: Any = None,
     ) -> None:
         self.project_root = project_root.resolve(strict=False)
         #: Phase 3 v1.2.0: optional scratchpad store. When ``None`` the
@@ -128,6 +129,14 @@ class ToolRuntime:
         #: attribute via ``getattr`` so the runtime can be
         #: constructed without the offloader module being importable.
         self._tool_offloader = tool_offloader
+        #: Phase 3 v1.4.0: optional reflection handle. When ``None``
+        #: the ``SessionLifecycle`` exit hook is a no-op (no lesson
+        #: extraction at end of session). Typed as ``Any`` to keep
+        #: the trust boundary: the runtime doesn't import the
+        #: reflection module directly. ``SessionLifecycle`` reads this
+        #: attribute via ``getattr`` so the runtime can be constructed
+        #: in tests without the reflection module being importable.
+        self._reflection = reflection
 
     # --- dispatcher ---
 
