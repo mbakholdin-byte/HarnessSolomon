@@ -36,11 +36,11 @@ async def client(monkeypatch: pytest.MonkeyPatch, tmp_path) -> AsyncClient:
 
 # === Pure catalog tests ===
 
-def test_models_catalog_has_three_models() -> None:
-    """MODELS contains exactly 3 entries."""
-    assert len(MODELS) == 3
+def test_models_catalog_has_four_models() -> None:
+    """MODELS contains exactly 4 entries (Phase 3 added qwen3:8b T1)."""
+    assert len(MODELS) == 4
     ids = {m["id"] for m in MODELS}
-    assert ids == {"MiniMax-M2.7", "glm-4.7", "moonshot-v1-128k"}
+    assert ids == {"qwen3:8b", "MiniMax-M2.7", "glm-4.7", "moonshot-v1-128k"}
 
 
 def test_get_model_known_id() -> None:
@@ -64,11 +64,13 @@ def test_get_model_unknown_returns_none() -> None:
 
 def test_list_models_all_unavailable_when_no_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """All models have available=False when env vars are empty."""
-    for k in ("MINIMAX_API_KEY", "ZHIPUAI_API_KEY", "MOONSHOT_API_KEY"):
+    for k in (
+        "MINIMAX_API_KEY", "ZHIPUAI_API_KEY", "MOONSHOT_API_KEY", "OLLAMA_HOST",
+    ):
         monkeypatch.delenv(k, raising=False)
 
     models = list_models()
-    assert len(models) == 3
+    assert len(models) == 4
     assert all(m.available is False for m in models)
 
 
@@ -88,12 +90,12 @@ def test_list_models_availability_reflects_env(monkeypatch: pytest.MonkeyPatch) 
 # === HTTP /api/models ===
 
 async def test_get_models_endpoint(client: AsyncClient) -> None:
-    """GET /api/models returns 200 + 3 models."""
+    """GET /api/models returns 200 + 4 models (Phase 3 added qwen3:8b)."""
     r = await client.get("/api/models")
     assert r.status_code == 200
     data = r.json()
     assert isinstance(data, list)
-    assert len(data) == 3
+    assert len(data) == 4
 
     # Every entry has expected keys
     for entry in data:

@@ -6,6 +6,7 @@ Single source of truth for all paths, ports, API keys.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -497,6 +498,167 @@ class Settings(BaseSettings):
         ),
     )
 
+    # === Phase 3: Compaction (sliding window + LLM summary) ===
+    compaction_enabled: bool = Field(
+        default=True,
+        description=(
+            "Phase 3: when True, ``ContextCompactor`` collapses long "
+            "chat history before each LLM call via a sliding window "
+            "plus an LLM-generated summary. Default True. Set False "
+            "to disable compaction (e.g. when the model has a 200K "
+            "context window and cost is not a concern)."
+        ),
+    )
+    compaction_threshold_ratio: float = Field(
+        default=0.75,
+        gt=0.0,
+        lt=1.0,
+        description=(
+            "Phase 3: trigger compaction when message tokens exceed "
+            "this fraction of the model's context window. Default 0.75 "
+            "(compact at 75% of ctx). The compactor trims the history "
+            "to ``compaction_target_ratio`` of ctx afterwards."
+        ),
+    )
+    compaction_target_ratio: float = Field(
+        default=0.50,
+        gt=0.0,
+        lt=1.0,
+        description=(
+            "Phase 3: after compaction, target this fraction of the "
+            "model's context window. Default 0.50 (50% of ctx) gives "
+            "headroom for new turns before the next compact. Must be "
+            "less than ``compaction_threshold_ratio``."
+        ),
+    )
+    compaction_keep_recent_turns: int = Field(
+        default=6,
+        ge=2,
+        le=64,
+        description=(
+            "Phase 3: minimum number of recent turns to keep verbatim "
+            "regardless of token count. The sliding window never drops "
+            "the last N user/assistant turns. Default 6 — enough for "
+            "the LLM to maintain conversational coherence."
+        ),
+    )
+    compaction_summarizer_model: str = Field(
+        default="",
+        description=(
+            "Phase 3: model id used to summarise dropped turns. Empty "
+            "string = ``settings.subagent_t1_model`` (Qwen3 8B local, "
+            "free). The summarizer runs on the dropped turns only, "
+            "so context overhead is bounded."
+        ),
+    )
+    compaction_summarizer_fallback: str = Field(
+        default="",
+        description=(
+            "Phase 3: model id to fall back to if the primary "
+            "summarizer fails (timeout, error, unavailable). Empty "
+            "string = ``settings.subagent_t2_model`` (cloud mid-tier). "
+            "Set to a known-good model id to override the default."
+        ),
+    )
+    compaction_summarizer_max_input_tokens: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Phase 3: hard cap on the input size passed to the "
+            "summarizer. 0 = auto (half of T1 model context = 16K "
+            "for Qwen3 8B). Turns beyond the cap are dropped before "
+            "the summariser call (sliding window already reduces "
+            "size; this is the last-mile safety net)."
+        ),
+    )
+    compaction_persist_to_memory: bool = Field(
+        default=True,
+        description=(
+            "Phase 3: when True, the compaction summary is written to "
+            "UnifiedMemory (L2 mem0) with tag ``#compact`` so it can be "
+            "retrieved across sessions via semantic search. Default "
+            "True. Set False for ephemeral (in-memory only) compaction."
+        ),
+    )
+
+    # === Phase 3: Embeddings (ONNX local) ===
+    embeddings_dir: Path = Field(
+        default=PROJECT_ROOT / "models" / "embeddings",
+        description=(
+            "Phase 3: directory where ONNX embedding models are "
+            "cached. Default ``<project_root>/models/embeddings``. "
+            "Override with ``HARNESS_EMBEDDINGS_DIR`` to share a "
+            "single cache across projects (or to point at an "
+            "existing HuggingFace cache)."
+        ),
+    )
+    embedding_model: str = Field(
+        default="intfloat/multilingual-e5-small",
+        description=(
+            "Phase 3: default ONNX model id used by ``OnnxEmbedder``. "
+            "Multilingual (RU+EN), 384-dim, 118M params, ~120MB on disk. "
+            "Override to swap models; stored vectors are tagged with "
+            "``EMBEDDING_MODEL_VERSION`` so version drift is detected."
+        ),
+    )
+    embedding_precision: Literal["fp32", "int8"] = Field(
+        default="int8",
+        description=(
+            "Phase 3: numeric precision for the ONNX model. ``int8`` "
+            "(default) is ~30 MB on disk and ~30ms per query on CPU. "
+            "``fp32`` is ~120 MB and ~50ms per query but slightly "
+            "higher recall. Phase 3 default favours the smaller "
+            "footprint for operators running on laptop hardware."
+        ),
+    )
+    embedding_dim: int = Field(
+        default=384,
+        ge=64,
+        le=4096,
+        description=(
+            "Phase 3: embedding vector dimension. Must match the "
+            "model's output dim. Default 384 = ``multilingual-e5-small``. "
+            "Stored in ``Memory.metadata.embedding_dim`` for schema "
+            "validation when vectors are loaded back from the L4 file "
+            "mirror."
+        ),
+    )
+
+    # === Phase 3: Privacy (pre-LLM redaction) ===
+    redaction_enabled: bool = Field(
+        default=True,
+        description=(
+            "Phase 3: when True, all 9 sink points (LLM messages, PR "
+            "title/body, commit msg, branch name, JobStore prompt, "
+            "outbound webhooks, .env read_file, inbound webhooks) run "
+            "PII / secret redaction before persistence or external "
+            "transmission. Default True (opt-out — safe baseline for "
+            "an open-source tool). Set False only for tests or "
+            "isolated offline use."
+        ),
+    )
+    redaction_categories: str = Field(
+        default="",
+        description=(
+            "Phase 3: comma-separated list of redaction categories to "
+            "enable. Empty string = all 12 default categories "
+            "(email, phone, IPv4, GitHub PAT variants, AWS keys, "
+            "OpenAI/Anthropic keys, .env assignments, JWT, PEM, "
+            "Slack tokens). Use this to narrow the pattern set on a "
+            "per-deployment basis without editing code."
+        ),
+    )
+    redaction_audit_log: bool = Field(
+        default=False,
+        description=(
+            "Phase 3: when True, every redaction event is mirrored to "
+            "``data/audit/redaction-YYYY-MM-DD.ndjson`` (append-only, "
+            "rotated daily) and to the JobStore event log (kind="
+            "\"redaction\"). Default False (no audit overhead in "
+            "production). Enable for compliance / forensic review."
+        ),
+    )
+
     @model_validator(mode="after")
     def _cascade_thresholds_ordered(self) -> "Settings":
         """Guard against a misconfigured cascade + Phase 2.4 split strategy.
@@ -545,6 +707,23 @@ class Settings(BaseSettings):
                 f"pr_rate_limit_initial_backoff_s "
                 f"({self.pr_rate_limit_initial_backoff_s}) must be <= "
                 f"pr_rate_limit_max_backoff_s ({self.pr_rate_limit_max_backoff_s})"
+            )
+        # Phase 3: compaction ratios must be sane (target < threshold).
+        if self.compaction_enabled:
+            if self.compaction_target_ratio >= self.compaction_threshold_ratio:
+                raise ValueError(
+                    f"compaction_target_ratio "
+                    f"({self.compaction_target_ratio}) must be < "
+                    f"compaction_threshold_ratio "
+                    f"({self.compaction_threshold_ratio})"
+                )
+        # Phase 3: precision must be one of the supported literals
+        # (Pydantic enforces this via Literal type — explicit guard
+        # kept for clarity in error messages).
+        if self.embedding_precision not in ("fp32", "int8"):
+            raise ValueError(
+                f"embedding_precision must be 'fp32' or 'int8', "
+                f"got {self.embedding_precision!r}"
             )
         return self
 

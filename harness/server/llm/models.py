@@ -33,6 +33,16 @@ from pydantic import BaseModel
 #:   - Anthropic Claude 4.x:  no native limit (token-budgeted)
 MODELS: list[dict] = [
     {
+        "id": "qwen3:8b",
+        "provider": "ollama",
+        "tier": "T1",
+        "env": "OLLAMA_HOST",
+        "ctx": 32768,
+        "pricing_input": 0.0,    # local model — free
+        "pricing_output": 0.0,
+        "max_tools": 16,
+    },
+    {
         "id": "MiniMax-M2.7",
         "provider": "minimax",
         "tier": "T3",
