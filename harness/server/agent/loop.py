@@ -25,6 +25,7 @@ streaming) compatible with production (real LLMRouter with streaming).
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from pathlib import Path
@@ -329,6 +330,19 @@ class AgentLoop:
                     content = _format_tool_content(
                         tool_result.output, tool_result.error
                     )
+                    # Phase 3 v1.3.1: offload large tool results to L2.
+                    # When the formatted content exceeds the configured
+                    # threshold (default 25 KB) we persist it to scratchpad
+                    # L2 and replace ``content`` with a small stub so the
+                    # chat budget isn't blown by a single tool output.
+                    # The LLM can pull the full body via
+                    # ``scratchpad_read_offloaded(id=N)`` or search across
+                    # offloaded content via ``scratchpad_search_offloaded(query)``.
+                    content = await self._maybe_offload_tool_result(
+                        content=content,
+                        name=name,
+                        tool_call_id=tool_call.get("id"),
+                    )
 
                     result_event = StreamEvent(
                         type="tool_result",
@@ -375,6 +389,79 @@ class AgentLoop:
         # Always close with done so the client can finalise.
         _ = last_event  # silence linters; useful for future hooks
         yield StreamEvent(type="done")
+
+    # --- internal helpers ---
+
+    async def _maybe_offload_tool_result(
+        self,
+        *,
+        content: str,
+        name: str,
+        tool_call_id: str | None,
+    ) -> str:
+        """Offload a tool result to L2 if it exceeds the threshold.
+
+        Returns the original ``content`` unchanged when the offload is
+        disabled, fails, or the content is below the threshold. The
+        caller (``run``) treats the return value as opaque and
+        appends it directly to the message history.
+
+        The offloader is read from the runtime via ``getattr`` so
+        the loop can be constructed in tests without the offloader
+        module being importable (mirror :attr:`ToolRuntime._l0_section`
+        defence-in-depth from Phase 3 v1.2.1).
+
+        The per-call timeout is honoured by the offloader's
+        ``offload()`` call — we wrap it in ``asyncio.wait_for`` so a
+        slow / hung SQLite write does not stall the chat loop.
+        """
+        offloader = getattr(self.runtime, "_tool_offloader", None)
+        if offloader is None:
+            return content
+        if not offloader.should_offload(content):
+            return content
+        # Resolve the session id from the offloader's inner scratchpad
+        # (mirror ``runtime.py:_scratchpad_l2_search`` getattr chain
+        # from Phase 3 v1.3.0). When the offloader is constructed in
+        # a test without a scratchpad, we fall back to "unknown".
+        inner_scratchpad = getattr(offloader, "_scratchpad", None)
+        session_id = getattr(inner_scratchpad, "_session_id", None) or "unknown"
+        # Read the per-call timeout from the offloader's settings.
+        # Using ``getattr`` for safety in case the offloader's
+        # settings object doesn't carry the field (e.g. a custom
+        # test double).
+        settings = getattr(offloader, "_settings", None)
+        timeout_ms = getattr(settings, "tool_offload_max_ms", 2000) or 2000
+        timeout_s = max(0.05, float(timeout_ms) / 1000.0)
+        try:
+            note_id = await asyncio.wait_for(
+                offloader.offload(
+                    content,
+                    tool_name=name,
+                    session_id=session_id,
+                    tool_call_id=tool_call_id,
+                ),
+                timeout=timeout_s,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "tool offload timeout (%.1fs) for tool=%s — keeping full content",
+                timeout_s, name,
+            )
+            return content
+        except Exception as exc:  # noqa: BLE001 — fail-open
+            logger.warning(
+                "tool offload failed for tool=%s: %s — keeping full content",
+                name, exc,
+            )
+            return content
+        if note_id is None:
+            return content
+        # Replace full content with stub. The offloader's build_stub
+        # method owns the stub format (header + preview + read hint).
+        return offloader.build_stub(
+            content, note_id=note_id, tool_name=name,
+        )
 
 
 __all__ = ["AgentLoop", "DEFAULT_MAX_ITERATIONS"]

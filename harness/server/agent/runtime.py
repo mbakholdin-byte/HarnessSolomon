@@ -86,6 +86,7 @@ class ToolRuntime:
         l2_retriever: Any = None,
         l2_router: Any = None,
         l2_curator_model: str = "qwen3:8b",
+        tool_offloader: Any = None,
     ) -> None:
         self.project_root = project_root.resolve(strict=False)
         #: Phase 3 v1.2.0: optional scratchpad store. When ``None`` the
@@ -118,6 +119,14 @@ class ToolRuntime:
         #: call in ``scratchpad_l2_promote_to_l1``. Default
         #: ``qwen3:8b`` (T1 in the cost cascade).
         self._l2_curator_model = l2_curator_model
+        #: Phase 3 v1.3.1: optional tool offloader. When ``None`` the
+        #: offload hook in ``AgentLoop.run`` is a no-op (every tool
+        #: result is kept inline). The offloader is typed as ``Any``
+        #: to keep the trust boundary: the runtime doesn't import the
+        #: offloader module directly. ``AgentLoop`` reads this
+        #: attribute via ``getattr`` so the runtime can be
+        #: constructed without the offloader module being importable.
+        self._tool_offloader = tool_offloader
 
     # --- dispatcher ---
 
