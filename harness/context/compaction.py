@@ -49,6 +49,7 @@ import hashlib
 import json
 import logging
 import time
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
 from harness.config import Settings
@@ -154,6 +155,26 @@ def _model_ctx(model: str, settings: Settings) -> int:
     if spec is not None and spec.ctx > 0:
         return spec.ctx
     return 8192
+
+
+@dataclass
+class CompactResult:
+    """Phase 3 v1.4.0: result of a manual ``/compact`` invocation.
+
+    Returned by :meth:`ContextCompactor.force_compact` to give the caller
+    (HTTP route, CLI subcommand, WebSocket handler) structured feedback
+    about what happened — token savings, whether the cache was hit,
+    and a short preview of the generated summary.
+    """
+
+    original_tokens: int
+    compacted_tokens: int
+    summary_preview: str
+    cache_hit: bool
+
+    @property
+    def saved_tokens(self) -> int:
+        return max(0, self.original_tokens - self.compacted_tokens)
 
 
 class ContextCompactor:
@@ -320,6 +341,31 @@ class ContextCompactor:
                 )
                 # Fall through to the slow path.
         # Slow path: sliding window → summarise → persist.
+        return await self._run_slow_path(
+            messages, model,
+            effective_session_id=effective_session_id,
+            target=target,
+            tokens=tokens,
+            cache_enabled=cache_enabled,
+        )
+
+    async def _run_slow_path(
+        self,
+        messages: list[dict[str, Any]],
+        model: str,
+        *,
+        effective_session_id: str,
+        target: int,
+        tokens: int,
+        cache_enabled: bool,
+    ) -> list[dict[str, Any]]:
+        """Shared slow-path body for ``maybe_compact`` and ``force_compact``.
+
+        Phase 3 v1.4.0: extracted from ``maybe_compact`` so that
+        ``force_compact`` (manual ``/compact``) can skip the threshold
+        check and always run the trim → summarise → persist pipeline.
+        Pure refactor: identical behavior to the previous inline block.
+        """
         run_start = time.monotonic()
         # Step 1: sliding window.
         trimmed = self._sliding_window(messages, target)
@@ -388,6 +434,152 @@ class ContextCompactor:
                         error=str(e),
                     )
         return compacted
+
+    async def force_compact(
+        self,
+        messages: list[dict[str, Any]],
+        model: str,
+        *,
+        session_id: str | None = None,
+        bypass_cache: bool = False,
+    ) -> CompactResult:
+        """Force a compact regardless of token threshold.
+
+        Phase 3 v1.4.0: public API for the manual ``/compact`` slash
+        (CLI subcommand, HTTP route, WebSocket message). Unlike
+        :meth:`maybe_compact`, this method ALWAYS runs the slow path
+        (sliding window → summarise → persist) and returns a
+        :class:`CompactResult` with token savings + summary preview.
+
+        The threshold check is bypassed (``force`` semantics). The
+        cache may optionally be bypassed too (``bypass_cache=True``)
+        to force a re-summarisation even if a cached record exists
+        for the same source_hash.
+
+        Parameters
+        ----------
+        messages:
+            Full chat history in OpenAI dict shape.
+        model:
+            Model id of the calling ``AgentLoop`` — used to look up
+            the context window for the sliding window's target.
+        session_id:
+            Optional override of the session id for the cache lookup.
+        bypass_cache:
+            When True, the CompactStore cache is skipped on both the
+            lookup (no cache hit) and the persist (no record written).
+            Defaults to False (cache behaves like ``maybe_compact``).
+
+        Returns
+        -------
+        CompactResult
+            Structured feedback for the caller: original/compacted
+            token counts, summary preview, cache_hit flag.
+        """
+        if not messages:
+            return CompactResult(
+                original_tokens=0,
+                compacted_tokens=0,
+                summary_preview="",
+                cache_hit=False,
+            )
+        effective_session_id = session_id or self._session_id
+        ctx = _model_ctx(model, self._settings)
+        # Force threshold=0 so the slow path always runs. Target stays
+        # the same as ``maybe_compact`` (50% of model context).
+        target = int(ctx * self._settings.compaction_target_ratio)
+        tokens = _estimate_tokens(messages)
+        # Phase 3 v1.4.0: cache lookup — when bypass_cache=False and
+        # the same source_hash has been compacted before, return the
+        # cached result immediately (zero LLM cost).
+        cache_enabled = (
+            getattr(self._settings, "compaction_persistent_store", True)
+            and not bypass_cache
+        )
+        if (
+            cache_enabled
+            and self._store is not None
+            and effective_session_id != "unknown"
+        ):
+            try:
+                source_hash = self._source_hash(messages)
+                cached = await self._store.lookup_cached(
+                    effective_session_id, source_hash,
+                )
+                if cached is not None:
+                    rebuilt = self._rebuild_from_cache(
+                        messages, cached.summary,
+                    )
+                    logger.info(
+                        "compactor.force_compact.cache_hit "
+                        "session_id=%s version=%d",
+                        effective_session_id, cached.version,
+                    )
+                    if self._audit is not None:
+                        self._audit.record(
+                            "manual_compact",
+                            session_id=effective_session_id,
+                            cache_hit=True,
+                            version=cached.version,
+                            original_tokens=tokens,
+                            compacted_tokens=cached.compacted_tokens,
+                        )
+                    preview = (cached.summary[:200] + "…") if len(
+                        cached.summary
+                    ) > 200 else cached.summary
+                    return CompactResult(
+                        original_tokens=tokens,
+                        compacted_tokens=cached.compacted_tokens,
+                        summary_preview=preview,
+                        cache_hit=True,
+                    )
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    "compactor: force_compact cache lookup failed: %s", e,
+                )
+                # Fall through to slow path.
+        # Slow path (no cache hit, or cache bypassed).
+        compacted = await self._run_slow_path(
+            messages, model,
+            effective_session_id=effective_session_id,
+            target=target,
+            tokens=tokens,
+            cache_enabled=cache_enabled,
+        )
+        compacted_tokens = _estimate_tokens(compacted)
+        # Extract the summary preview from the injected summary message.
+        preview = ""
+        for m in compacted:
+            if m.get("role") == "system" and "[Conversation summary]" in (
+                m.get("content") or ""
+            ):
+                content = m.get("content", "")
+                # The summary content lives between the marker and
+                # the next \n\n (preserved by ``_inject_summary``).
+                start = content.find("[Conversation summary]")
+                if start >= 0:
+                    tail = content[start:].split("\n\n", 1)
+                    preview = tail[0] if tail else content[start:start + 200]
+                break
+        if not preview:
+            preview = "(no summary generated)"
+        if len(preview) > 200:
+            preview = preview[:200] + "…"
+        # Phase 3 v1.4.0: audit log for manual compact.
+        if self._audit is not None:
+            self._audit.record(
+                "manual_compact",
+                session_id=effective_session_id,
+                cache_hit=False,
+                original_tokens=tokens,
+                compacted_tokens=compacted_tokens,
+            )
+        return CompactResult(
+            original_tokens=tokens,
+            compacted_tokens=compacted_tokens,
+            summary_preview=preview,
+            cache_hit=False,
+        )
 
     def _sliding_window(
         self,

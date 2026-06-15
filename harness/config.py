@@ -775,6 +775,105 @@ class Settings(BaseSettings):
         ),
     )
 
+    # === Phase 3 v1.4.0: Reflection loop (end-of-session lesson extraction) ===
+    reflection_enabled: bool = Field(
+        default=True,
+        description=(
+            "Phase 3 v1.4.0: when True, ``SessionLifecycle.__aexit__`` "
+            "calls ``ReflectionLoop.reflect(events)`` to extract "
+            "structured lessons from the session's event log. "
+            "Disable to skip reflection entirely (useful for "
+            "short-lived CI jobs that don't need lesson extraction)."
+        ),
+    )
+    reflection_max_lessons: int = Field(
+        default=5,
+        ge=1,
+        le=20,
+        description=(
+            "Phase 3 v1.4.0: maximum number of lessons to extract "
+            "per session. Caps the LLM's response size. Default 5 — "
+            "enough for typical end-of-session extraction, not so "
+            "many that the response overwhelms the prompt."
+        ),
+    )
+    reflection_max_ms: int = Field(
+        default=10000,
+        ge=100,
+        le=60000,
+        description=(
+            "Phase 3 v1.4.0: per-call timeout (milliseconds) for the "
+            "reflection extraction. When exceeded the lifecycle "
+            "fires the next steps (session close) without lessons "
+            "(fail-open). Default 10000 (10 seconds) — a small T1 "
+            "model typically completes in <2s, the cap is only "
+            "relevant for contended providers."
+        ),
+    )
+    reflection_model: str = Field(
+        default="",
+        description=(
+            "Phase 3 v1.4.0: primary reflection model id. Empty "
+            "string = fall back to ``subagent_t1_model`` (default "
+            "``qwen3:8b`` local). Set to a cloud model id (e.g. "
+            "``glm-4.7``) if you want reflection to skip the local "
+            "tier and go straight to a faster cloud summariser."
+        ),
+    )
+    reflection_fallback_model: str = Field(
+        default="",
+        description=(
+            "Phase 3 v1.4.0: fallback reflection model id. Empty "
+            "string = fall back to ``subagent_t2_model`` (default "
+            "``glm-4.7``). Used when ``reflection_model`` is "
+            "unavailable or returns an error. Mirrors the compactor's "
+            "summariser/fallback cascade at ``compaction.py:201-208``."
+        ),
+    )
+
+    # === Phase 3 v1.4.0: Manual /compact (force-compact via CLI / HTTP / WS) ===
+    manual_compact_max_ms: int = Field(
+        default=30000,
+        ge=1000,
+        le=120000,
+        description=(
+            "Phase 3 v1.4.0: per-call timeout (milliseconds) for the "
+            "manual ``/compact`` invocation. Larger than "
+            "``reflection_max_ms`` because summarisation is the "
+            "expensive step. Default 30000 (30 seconds). When "
+            "exceeded the call returns a partial result (what "
+            "the cache had) — the chat loop is not blocked."
+        ),
+    )
+
+    # === Phase 3 v1.4.0: Prompt caching (Anthropic cache_control injection) ===
+    prompt_cache_enabled: bool = Field(
+        default=True,
+        description=(
+            "Phase 3 v1.4.0: master switch for prompt caching. "
+            "When True AND ``prompt_cache_strategy`` matches the "
+            "current model, ``LLMRouter`` injects ``cache_control`` "
+            "markers (Anthropic) or relies on the provider's prefix "
+            "caching (vLLM). Default True — caching is a pure "
+            "cost/latency optimisation, no functional change when "
+            "the provider ignores the markers."
+        ),
+    )
+    prompt_cache_strategy: Literal["anthropic", "vllm", "off"] = Field(
+        default="off",
+        description=(
+            "Phase 3 v1.4.0: which prompt-caching strategy to apply. "
+            "``anthropic`` injects ``cache_control: {type: ephemeral}`` "
+            "on the system message and last 2 turns when the model "
+            "id starts with ``anthropic/``. ``vllm`` is a no-op at "
+            "the call site — vLLM prefix caching is enabled at the "
+            "engine level (operator must configure vLLM externally); "
+            "we just keep the setting here for visibility. ``off`` "
+            "disables caching entirely. Default ``off`` — operators "
+            "opt in by setting the env var ``HARNESS_PROMPT_CACHE_STRATEGY``."
+        ),
+    )
+
     # === Phase 3: Embeddings (ONNX local) ===
     embeddings_dir: Path = Field(
         default=PROJECT_ROOT / "models" / "embeddings",

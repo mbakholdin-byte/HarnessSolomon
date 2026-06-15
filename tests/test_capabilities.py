@@ -89,9 +89,10 @@ class TestCapabilitiesEndpoint:
         assert isinstance(body["scopes_available"], list)
         assert isinstance(body["endpoints"], list)
 
-    async def test_all_six_scopes_listed(
+    async def test_all_seven_scopes_listed(
         self, isolated_settings: dict,
     ) -> None:
+        """Phase 3 v1.4.0: added ``sessions.write`` for manual /compact."""
         app = _make_app_with_state()
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://t") as ac:
@@ -100,7 +101,8 @@ class TestCapabilitiesEndpoint:
         names = {s["name"] for s in body["scopes_available"]}
         assert names == {
             "agents.read", "agents.write", "agents.pr",
-            "memory.read", "memory.write", "sessions.read",
+            "memory.read", "memory.write",
+            "sessions.read", "sessions.write",  # Phase 3 v1.4.0
         }
         # Each scope has a non-empty description.
         for s in body["scopes_available"]:

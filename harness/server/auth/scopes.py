@@ -42,6 +42,8 @@ class Scope(str, Enum):
 
     # Session metadata (read-only for now)
     SESSIONS_READ = "sessions.read"
+    # Phase 3 v1.4.0: write session control operations (manual /compact)
+    SESSIONS_WRITE = "sessions.write"
 
 
 ALL_SCOPES: frozenset[Scope] = frozenset(Scope)
@@ -54,6 +56,7 @@ SCOPE_DESCRIPTIONS: dict[Scope, str] = {
     Scope.MEMORY_READ: "Search the 4-layer memory system (GET /api/v1/memory/*)",
     Scope.MEMORY_WRITE: "Dual-write notes to the 4-layer memory system (POST /api/v1/memory/notes)",
     Scope.SESSIONS_READ: "Read session metadata (GET /api/v1/sessions)",
+    Scope.SESSIONS_WRITE: "Force-compact a session's context (POST /api/v1/sessions/{id}/compact, Phase 3 v1.4.0)",
 }
 
 
