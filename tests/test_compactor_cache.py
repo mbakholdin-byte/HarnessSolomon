@@ -221,13 +221,7 @@ class TestPersistentStoreDisabled:
         long_history: list[dict[str, Any]],
     ) -> None:
         """When ``compaction_persistent_store=False``, no cache lookup
-        or persist happens — even if a store is injected.
-
-        Note: the Phase 3.5 setting ``compaction_persistent_store``
-        is added in Step 2; until then, this test verifies the
-        fallback ``getattr`` path defaults to True. Step 2 will
-        update the assertion to expect ``count == 0``.
-        """
+        or persist happens — even if a store is injected."""
         store = CompactStore(tmp_path / "agent-jobs.db")
         await store.init()
         router = _FakeRouter(summary="x")
@@ -241,12 +235,9 @@ class TestPersistentStoreDisabled:
         await compactor.maybe_compact(
             long_history, "qwen3:8b", session_id="sess-nocache",
         )
-        # Slow path ran.
+        # Router WAS called (slow path), but store was NOT written.
         assert router.call_count == 1
-        # Until Step 2 adds the setting, ``getattr`` defaults to True
-        # so the store IS written. Step 2 will flip this assertion to
-        # ``count == 0`` once the setting is properly added.
-        assert await store.count() == 1
+        assert await store.count() == 0
 
     async def test_store_none_skips_cache(
         self, tmp_path: Path, settings_with_cache: Settings,

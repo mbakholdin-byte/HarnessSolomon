@@ -581,6 +581,40 @@ class Settings(BaseSettings):
         ),
     )
 
+    # === Phase 3.5: Persistent compact store (3) ===
+    compaction_persistent_store: bool = Field(
+        default=True,
+        description=(
+            "Phase 3.5: when True, the compactor uses "
+            "``CompactStore`` (SQLite) to cache compaction results by "
+            "``(session_id, source_hash)``. On a cache hit the LLM "
+            "summariser is skipped entirely (zero cost on reconnect). "
+            "Default True. Set False to disable the persistent cache "
+            "and use pure in-memory compaction (Phase 3 behavior)."
+        ),
+    )
+    compaction_cache_max_versions: int = Field(
+        default=5,
+        ge=1,
+        description=(
+            "Phase 3.5: maximum number of compaction versions to "
+            "retain per session in the persistent store. Older "
+            "versions beyond this cap are pruned (not yet "
+            "implemented — reserved for Phase 4 retention policy). "
+            "Must be >= 1. Default 5."
+        ),
+    )
+    compaction_audit_log: bool = Field(
+        default=False,
+        description=(
+            "Phase 3.5: when True, every compaction event is "
+            "appended to ``data/audit/compaction-YYYY-MM-DD.ndjson`` "
+            "with a JSON line per event. Mirrors the Phase 3 "
+            "``redaction_audit_log`` pattern. Default False "
+            "(disabled — enable for compliance / debugging)."
+        ),
+    )
+
     # === Phase 3: Embeddings (ONNX local) ===
     embeddings_dir: Path = Field(
         default=PROJECT_ROOT / "models" / "embeddings",
@@ -717,6 +751,17 @@ class Settings(BaseSettings):
                     f"compaction_threshold_ratio "
                     f"({self.compaction_threshold_ratio})"
                 )
+            # Phase 3.5: cache_max_versions must be sane (>= 1) when
+            # the persistent store is enabled. Pydantic's ``ge=1``
+            # field constraint already catches the lower bound; the
+            # explicit guard below keeps the error message
+            # context-specific and self-documenting.
+            if self.compaction_persistent_store:
+                if self.compaction_cache_max_versions < 1:
+                    raise ValueError(
+                        f"compaction_cache_max_versions "
+                        f"({self.compaction_cache_max_versions}) must be >= 1"
+                    )
         # Phase 3: precision must be one of the supported literals
         # (Pydantic enforces this via Literal type — explicit guard
         # kept for clarity in error messages).

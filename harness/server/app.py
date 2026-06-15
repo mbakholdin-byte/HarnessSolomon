@@ -106,25 +106,85 @@ async def lifespan(app: FastAPI):
     # is best-effort: if the LLM router is unavailable we leave
     # ``app.state.compactor = None`` so the chat path remains a
     # no-op (pre-Phase-3 behaviour).
+    # Phase 3.5: also wire ``CompactStore`` (persistent compact
+    # cache) and ``UnifiedMemory`` (closes the Phase 3.5 planned
+    # hook on line 117 of the previous version). Both are
+    # best-effort — if they fail to init, the compactor still
+    # works in pure in-memory mode.
     from harness.context.compaction import ContextCompactor
     try:
         if settings.compaction_enabled:
             from harness.server.llm.router import LLMRouter
             compactor_router = LLMRouter()
+            # Phase 3.5: optional UnifiedMemory injection. Used for
+            # the L2 #compact tag mirror (cross-session retrieval of
+            # compaction summaries). The compactor treats memory as
+            # a write-only mirror — a failure here is logged but
+            # never aborts the chat loop.
+            unified_memory = None
+            try:
+                from harness.memory.unified import UnifiedMemory
+                unified_memory = UnifiedMemory(
+                    settings=settings,
+                    db_path=settings.db_path.parent / "memory.db",
+                )
+                print(f"[harness] unified_memory: {settings.db_path.parent / 'memory.db'}")
+            except Exception as mem_exc:
+                print(
+                    f"[harness] unified_memory disabled (init failed: "
+                    f"{type(mem_exc).__name__}: {mem_exc})"
+                )
+                unified_memory = None
+            app.state.unified_memory = unified_memory
+            # Phase 3.5: optional CompactStore. Used for the
+            # persistent compact cache (skip LLM summariser on
+            # reconnect). Compactor is the sole consumer; the
+            # store is a private dependency that lives only as
+            # long as the app is running.
+            compact_store = None
+            try:
+                from harness.agents.compact_store import CompactStore
+                persistent_store = getattr(
+                    settings, "compaction_persistent_store", True,
+                )
+                if persistent_store:
+                    compact_store = CompactStore(
+                        settings.db_path.parent / "agent-jobs.db",
+                    )
+                    await compact_store.init()
+                    print(
+                        f"[harness] compact_store: "
+                        f"{settings.db_path.parent / 'agent-jobs.db'}"
+                    )
+                else:
+                    print("[harness] compact_store: disabled by setting")
+            except Exception as store_exc:
+                print(
+                    f"[harness] compact_store disabled (init failed: "
+                    f"{type(store_exc).__name__}: {store_exc})"
+                )
+                compact_store = None
+            app.state.compact_store = compact_store
+            # Wire everything into the compactor.
             compactor = ContextCompactor(
                 settings=settings,
                 router=compactor_router,
-                memory=None,  # Phase 3.5 will wire UnifiedMemory
+                memory=unified_memory,
+                store=compact_store,
             )
             app.state.compactor = compactor
             print(
                 f"[harness] compactor: enabled "
                 f"(summariser={settings.compaction_summarizer_model or settings.subagent_t1_model}, "
                 f"threshold={settings.compaction_threshold_ratio}, "
-                f"target={settings.compaction_target_ratio})"
+                f"target={settings.compaction_target_ratio}, "
+                f"store={'yes' if compact_store else 'no'}, "
+                f"memory={'yes' if unified_memory else 'no'})"
             )
         else:
             app.state.compactor = None
+            app.state.compact_store = None
+            app.state.unified_memory = None
             print("[harness] compactor: disabled")
     except Exception as e:
         # LLM router construction may fail when no API keys are set.
@@ -134,6 +194,8 @@ async def lifespan(app: FastAPI):
             f"{type(e).__name__}: {e})"
         )
         app.state.compactor = None
+        app.state.compact_store = None
+        app.state.unified_memory = None
 
     # Phase 1.6: scope-gated API — initialise the auth token store.
     # The store lives at <db_path.parent>/harness-scope.db (sibling
