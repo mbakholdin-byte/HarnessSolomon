@@ -28,10 +28,15 @@ layer that:
 """
 from __future__ import annotations
 
-import fnmatch
+import fnmatch  # noqa: F401  -- kept for backwards compat (re-exported below)
 import re
 from pathlib import Path
 from typing import Iterable
+
+# Phase 3 v1.5.0 Step 1: glob-семантика вынесена в ``harness.privacy.path_match``
+# как single source of truth. ``_match_codeowners_pattern`` оставлен как
+# re-export для backwards compat (Phase 2.5 tests импортируют его).
+from harness.privacy.path_match import match_glob as _match_codeowners_pattern
 
 
 #: Default template path (shipped with the package). Operators can
@@ -259,44 +264,12 @@ def _parse_codeowners_text(text: str) -> list[tuple[str, list[str]]]:
     return rows
 
 
-def _match_codeowners_pattern(
-    file_path: str, pattern: str,
-) -> bool:
-    """Test one file against one CODEOWNERS pattern.
-
-    Supports the subset of patterns we need for ``fnmatch``:
-    ``*``, ``**``, ``?`` and literal segments. CODEOWNERS also
-    supports leading ``/`` (anchored to repo root) and trailing
-    ``/`` (directories); we translate those before delegating to
-    :func:`fnmatch.fnmatch`.
-
-    A leading ``/`` strips to a rooted pattern: ``/foo`` matches
-    only ``foo`` at the top of the repo. A trailing ``/`` means
-    "directory prefix" — we translate to ``pattern + '*'`` so
-    ``/docs/`` matches ``docs/anything``.
-
-    Args:
-        file_path: Repo-relative POSIX path (no leading ``./``).
-        pattern:   Raw CODEOWNERS pattern (may start with ``/``,
-                   may end with ``/``, may start with ``!``).
-    """
-    # Strip the leading ``!`` if present; we handle negation
-    # at the call site, not here.
-    if pattern.startswith("!"):
-        pattern = pattern[1:]
-    anchored = pattern.startswith("/")
-    directory = pattern.endswith("/")
-    p = pattern.lstrip("/").rstrip("/")
-    if directory:
-        p = p + "/*"
-    if anchored:
-        # Anchored: must match from the repo root.
-        return fnmatch.fnmatch(file_path, p)
-    # Unanchored: match the basename OR any path segment.
-    if fnmatch.fnmatch(file_path, p):
-        return True
-    basename = file_path.rsplit("/", 1)[-1]
-    return fnmatch.fnmatch(basename, p)
+# Phase 3 v1.5.0 Step 1: ``_match_codeowners_pattern`` extracted to
+# :mod:`harness.privacy.path_match` (single source of truth для glob-семантики).
+# Re-export в начале модуля (``from harness.privacy.path_match import match_glob
+# as _match_codeowners_pattern``). Любой caller из ``pr_templating.py`` теперь
+# использует единую реализацию, идентичную для CODEOWNERS (Phase 2.5) и
+# Privacy zones (Phase 3 v1.5.0).
 
 
 def parse_codeowners_for_diff(
