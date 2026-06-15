@@ -1,5 +1,57 @@
 # Changelog — Solomon Harness
 
+## Phase 3 v1.3.0 — Select + Compress (ЗАКРЫТО v1.3.0, 2026-06-15)
+
+**Phase 3 v1.3.0 — 4 шага / 4 коммита / +48 net new тестов (1098 → 1146) / 0 new required deps / 0 breaking changes**
+
+### Что закрыто
+
+- **L2 vector store (Qdrant + SQLite fallback)** — `L2VectorStore` Protocol + `QdrantL2Store` (optional, requires `[memory]` extra) + `SqliteL2Store` (zero-dep fallback). `make_l2_store()` factory с best-effort probe.
+- **L2 retrieval (hybrid dense+BM25 RRF)** — `L2Retriever` class. In-memory BM25 + dense через L2VectorStore + RRF fusion (k=60, fetch_k=20).
+- **LLM-curator top-K re-rank** — `curated_search(query, top_k, candidate_k, router)` — pull top-50 candidates, ask T1 LLM to score 0-100, re-rank. Curator failure → fall back to plain hybrid.
+- **2 new tools** — `scratchpad_l2_search` (hybrid + curator) + `scratchpad_l2_promote_to_l1` (hierarchical summary → write as L1).
+- **2 new settings** — `scratchpad_l2_qdrant_url` (default None → SQLite) + `scratchpad_l2_qdrant_collection` (default `scratchpad_l2`).
+- **ToolRuntime extension** — 3 new kwargs: `l2_retriever`, `l2_router`, `l2_curator_model`. 2 new methods + Literal updated to 12 names.
+
+### Trust boundary
+
+- `runner.py` continues to NOT import `L2Retriever` / `QdrantL2Store` / `LLMRouter`
+- `l2_retriever=None` default в `ToolRuntime` — backward compat
+- Fail-open во всех L2 retrieval calls (try/except + logger.warning + return empty/plain hybrid)
+- Qdrant probe — best-effort, dead Qdrant → SQLite fallback
+- Static test `test_runner_does_not_import_scratchpad` продолжает проходить
+
+### Lessons
+
+1. **str.format() escape с literal JSON** — `{` в примерах JSON парсится
+   как format spec. Использовать `.replace("__PH__", value)` для промптов
+   с JSON-примерами.
+2. **Missing JSON field = skip, не default** — `item.get("score", 0.0)`
+   пройдёт range check, но не отражает намерение LLM. Явный
+   `if "score" not in item: continue`.
+3. **SpyToolRuntime signature sync** — `class X(real_X): __init__` в
+   тестах требует ручной синхронизации при добавлении kwarg.
+4. **Qdrant optional** — мёртвый Qdrant → SQLite fallback автоматически.
+   Без жёстких deps.
+5. **Hierarchical summary без отдельного LLM call** — `write_note(level="L1")`
+   с bullet-list L2 notes = и есть summary. Note content IS the summary.
+
+### Commits
+
+- `c51d9f6` Step 0 — L2 vector store (Qdrant + SQLite fallback)
+- `2ffbdba` Step 1 — L2 retrieval (BM25 + dense hybrid RRF)
+- `ed12a95` Step 2 — LLM-curator top-K re-rank
+- `2721d69` Step 3 — L2 search + promote-to-L1 tools
+
+### Out of scope (Phase 3 v1.3.1+)
+
+- Tool result offload >25k tokens → v1.3.1
+- Cross-session handoff через L2 (continuity) → v1.4.0
+- Reflection loop + manual /compact slash → v1.4.0
+- Privacy zones + pre-compaction hook → v1.5.0
+- HTTP endpoints `/api/v1/context/search` → Phase 4
+- Prometheus counters для L2 events → Phase 4
+
 ## Phase 3 v1.2.1 — L0 → system prompt injection (ЗАКРЫТО v1.2.1, 2026-06-15)
 
 **Phase 3 v1.2.1 — 3 шага / 3 коммита / +50 net new тестов / 0 new required deps / 0 breaking changes**
