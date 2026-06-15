@@ -604,6 +604,33 @@ def test_runner_does_not_import_scratchpad() -> None:
                 )
 
 
+def test_runner_does_not_import_tool_offloader() -> None:
+    """The runner must not import ToolOffloader directly (Phase 3 v1.3.1).
+
+    Trust boundary: tool offload is wired via factory DI
+    (``offloader_factory`` kwarg on ``AgentRunner.__init__``), not
+    by direct module import. Mirrors
+    ``test_runner_does_not_import_scratchpad`` from Phase 3 v1.2.0
+    — same pattern, same rationale.
+    """
+    import harness.agents.runner as runner_mod
+    src = Path(runner_mod.__file__).read_text(encoding="utf-8")
+    for line in src.splitlines():
+        stripped = line.strip()
+        # We forbid direct imports of the offloader module but allow
+        # imports of the broader harness.server.agent package
+        # (the runner already imports ToolRuntime, AgentLoop, etc.,
+        # so the test is scoped to offloader-specific imports only).
+        if stripped.startswith("from harness.server.agent.tool_offloader import"):
+            pytest.fail(
+                f"runner.py has a real import of tool_offloader: {line!r}"
+            )
+        if stripped.startswith("import harness.server.agent.tool_offloader"):
+            pytest.fail(
+                f"runner.py has a real import of tool_offloader: {line!r}"
+            )
+
+
 # === RunResult dataclass ===
 
 def test_run_result_default_usage() -> None:

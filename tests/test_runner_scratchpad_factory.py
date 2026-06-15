@@ -135,10 +135,12 @@ class TestFactoryWiring:
                 self, project_root, *,
                 scratchpad=None, scratchpad_audit=None, l0_section=None,
                 l2_retriever=None, l2_router=None, l2_curator_model="qwen3:8b",
+                tool_offloader=None,
             ):
                 captured["scratchpad"] = scratchpad
                 captured["scratchpad_audit"] = scratchpad_audit
                 captured["l0_section"] = l0_section
+                captured["tool_offloader"] = tool_offloader
                 super().__init__(
                     project_root,
                     scratchpad=scratchpad,
@@ -147,6 +149,7 @@ class TestFactoryWiring:
                     l2_retriever=l2_retriever,
                     l2_router=l2_router,
                     l2_curator_model=l2_curator_model,
+                    tool_offloader=tool_offloader,
                 )
 
         fake = FakeScratchpad(session_id="sess-Y")

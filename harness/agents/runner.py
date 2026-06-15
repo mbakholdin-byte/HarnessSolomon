@@ -230,6 +230,7 @@ class AgentRunner:
         unified_memory_factory: "Callable[[AgentSpec], Any] | None" = None,
         scratchpad_factory: "Callable[[AgentSpec, str | None], Any] | None" = None,
         scratchpad_audit: Any = None,
+        offloader_factory: "Callable[..., Any] | None" = None,
     ) -> None:
         self.router = router
         self.repo = Path(repo).resolve(strict=False)
@@ -249,6 +250,20 @@ class AgentRunner:
         #: :class:`~harness.server.agent.runtime.ToolRuntime` so the 4
         #: scratchpad tool calls emit audit events.
         self._scratchpad_audit = scratchpad_audit
+        #: Phase 3 v1.3.1: optional factory for the per-session
+        #: :class:`~harness.server.agent.tool_offloader.ToolOffloader`.
+        #: The factory is called once per run / stream with the live
+        #: ``(spec, session_id, scratchpad)`` triple and returns a
+        #: ready-to-use offloader (or ``None`` to skip). ``None``
+        #: disables tool offload entirely (every tool result is kept
+        #: inline in the message history).
+        #:
+        #: The factory mirrors the ``scratchpad_factory`` pattern
+        #: from Phase 3 v1.2.0: typed as ``Callable[..., Any]`` to
+        #: preserve the trust boundary — ``harness.agents.runner``
+        #: does NOT import the offloader module directly. Enforced
+        #: by ``test_runner_does_not_import_tool_offloader``.
+        self._offloader_factory = offloader_factory
         # Cache of spec.name -> UnifiedMemory. Reused across runs of
         # the same spec; cleared only when the runner is replaced.
         self._unified_memories: dict[str, Any] = {}
@@ -377,11 +392,31 @@ class AgentRunner:
             except Exception as exc:  # noqa: BLE001 — fail-open: L0 read must never break the chat loop
                 logger.warning("L0 read failed: %s", exc)
                 l0_section = None
+        # Phase 3 v1.3.1: build a tool offloader via the factory if
+        # one was provided. Mirrors the scratchpad_factory pattern
+        # above — fail-open, trust boundary preserved (no static
+        # import of the offloader module).
+        tool_offloader = None
+        if (
+            self._offloader_factory is not None
+            and scratchpad is not None
+            and session_id is not None
+        ):
+            try:
+                tool_offloader = self._offloader_factory(
+                    spec=spec,
+                    session_id=session_id,
+                    scratchpad=scratchpad,
+                )
+            except Exception as exc:  # noqa: BLE001 — fail-open
+                logger.warning("offloader factory failed: %s", exc)
+                tool_offloader = None
         runtime = ToolRuntime(
             project_root=wt.path,
             scratchpad=scratchpad,
             scratchpad_audit=self._scratchpad_audit,
             l0_section=l0_section,
+            tool_offloader=tool_offloader,
         )
         wrapped = filter_runtime(spec, runtime)
         tools = filter_tools(spec)
@@ -525,11 +560,31 @@ class AgentRunner:
             except Exception as exc:  # noqa: BLE001 — fail-open
                 logger.warning("L0 read failed: %s", exc)
                 l0_section = None
+        # Phase 3 v1.3.1: build a tool offloader via the factory if
+        # one was provided. Mirrors the scratchpad_factory pattern
+        # above — fail-open, trust boundary preserved (no static
+        # import of the offloader module).
+        tool_offloader = None
+        if (
+            self._offloader_factory is not None
+            and scratchpad is not None
+            and session_id is not None
+        ):
+            try:
+                tool_offloader = self._offloader_factory(
+                    spec=spec,
+                    session_id=session_id,
+                    scratchpad=scratchpad,
+                )
+            except Exception as exc:  # noqa: BLE001 — fail-open
+                logger.warning("offloader factory failed: %s", exc)
+                tool_offloader = None
         runtime = ToolRuntime(
             project_root=wt.path,
             scratchpad=scratchpad,
             scratchpad_audit=self._scratchpad_audit,
             l0_section=l0_section,
+            tool_offloader=tool_offloader,
         )
         wrapped = filter_runtime(spec, runtime)
         tools = filter_tools(spec)
