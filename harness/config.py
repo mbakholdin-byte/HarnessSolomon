@@ -874,6 +874,133 @@ class Settings(BaseSettings):
         ),
     )
 
+    # === Phase 3 v1.5.0: Privacy zones (path-based defence) ===
+    # Path-based privacy filter applied at tool sinks (read_file/grep/glob
+    # in Step 3, scratchpad in Step 4 Tier 2). See :mod:`harness.privacy`
+    # for the implementation. Content-level redaction (12 patterns) is
+    # orthogonal and lives in :mod:`harness.redaction`.
+    privacy_zones_enabled: bool = Field(
+        default=True,
+        description=(
+            "Phase 3 v1.5.0: master switch for path-based privacy zones. "
+            "``False`` → :class:`harness.privacy.PrivacyZoneFilter` is a "
+            "no-op (``check()`` always returns ``(\"allow\", None)``). "
+            "Server-wide kill switch via env var "
+            "``HARNESS_PRIVACY_ZONES_ENABLED=false``."
+        ),
+    )
+    privacy_zone_patterns: str = Field(
+        default="",
+        description=(
+            "Phase 3 v1.5.0: comma-separated list of glob patterns. "
+            "Empty string → use built-in defaults "
+            "``['private/**', '*.env', '.env/**', 'secrets/**', "
+            "``'``_credentials/**', '.ssh/**']``. Override per-pattern "
+            "via ``privacy_zone_per_action``. Glob syntax matches "
+            ":mod:`harness.privacy.path_match` (``*``, ``**``, ``?``, "
+            "anchored ``/``, trailing ``/``, negation ``!``)."
+        ),
+    )
+    privacy_zone_default_action: Literal["block", "redact", "skip"] = Field(
+        default="block",
+        description=(
+            "Phase 3 v1.5.0: fallback action for patterns without an "
+            "explicit override in ``privacy_zone_per_action``. ``block`` "
+            "= return error to LLM (most conservative), ``redact`` = "
+            "replace content with ``[PRIVATE: <reason>]`` placeholder, "
+            "``skip`` = silent skip (return empty result)."
+        ),
+    )
+    privacy_zone_per_action: str = Field(
+        default="",
+        description=(
+            "Phase 3 v1.5.0: per-pattern action overrides. Format: "
+            "``\"private/**=redact,secrets/*=block\"``. Comma-separated "
+            "``pattern=action`` pairs. Actions must be one of ``block``, "
+            "``redact``, ``skip``. Empty string → all patterns use "
+            "``privacy_zone_default_action``."
+        ),
+    )
+    privacy_zones_audit_log: bool = Field(
+        default=False,
+        description=(
+            "Phase 3 v1.5.0: emit ``privacy_zone_blocked`` / "
+            "``privacy_zone_redacted`` / ``privacy_zone_skipped`` events "
+            "to :class:`harness.context.scratchpad_audit.ScratchpadAudit` "
+            "on every non-``allow`` decision. Off by default — operators "
+            "opt in via ``HARNESS_PRIVACY_ZONES_AUDIT_LOG=true``."
+        ),
+    )
+
+    # === Phase 3 v1.5.0: Pre-compaction hook ===
+    # Async callback fired BEFORE ``ContextCompactor._run_slow_path`` to "
+    # save high-signal state (recent messages, plan, hot L0) for "
+    # resume after /compact. Step 4 wires the default implementation."
+    pre_compact_enabled: bool = Field(
+        default=True,
+        description=(
+            "Phase 3 v1.5.0: enable the pre-compaction hook. ``False`` "
+            "→ no state snapshot is saved before compaction. Server-wide "
+            "kill switch via env var ``HARNESS_PRE_COMPACT_ENABLED=false``."
+        ),
+    )
+    pre_compact_max_ms: int = Field(
+        default=5000,
+        ge=1,
+        description=(
+            "Phase 3 v1.5.0: per-call timeout for the pre-compaction "
+            "hook (milliseconds). On timeout, the hook is skipped "
+            "(fail-open) and compaction proceeds. Default 5000ms = 5s."
+        ),
+    )
+    pre_compact_save_fields: str = Field(
+        default="messages_last_n,plan_step,hot_l0,metadata",
+        description=(
+            "Phase 3 v1.5.0: comma-separated list of state fields to "
+            "capture in the pre-compact snapshot. Valid fields: "
+            "``messages_last_n`` (last 5 user/assistant), ``plan_step`` "
+            "(current scratchpad plan step), ``hot_l0`` (scratchpad L0 "
+            "snapshot), ``metadata`` (tokens/turns/last_compact_at). "
+            "Empty string → save nothing (hook becomes no-op)."
+        ),
+    )
+
+    # === Phase 3 v1.5.0: Time-based compaction trigger ===
+    # Hybrid trigger complementing the existing token-based threshold. "
+    # Step 5 implements the TimeBasedCompactionTrigger class."
+    compaction_trigger: Literal["token", "turn", "time", "hybrid"] = Field(
+        default="token",
+        description=(
+            "Phase 3 v1.5.0: which trigger to use for auto-compaction. "
+            "``token`` = existing token-threshold behaviour (backward "
+            "compat default). ``turn`` = fire every N user turns. "
+            "``time`` = fire after N minutes of inactivity. ``hybrid`` "
+            "= OR semantics — first trigger wins. Change via env var "
+            "``HARNESS_COMPACTION_TRIGGER=turn``."
+        ),
+    )
+    compaction_turn_interval: int = Field(
+        default=20,
+        ge=1,
+        description=(
+            "Phase 3 v1.5.0: user turns between compactions when "
+            "``compaction_trigger in {\"turn\", \"hybrid\"}``. "
+            "Default 20 — long enough to amortise compaction cost, "
+            "short enough to keep context fresh."
+        ),
+    )
+    compaction_time_idle_minutes: int = Field(
+        default=30,
+        ge=1,
+        description=(
+            "Phase 3 v1.5.0: minutes of session inactivity before "
+            "firing time-based compaction when "
+            "``compaction_trigger in {\"time\", \"hybrid\"}``. Default "
+            "30 — long enough to ignore brief pauses, short enough to "
+            "prevent stale context on resume."
+        ),
+    )
+
     # === Phase 3: Embeddings (ONNX local) ===
     embeddings_dir: Path = Field(
         default=PROJECT_ROOT / "models" / "embeddings",

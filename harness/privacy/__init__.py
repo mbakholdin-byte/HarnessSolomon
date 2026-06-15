@@ -26,10 +26,20 @@ Public API:
 from __future__ import annotations
 
 from harness.privacy.path_match import match_glob
-# Phase 3 v1.5.0 Step 2 will add:
-#     from harness.privacy.zone_config import ZoneRule, parse_zones
-#     from harness.privacy.zone_filter import PrivacyZoneFilter
+from harness.privacy.zone_config import (
+    DEFAULT_ZONE_PATTERNS,
+    ZoneAction,
+    ZoneRule,
+    parse_zones,
+)
+from harness.privacy.zone_filter import PrivacyZoneFilter, ZoneDecision
 
 __all__ = [
     "match_glob",
+    "parse_zones",
+    "ZoneRule",
+    "ZoneAction",
+    "ZoneDecision",
+    "PrivacyZoneFilter",
+    "DEFAULT_ZONE_PATTERNS",
 ]
