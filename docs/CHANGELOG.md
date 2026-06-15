@@ -1,5 +1,52 @@
 # Changelog — Solomon Harness
 
+## Phase 3 v1.3.1 — Tool Offload (>25k tokens → L2 scratchpad) (ЗАКРЫТО v1.3.1, 2026-06-15)
+
+**Phase 3 v1.3.1 — 5 шагов / 5 коммитов / +40 net new тестов (1146 → ~1186) / 0 new required deps / 0 breaking changes**
+
+### Что закрыто
+
+- **Tool result offload (Anthropic "Offload to file")** — `AgentLoop` заменяет tool messages > 25 KB на stub, записывая полный output в L2 scratchpad. LLM может pull full body через `scratchpad_read_offloaded(id)` или найти семантически через `scratchpad_search_offloaded(query)`.
+- **ToolOffloader class** — `harness/server/agent/tool_offloader.py` (~280 LoC). `should_offload` / `offload` / `read` / `build_stub`. Audit integration. Fail-open.
+- **2 new tools** — `scratchpad_read_offloaded` + `scratchpad_search_offloaded` (14 tools всего). Search reuses v1.3.0 `L2Retriever.curated_search` (no new SQLite LIKE codepath).
+- **6 new settings** — `tool_offload_enabled/threshold_bytes/preview_lines/preview_max_chars/read_max_bytes/max_ms`. Default threshold 25 KB.
+- **Trust boundary (factory pattern)** — `runner.py` does NOT import `ToolOffloader`. Runner accepts `offloader_factory` kwarg, mirrors `scratchpad_factory` at `runner.py:231-247`. New static test `test_runner_does_not_import_tool_offloader` mirrors `test_runner_does_not_import_scratchpad`.
+- **Per-call timeout** — `asyncio.wait_for(offload, timeout=tool_offload_max_ms/1000)` — slow SQLite write не stall'ит chat loop.
+- **Session ID resolution via getattr chain** — `getattr(offloader, "_scratchpad", None)` → `getattr(scratchpad, "_session_id", None)`. Mirror pattern at `runtime.py:699` (`_scratchpad_l2_search`).
+
+### Trust boundary
+
+- `runner.py` continues to NOT import `ToolOffloader` (preserves `test_runner_does_not_import_scratchpad` symmetry)
+- `offloader_factory` factory pattern — closure lives in `server/app.py` lifespan
+- `tool_offloader=None` default в `ToolRuntime` — backward compat
+- Fail-open во всех offload calls (try/except + logger.warning + return None → caller keeps full content)
+- Per-call timeout via `asyncio.wait_for` — keeps LLM loop responsive
+
+### Lessons
+
+1. **SpyToolRuntime signature sync (recurring)** — `class X(real_X): def __init__(...)` в тестах требует ручной sync при добавлении kwarg. Lesson: при добавлении kwarg в `ToolRuntime` — grep `tests/` на `class.*Spy|class.*Fake|class.*Stub`.
+2. **getattr chain для session_id** — `AgentLoop` has no `session_id` directly. Read via `getattr(offloader, "_scratchpad", None)` → `getattr(scratchpad, "_session_id", None)`. Mirror `runtime.py:699`.
+3. **Reuse v1.3.0 L2Retriever, не пиши новый search** — `curated_search` уже умеет hybrid dense+BM25+curator. Reuse с `notes=filtered_by_tag_in_python`.
+4. **asyncio.wait_for для per-call timeout** — обернуть `offloader.offload()` в `asyncio.wait_for(..., timeout=2s)`. Slow DB не должен stall chat.
+5. **str.format() escape — НЕ использовать (recurring)** — `.replace("__PH__", value)` для prompt templates с JSON-примерами.
+6. **events-based assertion в loop tests** — `AgentLoop` re-bind'ит `messages` list внутри body (через `redact_dict` в Phase 3). Тесты читают `events`, не `messages`.
+
+### Commits
+
+- `2274985` Step 0 — Sync roadmap.md to v2.6
+- (commits in main branch — see `git log --oneline | head -10`)
+
+### Out of scope (Phase 3 v1.4.0+)
+
+- Reflection loop + manual /compact slash → v1.4.0
+- Cross-session handoff through L2 (continuity) → v1.4.0
+- Prompt caching (Anthropic cache_control / vLLM prefix cache) → v1.4.0
+- Privacy zones + pre-compaction hook → v1.5.0
+- Time-based / token-based compaction triggers → v1.5.0
+- 12 hooks + observability (Prometheus) → Phase 4
+- /api/* → /api/v1/* migration → Phase 4
+- eval harness + cascade calibration → Phase 5
+
 ## Phase 3 v1.3.0 — Select + Compress (ЗАКРЫТО v1.3.0, 2026-06-15)
 
 **Phase 3 v1.3.0 — 4 шага / 4 коммита / +48 net new тестов (1098 → 1146) / 0 new required deps / 0 breaking changes**

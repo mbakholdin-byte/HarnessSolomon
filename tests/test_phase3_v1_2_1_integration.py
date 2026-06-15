@@ -256,6 +256,7 @@ class TestRunnerWiresL0SectionIntoRuntime:
             def __init__(  # type: ignore[no-untyped-def]
                 self, project_root, *,
                 scratchpad=None, scratchpad_audit=None, l0_section=None,
+                tool_offloader=None, **kw: Any,
             ):
                 captured["l0_section"] = l0_section
                 super().__init__(
@@ -263,6 +264,8 @@ class TestRunnerWiresL0SectionIntoRuntime:
                     scratchpad=scratchpad,
                     scratchpad_audit=scratchpad_audit,
                     l0_section=l0_section,
+                    tool_offloader=tool_offloader,
+                    **kw,
                 )
 
         import logging
