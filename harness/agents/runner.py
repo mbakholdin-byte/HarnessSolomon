@@ -232,6 +232,7 @@ class AgentRunner:
         scratchpad_audit: Any = None,
         offloader_factory: "Callable[..., Any] | None" = None,
         reflection_factory: "Callable[..., Any] | None" = None,
+        privacy_zones: Any = None,
     ) -> None:
         self.router = router
         self.repo = Path(repo).resolve(strict=False)
@@ -278,6 +279,14 @@ class AgentRunner:
         #: does NOT import the reflection module directly. Enforced
         #: by ``test_runner_does_not_import_reflection_loop``.
         self._reflection_factory = reflection_factory
+        #: Phase 3 v1.5.0: optional path-based privacy filter forwarded
+        #: to :class:`~harness.server.agent.runtime.ToolRuntime`. When
+        #: ``None`` the runtime skips the privacy-zone check on
+        #: ``read_file`` / ``grep`` / ``glob`` (backward compat). Typed
+        #: as ``Any`` to keep the trust boundary — the runner does NOT
+        #: import :mod:`harness.privacy` directly. Enforced by
+        #: ``test_runner_does_not_import_privacy_zones``.
+        self._privacy_zones = privacy_zones
         # Cache of spec.name -> UnifiedMemory. Reused across runs of
         # the same spec; cleared only when the runner is replaced.
         self._unified_memories: dict[str, Any] = {}
@@ -431,6 +440,7 @@ class AgentRunner:
             scratchpad_audit=self._scratchpad_audit,
             l0_section=l0_section,
             tool_offloader=tool_offloader,
+            privacy_zones=getattr(self, "_privacy_zones", None),
         )
         wrapped = filter_runtime(spec, runtime)
         tools = filter_tools(spec)
@@ -599,6 +609,7 @@ class AgentRunner:
             scratchpad_audit=self._scratchpad_audit,
             l0_section=l0_section,
             tool_offloader=tool_offloader,
+            privacy_zones=getattr(self, "_privacy_zones", None),
         )
         wrapped = filter_runtime(spec, runtime)
         tools = filter_tools(spec)

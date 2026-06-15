@@ -90,6 +90,7 @@ class ToolRuntime:
         tool_offloader: Any = None,
         reflection: Any = None,
         events_collector: Any = None,
+        privacy_zones: Any = None,
     ) -> None:
         self.project_root = project_root.resolve(strict=False)
         #: Phase 3 v1.2.0: optional scratchpad store. When ``None`` the
@@ -147,6 +148,62 @@ class ToolRuntime:
         #: Typed as ``Any`` so the collector does not need to be
         #: ``list[SessionEvent]`` — duck-typed ``.append(...)``.
         self._events_collector = events_collector
+        #: Phase 3 v1.5.0: optional path-based privacy filter. When
+        #: ``None`` the ``read_file`` / ``grep`` / ``glob`` tools skip
+        #: the privacy-zone check entirely (backward compat with
+        #: pre-v1.5.0). The filter is typed as ``Any`` to keep the
+        #: trust boundary: the runtime doesn't import the privacy
+        #: module directly. Each sink calls ``self._privacy_zones.check(path)``
+        #: via duck-typed ``.check(...)`` — if the attribute is None
+        #: or the filter is disabled, the check short-circuits to
+        #: ``("allow", None)``.
+        self._privacy_zones = privacy_zones
+
+    # --- privacy zone helper ---
+
+    def _check_privacy_zones(self, path_str: str) -> ToolResult | None:
+        """Phase 3 v1.5.0: pre-action privacy filter for Tier 1 sinks.
+
+        Called from ``_read_file`` / ``_grep`` / ``_glob`` BEFORE any
+        I/O. Returns a :class:`ToolResult` if the action is blocked /
+        redacted / skipped, or ``None`` if the path is allowed (or the
+        privacy filter is not wired up).
+
+        Defence-in-depth: we use ``getattr`` and duck-typed ``.check()``
+        so the runtime doesn't import :mod:`harness.privacy` directly.
+        If ``self._privacy_zones`` is ``None`` (default for tests /
+        pre-v1.5.0 wiring) or the filter raises, we return ``None``
+        (allow — fail-open at the privacy boundary).
+        """
+        filter_obj = getattr(self, "_privacy_zones", None)
+        if filter_obj is None:
+            return None
+        check = getattr(filter_obj, "check", None)
+        if not callable(check):
+            return None
+        try:
+            action, matched_pattern = check(path_str)
+        except Exception:  # noqa: BLE001 — privacy MUST fail-open
+            return None
+        if action == "allow" or action is None:
+            return None
+        if action == "block":
+            return ToolResult(
+                ok=False,
+                error=(
+                    f"path in privacy zone: {path_str!r} "
+                    f"(matched: {matched_pattern})"
+                ),
+            )
+        if action == "redact":
+            return ToolResult(
+                ok=True,
+                output=f"[PRIVATE: path matched privacy zone '{matched_pattern}']",
+            )
+        if action == "skip":
+            return ToolResult(ok=True, output="")
+        # Unknown action — fail-open.
+        return None
 
     # --- dispatcher ---
 
@@ -205,6 +262,12 @@ class ToolRuntime:
             return ToolResult(
                 ok=False, error=f"path outside project_root: {path_str!r}"
             )
+
+        # Phase 3 v1.5.0 Tier 1 sink: privacy zone check BEFORE file I/O.
+        # Path is repo-relative POSIX (matches match_glob convention).
+        privacy_result = self._check_privacy_zones(path_str)
+        if privacy_result is not None:
+            return privacy_result
 
         if not resolved.exists() or not resolved.is_file():
             return ToolResult(ok=False, error=f"file not found: {path_str!r}")
@@ -373,6 +436,12 @@ class ToolRuntime:
                 return ToolResult(
                     ok=False, error=f"path outside project_root: {path_str!r}"
                 )
+            # Phase 3 v1.5.0 Tier 1 sink: privacy zone check for grep root.
+            # We block if the search root itself is in a privacy zone
+            # (searching a `private/` dir would defeat the read_file block).
+            privacy_result = self._check_privacy_zones(path_str)
+            if privacy_result is not None:
+                return privacy_result
             base = resolved
 
         if shutil.which("rg") is not None:
@@ -445,6 +514,12 @@ class ToolRuntime:
                 return ToolResult(
                     ok=False, error=f"path outside project_root: {path_str!r}"
                 )
+            # Phase 3 v1.5.0 Tier 1 sink: privacy zone check for glob root.
+            # Same rationale as grep — a glob rooted in a privacy zone
+            # would enumerate the entire sensitive tree to the LLM.
+            privacy_result = self._check_privacy_zones(path_str)
+            if privacy_result is not None:
+                return privacy_result
             base = resolved
 
         # Path.glob can be expensive on large trees — push to a thread.

@@ -56,9 +56,44 @@ async def lifespan(app: FastAPI):
         from harness.agents.outbound import (
             OutboundWebhookDispatcher, parse_urls,
         )
+        # Phase 3 v1.5.0: build the PrivacyZoneFilter and pass it
+        # to AgentRunner (privacy_zones=kwarg). Mirrors the
+        # scratchpad_audit / offloader_factory / reflection_factory
+        # pattern: we import :mod:harness.privacy here (lifespan
+        # scope) so the runner never has to.
+        from harness.privacy import PrivacyZoneFilter, parse_zones
+
+        _privacy_rules = parse_zones(
+            patterns_str=settings.privacy_zone_patterns,
+            per_action_str=settings.privacy_zone_per_action,
+            default_action=settings.privacy_zone_default_action,
+        )
+        # Create a local ScratchpadAudit sink (gated by
+        # privacy_zones_audit_log). Mirrors the audit pattern used
+        # by the offloader / reflection / compact modules in Phase 3
+        # v1.3.1+ — operators opt in via env var. Always-constructed
+        # (cheap: a no-op writer) so the reference is always stable.
+        from harness.context.scratchpad_audit import ScratchpadAudit
+        _privacy_audit = (
+            ScratchpadAudit(enabled=True) if settings.privacy_zones_audit_log else None
+        )
+        privacy_zones_filter = PrivacyZoneFilter(
+            rules=_privacy_rules,
+            audit=_privacy_audit,
+            enabled=settings.privacy_zones_enabled,
+        )
+        app.state.privacy_zones = privacy_zones_filter
+        print(
+            f"[harness] privacy_zones: enabled={settings.privacy_zones_enabled} "
+            f"rules={len(_privacy_rules)} audit={settings.privacy_zones_audit_log}"
+        )
         from harness.server.llm.router import LLMRouter
         router_inst = LLMRouter()
-        runner = AgentRunner(router=router_inst, repo=settings.project_root)
+        runner = AgentRunner(
+            router=router_inst,
+            repo=settings.project_root,
+            privacy_zones=privacy_zones_filter,
+        )
         verifier = AdversarialVerify(runner, judges=settings.subagent_judges)
         # Phase 2.5: outbound dispatcher (singleton). Constructed
         # eagerly at lifespan so the ``MergeQueue`` and

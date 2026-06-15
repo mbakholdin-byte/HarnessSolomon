@@ -104,10 +104,16 @@ async def chat_ws(websocket: WebSocket, session_id: str, model: str) -> None:
             )
             reflection = None
     try:
+        # Phase 3 v1.5.0: pick up the privacy_zones filter from
+        # ``websocket.app.state`` (set in lifespan). When ``None`` the
+        # runtime is a no-op for privacy (backward compat). The filter
+        # is shared across all chat sessions and read-only.
+        privacy_zones = getattr(websocket.app.state, "privacy_zones", None)
         runtime = ToolRuntime(
             project_root=settings.project_root,
             reflection=reflection,
             events_collector=events_collector,
+            privacy_zones=privacy_zones,
         )
         llm_router = LLMRouter()
         # Phase 3: pick up the compactor from app.state (set in
