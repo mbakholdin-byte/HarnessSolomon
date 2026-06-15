@@ -169,10 +169,27 @@ class AgentRunner:
         repo: Path,
         *,
         unified_memory_factory: "Callable[[AgentSpec], Any] | None" = None,
+        scratchpad_factory: "Callable[[AgentSpec, str | None], Any] | None" = None,
+        scratchpad_audit: Any = None,
     ) -> None:
         self.router = router
         self.repo = Path(repo).resolve(strict=False)
         self._unified_memory_factory = unified_memory_factory
+        #: Phase 3 v1.2.0: optional factory for the per-(spec, session)
+        #: scratchpad store. The factory returns an uninitialised
+        #: :class:`~harness.agents.scratchpad_store.ScratchpadStore`; the
+        #: runner calls ``.init()`` before use. ``None`` disables
+        #: scratchpad tools entirely.
+        #:
+        #: The factory is intentionally typed as ``Callable[..., Any]``
+        #: to keep :mod:`harness.agents.runner` free of any direct
+        #: import of the scratchpad module — trust boundary enforced
+        #: by ``test_runner_does_not_import_scratchpad``.
+        self._scratchpad_factory = scratchpad_factory
+        #: Phase 3 v1.2.0: optional audit writer, forwarded to
+        #: :class:`~harness.server.agent.runtime.ToolRuntime` so the 4
+        #: scratchpad tool calls emit audit events.
+        self._scratchpad_audit = scratchpad_audit
         # Cache of spec.name -> UnifiedMemory. Reused across runs of
         # the same spec; cleared only when the runner is replaced.
         self._unified_memories: dict[str, Any] = {}
@@ -201,6 +218,7 @@ class AgentRunner:
         stream: bool = False,
         external_worktree: "WorktreeInfo | None" = None,
         model_override: str | None = None,
+        session_id: str | None = None,
     ) -> RunResult:
         """Run ``spec`` against ``prompt`` and return the final result.
 
@@ -224,17 +242,26 @@ class AgentRunner:
         :class:`~harness.agents.cascade.TierSelector` injects a
         cost-aware tier choice without mutating the (frozen) spec.
         Passing ``None`` preserves the spec's model (default).
+
+        ``session_id`` (Phase 3 v1.2.0): when supplied, the runner
+        builds a per-call :class:`~harness.agents.scratchpad_store.ScratchpadStore`
+        via the configured ``scratchpad_factory`` and forwards it to
+        ``ToolRuntime``. When ``None`` (the default — backward-compat
+        with pre-v1.2.0 callers) the scratchpad tools are not
+        available on this run.
         """
         if external_worktree is not None:
             return await self._drive(
                 spec, prompt, external_worktree,
                 stream=stream, model_override=model_override,
+                session_id=session_id,
             )
         if spec.worktree_required:
             async with WorktreeSession(self.repo, worktree_id=worktree_id) as wt:
                 return await self._drive(
                     spec, prompt, wt,
                     stream=stream, model_override=model_override,
+                    session_id=session_id,
                 )
         # No-worktree path: synthesize a WorktreeInfo pointing at self.repo.
         wt = WorktreeInfo(
@@ -244,6 +271,7 @@ class AgentRunner:
         return await self._drive(
             spec, prompt, wt,
             stream=stream, model_override=model_override,
+            session_id=session_id,
         )
 
     # --- core loop ---
@@ -256,8 +284,25 @@ class AgentRunner:
         *,
         stream: bool,
         model_override: str | None = None,
+        session_id: str | None = None,
     ) -> RunResult:
-        runtime = ToolRuntime(project_root=wt.path)
+        # Phase 3 v1.2.0: build a per-(spec, session) scratchpad if the
+        # runner was configured with a factory. Fail-open — a broken
+        # factory or init must never break the chat loop.
+        scratchpad = None
+        if self._scratchpad_factory is not None and session_id is not None:
+            try:
+                scratchpad = self._scratchpad_factory(spec, session_id)
+                if scratchpad is not None:
+                    await scratchpad.init()
+            except Exception as exc:  # noqa: BLE001 — fail-open: scratchpad must never break the chat loop
+                logger.warning("scratchpad factory/init failed: %s", exc)
+                scratchpad = None
+        runtime = ToolRuntime(
+            project_root=wt.path,
+            scratchpad=scratchpad,
+            scratchpad_audit=self._scratchpad_audit,
+        )
         wrapped = filter_runtime(spec, runtime)
         tools = filter_tools(spec)
         loop = AgentLoop(
@@ -335,6 +380,7 @@ class AgentRunner:
         *,
         worktree_id: str | None = None,
         model_override: str | None = None,
+        session_id: str | None = None,
     ) -> AsyncIterator[StreamEvent]:
         """Like :meth:`run` but yields ``StreamEvent``s live.
 
@@ -342,17 +388,25 @@ class AgentRunner:
         ``done`` (from AgentLoop); consumers should stop after that.
 
         ``model_override`` (Phase 2.1): same semantics as in :meth:`run`.
+
+        ``session_id`` (Phase 3 v1.2.0): same semantics as in :meth:`run`.
         """
         if spec.worktree_required:
             async with WorktreeSession(self.repo, worktree_id=worktree_id) as wt:
-                async for e in self._stream_drive(spec, prompt, wt, model_override=model_override):
+                async for e in self._stream_drive(
+                    spec, prompt, wt,
+                    model_override=model_override, session_id=session_id,
+                ):
                     yield e
         else:
             wt = WorktreeInfo(
                 path=self.repo, branch="(no worktree)",
                 worktree_id=worktree_id or "no-wt", reused=False,
             )
-            async for e in self._stream_drive(spec, prompt, wt, model_override=model_override):
+            async for e in self._stream_drive(
+                spec, prompt, wt,
+                model_override=model_override, session_id=session_id,
+            ):
                 yield e
 
     async def _stream_drive(
@@ -362,8 +416,23 @@ class AgentRunner:
         wt: WorktreeInfo,
         *,
         model_override: str | None = None,
+        session_id: str | None = None,
     ) -> AsyncIterator[StreamEvent]:
-        runtime = ToolRuntime(project_root=wt.path)
+        # Phase 3 v1.2.0: same scratchpad build as _drive (mirror).
+        scratchpad = None
+        if self._scratchpad_factory is not None and session_id is not None:
+            try:
+                scratchpad = self._scratchpad_factory(spec, session_id)
+                if scratchpad is not None:
+                    await scratchpad.init()
+            except Exception as exc:  # noqa: BLE001 — fail-open
+                logger.warning("scratchpad factory/init failed: %s", exc)
+                scratchpad = None
+        runtime = ToolRuntime(
+            project_root=wt.path,
+            scratchpad=scratchpad,
+            scratchpad_audit=self._scratchpad_audit,
+        )
         wrapped = filter_runtime(spec, runtime)
         tools = filter_tools(spec)
         loop = AgentLoop(

@@ -575,6 +575,35 @@ def test_runner_does_not_import_registry() -> None:
     assert "from harness.agents.registry" not in src
 
 
+def test_runner_does_not_import_scratchpad() -> None:
+    """The runner must not import scratchpad types directly (Phase 3 v1.2.0).
+
+    Trust boundary: scratchpad is wired via factory DI
+    (``scratchpad_factory`` kwarg on ``AgentRunner.__init__``), not
+    by direct module import. A static check on the runner's source
+    file ensures the module never gains a hard dependency on
+    ``harness.agents.scratchpad`` /
+    ``harness.agents.scratchpad_store`` /
+    ``harness.context.scratchpad_audit``.
+    """
+    import harness.agents.runner as runner_mod
+    src = Path(runner_mod.__file__).read_text(encoding="utf-8")
+    for forbidden in (
+        "ScratchpadStore", "Note", "PlanStep", "NoteLevel", "PlanStatus",
+        "ScratchpadAudit",
+    ):
+        for line in src.splitlines():
+            stripped = line.strip()
+            if (
+                stripped.startswith(f"from harness.agents.scratchpad import {forbidden}")
+                or stripped.startswith(f"from harness.agents.scratchpad_store import {forbidden}")
+                or stripped.startswith(f"from harness.context.scratchpad_audit import {forbidden}")
+            ):
+                pytest.fail(
+                    f"runner.py has a real import of {forbidden!r}: {line!r}"
+                )
+
+
 # === RunResult dataclass ===
 
 def test_run_result_default_usage() -> None:
