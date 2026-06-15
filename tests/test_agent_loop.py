@@ -457,3 +457,102 @@ async def test_loop_streaming_caps_at_max_iterations(tmp_path: Path) -> None:
     error_ev = next(ev for ev in events if ev.type == "error")
     assert "max iterations" in error_ev.content.lower()
     assert events[-1].type == "done"
+
+
+# === L0 → system prompt injection (Phase 3 v1.2.1, defence in depth) ===
+
+async def test_loop_injects_l0_section_when_no_system_message(
+    tmp_path: Path,
+) -> None:
+    """Empty messages + runtime._l0_section → first message is system with L0."""
+    runtime = ToolRuntime(
+        project_root=tmp_path,
+        l0_section="## Hot context\n- (id=1) fact",
+    )
+    router = FakeRouter(
+        scripted_responses=[
+            CompletionResult(content="ack", tool_calls=None, usage={}, cost=0.0)
+        ]
+    )
+    loop = AgentLoop(runtime=runtime, router=router, max_iterations=1)
+
+    async for _ev in loop.run(
+        messages=[{"role": "user", "content": "hi"}], model="MiniMax-M2.7"
+    ):
+        pass
+
+    # Router was called once with a system message at index 0.
+    assert router.call_count == 1
+    sent = router.calls[0]["messages"]
+    assert sent[0]["role"] == "system"
+    assert "## Hot context" in sent[0]["content"]
+    assert "(id=1) fact" in sent[0]["content"]
+    # L0 section appears BEFORE the standard "You are Solomon" prelude.
+    assert sent[0]["content"].index("## Hot context") < sent[0]["content"].index(
+        "You are Solomon"
+    )
+
+
+async def test_loop_no_l0_section_no_injection(tmp_path: Path) -> None:
+    """Empty messages + no _l0_section → standard system prompt only."""
+    runtime = ToolRuntime(project_root=tmp_path)   # default l0_section=None
+    router = FakeRouter(
+        scripted_responses=[
+            CompletionResult(content="ack", tool_calls=None, usage={}, cost=0.0)
+        ]
+    )
+    loop = AgentLoop(runtime=runtime, router=router, max_iterations=1)
+
+    async for _ev in loop.run(
+        messages=[{"role": "user", "content": "hi"}], model="MiniMax-M2.7"
+    ):
+        pass
+
+    sent = router.calls[0]["messages"]
+    assert sent[0]["role"] == "system"
+    assert "## Hot context" not in sent[0]["content"]
+    assert "You are Solomon" in sent[0]["content"]
+
+
+async def test_loop_does_not_overwrite_caller_supplied_system_message(
+    tmp_path: Path,
+) -> None:
+    """When the caller already built a system message, the loop does NOT
+    replace it with its own build_system_prompt() — even when the
+    runtime carries an _l0_section. This is critical for the
+    ``AgentRunner`` flow where the runner prepended the L0 section
+    itself; the loop's defence-in-depth path must not undo that work.
+    """
+    runtime = ToolRuntime(
+        project_root=tmp_path,
+        l0_section="## Hot context\n- (id=1) fact",
+    )
+    router = FakeRouter(
+        scripted_responses=[
+            CompletionResult(content="ack", tool_calls=None, usage={}, cost=0.0)
+        ]
+    )
+    loop = AgentLoop(runtime=runtime, router=router, max_iterations=1)
+
+    # Caller (the runner) already built a system message with L0 baked in.
+    caller_system = (
+        "## Hot context (L0 notes — this session, auto-injected)\n"
+        "- (id=99) runner-injected fact\n\n"
+        "You are Solomon.\n"
+    )
+    async for _ev in loop.run(
+        messages=[
+            {"role": "system", "content": caller_system},
+            {"role": "user", "content": "hi"},
+        ],
+        model="MiniMax-M2.7",
+    ):
+        pass
+
+    sent = router.calls[0]["messages"]
+    # The caller's message is preserved verbatim — the loop did NOT
+    # re-insert its own system message (and did NOT double-inject L0).
+    assert sent[0]["content"] == caller_system
+    # And specifically, only one "Hot context" header is present.
+    assert sent[0]["content"].count("## Hot context") == 1
+    assert "(id=99) runner-injected" in sent[0]["content"]

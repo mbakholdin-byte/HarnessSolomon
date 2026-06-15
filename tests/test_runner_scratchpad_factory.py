@@ -131,13 +131,18 @@ class TestFactoryWiring:
         real_ToolRuntime = ToolRuntime
 
         class SpyToolRuntime(real_ToolRuntime):
-            def __init__(self, project_root, *, scratchpad=None, scratchpad_audit=None):  # type: ignore[no-untyped-def]
+            def __init__(  # type: ignore[no-untyped-def]
+                self, project_root, *,
+                scratchpad=None, scratchpad_audit=None, l0_section=None,
+            ):
                 captured["scratchpad"] = scratchpad
                 captured["scratchpad_audit"] = scratchpad_audit
+                captured["l0_section"] = l0_section
                 super().__init__(
                     project_root,
                     scratchpad=scratchpad,
                     scratchpad_audit=scratchpad_audit,
+                    l0_section=l0_section,
                 )
 
         fake = FakeScratchpad(session_id="sess-Y")

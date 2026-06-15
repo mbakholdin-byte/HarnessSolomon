@@ -201,6 +201,18 @@ class AgentLoop:
                 project_root=self.runtime.project_root,
                 tools=list(TOOL_SCHEMAS),
             )
+            # Phase 3 v1.2.1: defence-in-depth L0 injection. When the
+            # caller did NOT supply a system message (e.g. WebSocket
+            # / CLI callers that build ``AgentLoop`` directly without
+            # going through ``AgentRunner``), we apply the L0 section
+            # stored on the runtime (``runner._drive`` sets it from
+            # ``store.read_notes("L0", ...)``). The runner-built
+            # ``messages`` list goes through the ``else`` branch below
+            # — its first message is already a system prompt with the
+            # L0 block prepended, and we don't touch it.
+            l0_section = getattr(self.runtime, "_l0_section", None)
+            if l0_section:
+                system_content = f"{l0_section}\n\n{system_content}"
             messages.insert(
                 0,
                 {"role": "system", "content": system_content},
