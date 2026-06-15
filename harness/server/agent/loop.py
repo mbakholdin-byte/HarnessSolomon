@@ -37,6 +37,7 @@ from harness.server.llm.router import LLMRouter, StreamEvent
 
 if TYPE_CHECKING:
     from harness.context.compaction import ContextCompactor
+from harness.redaction import redact_dict
 
 logger = logging.getLogger(__name__)
 
@@ -211,6 +212,15 @@ class AgentLoop:
         # below still works against the compacted set.
         if self.compactor is not None:
             messages = await self.compactor.maybe_compact(messages, model)
+        # Phase 3: redact any PII / secrets in the message list before
+        # the LLM call. ``redact_dict`` is a no-op for non-string
+        # content and idempotent (running twice yields the same
+        # result). The redacted content preserves structure so the
+        # LLM can still reason about categories (``<EMAIL>``,
+        # ``<GITHUB_TOKEN>``, etc.).
+        from harness.config import settings as _settings
+        if _settings.redaction_enabled:
+            messages = redact_dict(messages, {"content"})  # type: ignore[assignment]
 
         # Effective streaming mode: requested AND router supports it.
         # Falling back to completion() avoids AttributeError on test fakes.

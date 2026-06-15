@@ -239,11 +239,18 @@ class OutboundWebhookDispatcher:
         headers = {"Content-Type": "application/json"}
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
+        # Phase 3: redact the event payload before it leaves the
+        # process. The current events don't carry raw user text
+        # (the merge queue's _emit() payload is metadata only),
+        # but defence in depth — if a future event field ever
+        # leaks a prompt or PR body, it gets scrubbed here.
+        from harness.redaction import redact_dict
+        safe_event = redact_dict(event, set(event.keys()))
         last_err: str = ""
         for attempt in range(self.max_retries + 1):
             try:
                 resp = await self._client.post(
-                    url, json=event, headers=headers,
+                    url, json=safe_event, headers=headers,
                 )
             except httpx.TimeoutException as e:
                 last_err = f"timeout: {e}"

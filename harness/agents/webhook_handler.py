@@ -400,6 +400,21 @@ class WebhookHandler:
         event = event.model_copy(update={"delivery_id": delivery_id})
         # 4. Record (UNIQUE on delivery_id is the canonical
         # idempotency check; ``is_duplicate`` is just a fast-path).
+        # Phase 3: redact the inbound payload before persisting. The
+        # payload can contain reviewer names, PR titles, comments,
+        # and committer emails — all of which may carry PII. The
+        # HMAC signature was already verified against the raw body
+        # above; redaction happens AFTER signature verification so
+        # the canonical hash is preserved.
+        from harness.config import settings as _settings
+        from harness.redaction import redact_dict as _redact_dict
+        if _settings.redaction_enabled:
+            payload = _redact_dict(
+                payload,
+                {"body", "comment.body", "pull_request.body",
+                 "issue.body", "review.body", "title", "name",
+                 "email", "committer.email", "author.email"},
+            )
         event_id = await self.store.record_event(
             delivery_id=delivery_id,
             event_type=event_type,

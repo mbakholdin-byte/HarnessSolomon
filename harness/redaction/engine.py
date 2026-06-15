@@ -90,20 +90,22 @@ def redact(text: str, *, categories: set[str] | None = None) -> str:
 
 
 def redact_dict(
-    d: dict,
+    d: object,
     fields: set[str],
     *,
     categories: set[str] | None = None,
-) -> dict:
+) -> object:
     """Recursively redact string values in selected fields.
 
-    Walks the dict, list, and nested-dict structure. For each leaf key
-    in ``fields`` (matched by exact key name, any depth), the value is
+    Walks dict, list, and nested-dict structure. For each leaf key in
+    ``fields`` (matched by exact key name, any depth), the value is
     redacted if it's a string. Non-string values are left untouched.
 
-    Returns a new dict; ``d`` is not mutated.
+    Returns a new value of the same shape; ``d`` is not mutated.
+    Accepts a list at the top level (e.g. OpenAI message lists) and
+    returns a new list with redacted leaves.
     """
-    if not isinstance(d, dict):
+    if not isinstance(d, (dict, list)):
         return d
 
     def _walk(node: object) -> object:
@@ -120,4 +122,4 @@ def redact_dict(
             return [_walk(item) for item in node]
         return node
 
-    return _walk(d)  # type: ignore[return-value]
+    return _walk(d)

@@ -56,6 +56,7 @@ from harness.agents.spec import AgentSpec
 from harness.agents.verify import AdversarialVerify
 from harness.agents.worktree import WorktreeSession
 from harness.config import settings
+from harness.redaction import redact
 
 logger = logging.getLogger(__name__)
 
@@ -293,7 +294,11 @@ class MergeQueue:
         job_id = await self.store.create(
             worktree_id=job.worktree_id,
             model=job.model or job.code_spec.model,
-            prompt=job.task[:500],   # truncate for DB display
+            # Phase 3: redact before persisting. The prompt is also
+            # returned by ``GET /api/v1/agents/jobs/{id}`` and shown
+            # in operator dashboards — redacting keeps secrets out
+            # of the DB and the API surface.
+            prompt=redact(job.task[:500]),   # truncate for DB display
             status="queued",
             repo=str(self._job_repo(job)),
             pr_mode=job.pr_mode,
@@ -824,7 +829,12 @@ class MergeQueue:
             back to a local merge (auto-strategy).
         """
         target_branch = job.pr_target_branch or settings.pr_default_target_branch
-        title = f"harness: {job.task[:80]}"  # truncate to 80 chars for the title
+        # Phase 3: redact PII / secrets from the PR title and the
+        # task text that flows into the body template. The title is
+        # published to GitHub and visible to anyone with repo
+        # access (often public). The body redaction happens later,
+        # inside the render call.
+        title = redact(f"harness: {job.task[:80]}")  # truncate to 80 chars for the title
         # Phase 2.4: render the body via the templating layer instead
         # of the inline f-string used in Phase 2.2/2.3. Extracts issue
         # numbers from the task text, supports stack metadata, and
@@ -866,6 +876,11 @@ class MergeQueue:
             codeowners_reviewers=codeowners_reviewers,
             test_summary="Run the test suite and verify the new tests pass.",
         )
+        # Phase 3: redact the rendered PR body. The body is published
+        # to GitHub and visible to anyone with repo access; we
+        # already redacted the title above and now ensure the body
+        # is also clean.
+        body = redact(body)
 
         # === 1. Create the PR ===
         try:
@@ -1490,7 +1505,9 @@ class MergeQueue:
             # is the i-th one, the planner already grouped the right
             # files. Otherwise, fall back to the diff slice.
             slice_files = slice.files
-            commit_msg = (
+            # Phase 3: commit message is pushed to origin and lives
+            # forever in git history. Redact before committing.
+            commit_msg = redact(
                 f"harness: stack slice {i + 1}/{len(plan)}\n\n"
                 f"Task: {job.task[:200]}"
             )

@@ -27,6 +27,8 @@ from harness.server.agent.safety import (
     is_bash_denied,
     resolve_safe_path,
 )
+from harness.config import settings as _settings
+from harness.redaction import redact as _redact
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +124,14 @@ class ToolRuntime:
             content = await asyncio.to_thread(_do_read)
         except (OSError, UnicodeDecodeError) as exc:
             return ToolResult(ok=False, error=f"read_file: {exc}")
+        # Phase 3: redact the file content before it flows into the
+        # LLM. ``.env`` files and any other config that contains
+        # credentials get scrubbed here. We redact ALL files (not
+        # just .env) because file contents may contain pasted
+        # secrets in any text file (README, code, .git/config with
+        # an embedded token, etc.).
+        if _settings.redaction_enabled:
+            content = _redact(content)
         return ToolResult(ok=True, output=content)
 
     async def _edit_file(self, args: dict[str, Any]) -> ToolResult:

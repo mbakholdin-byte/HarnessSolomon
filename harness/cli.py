@@ -212,6 +212,11 @@ def _cmd_agents_run(args: argparse.Namespace) -> int:
             runner=runner, verifier=_CLIStubVerifier(), store=store,  # type: ignore[arg-type]
         )
         worktree_id = args.worktree_id or f"cli-{abs(hash(args.prompt)) % 10000:04d}"
+        # Phase 3: if the user supplied --worktree-id explicitly,
+        # it flows into the git branch name. Redact defensively.
+        if args.worktree_id:
+            from harness.redaction import redact
+            worktree_id = redact(worktree_id) or worktree_id  # never empty
         # Phase 2.3: --auto-merge implies --pr (or --pr-draft /
         # --pr-ready). Reject if the user asked for auto-merge
         # without a PR mode.

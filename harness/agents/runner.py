@@ -22,6 +22,7 @@ from typing import Any, AsyncIterator, Callable
 
 from harness.agents.spec import AgentSpec
 from harness.agents.worktree import WorktreeInfo, WorktreeSession
+from harness.redaction import redact
 from harness.server.agent.loop import AgentLoop, DEFAULT_MAX_ITERATIONS
 from harness.server.agent.prompts import build_system_prompt
 from harness.server.agent.runtime import ToolResult, ToolRuntime
@@ -260,7 +261,12 @@ class AgentRunner:
 
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": build_system_prompt_for(spec, wt.path, tools)},
-            {"role": "user", "content": prompt},
+            # Phase 3: redact the user prompt before it reaches the LLM.
+            # Idempotent + cheap (~1ms); the redacted text preserves
+            # the structure so the LLM can still reason about email
+            # addresses, tokens, etc. (it just doesn't see the
+            # original values).
+            {"role": "user", "content": redact(prompt)},
         ]
 
         # Phase 2.1: cascade override. We pass the override (or
@@ -360,7 +366,9 @@ class AgentRunner:
         )
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": build_system_prompt_for(spec, wt.path, tools)},
-            {"role": "user", "content": prompt},
+            # Phase 3: see _drive() — redact the user prompt before
+            # passing it to the LLM.
+            {"role": "user", "content": redact(prompt)},
         ]
         effective_model = model_override if model_override else spec.model
         async for event in loop.run(messages, model=effective_model, stream=True):
