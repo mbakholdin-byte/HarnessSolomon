@@ -117,8 +117,12 @@ class ChatSession:
         # the persisted DB rows are unchanged (compaction is in-memory
         # only — JSONL mirror and SQLite retain the full history, see
         # Phase 3 plan §10 "JSONL session mirror rewrites").
+        # Phase 3.5: pass ``session_id`` so the compactor can use its
+        # persistent cache (``CompactStore``) keyed on this session.
         if self.compactor is not None:
-            history = await self.compactor.maybe_compact(history, self.model)
+            history = await self.compactor.maybe_compact(
+                history, self.model, session_id=self.session_id,
+            )
         return history
 
     # --- persistence ---
