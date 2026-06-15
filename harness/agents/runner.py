@@ -231,6 +231,7 @@ class AgentRunner:
         scratchpad_factory: "Callable[[AgentSpec, str | None], Any] | None" = None,
         scratchpad_audit: Any = None,
         offloader_factory: "Callable[..., Any] | None" = None,
+        reflection_factory: "Callable[..., Any] | None" = None,
     ) -> None:
         self.router = router
         self.repo = Path(repo).resolve(strict=False)
@@ -264,6 +265,19 @@ class AgentRunner:
         #: does NOT import the offloader module directly. Enforced
         #: by ``test_runner_does_not_import_tool_offloader``.
         self._offloader_factory = offloader_factory
+        #: Phase 3 v1.4.0: optional factory for the per-session
+        #: :class:`~harness.server.agent.reflection_loop.ReflectionLoop`.
+        #: The factory is called once per run / stream with the live
+        #: ``(spec, session_id, scratchpad, unified_memory)`` quadruple
+        #: and returns a ready-to-use reflection handle (or ``None`` to
+        #: skip). ``None`` disables end-of-session reflection entirely.
+        #:
+        #: The factory mirrors the ``offloader_factory`` pattern
+        #: from Phase 3 v1.3.1: typed as ``Callable[..., Any]`` to
+        #: preserve the trust boundary — ``harness.agents.runner``
+        #: does NOT import the reflection module directly. Enforced
+        #: by ``test_runner_does_not_import_reflection_loop``.
+        self._reflection_factory = reflection_factory
         # Cache of spec.name -> UnifiedMemory. Reused across runs of
         # the same spec; cleared only when the runner is replaced.
         self._unified_memories: dict[str, Any] = {}

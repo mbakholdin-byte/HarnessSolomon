@@ -663,6 +663,49 @@ def test_runner_does_not_import_session_lifecycle() -> None:
             )
 
 
+def test_runner_does_not_import_reflection_loop() -> None:
+    """The runner must not import ReflectionLoop directly (Phase 3 v1.4.0).
+
+    Trust boundary: the reflection loop is wired via factory DI
+    (``reflection_factory`` kwarg on ``AgentRunner.__init__``). The
+    runner must not import the reflection module itself; it gets a
+    callable that returns a wired loop (or ``None``) and passes the
+    result into ``ToolRuntime(reflection=...)``.
+
+    Mirrors ``test_runner_does_not_import_tool_offloader`` from
+    Phase 3 v1.3.1.
+    """
+    import harness.agents.runner as runner_mod
+    src = Path(runner_mod.__file__).read_text(encoding="utf-8")
+    for line in src.splitlines():
+        stripped = line.strip()
+        # Skip docstrings / comments — those are textual references, not imports.
+        if stripped.startswith("#") or stripped.startswith('"""') or stripped.startswith("'''"):
+            continue
+        if ":class:" in stripped or ":func:" in stripped or ":meth:" in stripped:
+            # Sphinx-role references in docstrings / comments.
+            continue
+        if stripped.startswith(
+            "from harness.server.agent.reflection_loop import",
+        ):
+            pytest.fail(
+                f"runner.py has a real import of reflection_loop: {line!r}"
+            )
+        if stripped.startswith(
+            "import harness.server.agent.reflection_loop",
+        ):
+            pytest.fail(
+                f"runner.py has a real import of reflection_loop: {line!r}"
+            )
+        # Catch ``import ReflectionLoop`` / ``from X import ReflectionLoop`` /
+        # ``ReflectionLoop(...)`` — but NOT textual references in comments /
+        # docstrings (already filtered above).
+        if "ReflectionLoop" in stripped and not stripped.startswith("#"):
+            pytest.fail(
+                f"runner.py references ReflectionLoop directly: {line!r}"
+            )
+
+
 # === RunResult dataclass ===
 
 def test_run_result_default_usage() -> None:
