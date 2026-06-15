@@ -57,6 +57,7 @@ ToolName = Literal[
     "scratchpad_write_note", "scratchpad_read_notes",
     "scratchpad_plan_step", "scratchpad_mark_done",
     "scratchpad_l2_search", "scratchpad_l2_promote_to_l1",
+    "scratchpad_read_offloaded", "scratchpad_search_offloaded",
 ]
 
 
@@ -158,6 +159,10 @@ class ToolRuntime:
                 result = await self._scratchpad_l2_search(args)
             elif name == "scratchpad_l2_promote_to_l1":
                 result = await self._scratchpad_l2_promote_to_l1(args)
+            elif name == "scratchpad_read_offloaded":
+                result = await self._scratchpad_read_offloaded(args)
+            elif name == "scratchpad_search_offloaded":
+                result = await self._scratchpad_search_offloaded(args)
             else:
                 result = ToolResult(ok=False, error=f"unknown tool: {name!r}")
         except Exception as exc:  # noqa: BLE001 — top-level safety net
@@ -842,6 +847,168 @@ class ToolRuntime:
             "new_l1_note_id": int(new_note.id),
             "summary_preview": summary[:500],
         }
+        return ToolResult(ok=True, output=json.dumps(payload, ensure_ascii=False))
+
+    # --- Tool offload tools (Phase 3 v1.3.1) ---
+
+    async def _scratchpad_read_offloaded(
+        self, args: dict[str, Any],
+    ) -> ToolResult:
+        """Read a previously offloaded tool result by note id.
+
+        The :class:`ToolOffloader` (Phase 3 v1.3.1) persists large tool
+        results to L2 and replaces the in-flight message with a stub
+        that includes the note id and a 3-line preview. This tool
+        lets the LLM pull the full body when the preview isn't
+        enough.
+        """
+        if self._tool_offloader is None:
+            return ToolResult(
+                ok=False,
+                error="scratchpad_read_offloaded: tool offloader not enabled in this runtime",
+            )
+        note_id = args.get("id")
+        if not isinstance(note_id, int) or note_id <= 0:
+            return ToolResult(
+                ok=False,
+                error="scratchpad_read_offloaded: 'id' must be a positive integer",
+            )
+        # Default to the configured read chunk size, but allow the
+        # caller to override. We read the setting from the
+        # offloader's settings object so a runtime-constructed
+        # override (e.g. tests) is respected.
+        default_max = 4096
+        offloader_settings = getattr(self._tool_offloader, "_settings", None)
+        if offloader_settings is not None:
+            default_max = int(
+                getattr(offloader_settings, "tool_offload_read_max_bytes", 4096)
+                or 4096,
+            )
+        max_bytes_raw = args.get("max_bytes", default_max)
+        try:
+            max_bytes = int(max_bytes_raw)
+        except (TypeError, ValueError):
+            return ToolResult(
+                ok=False,
+                error=(
+                    f"scratchpad_read_offloaded: 'max_bytes' must be an integer, "
+                    f"got {max_bytes_raw!r}"
+                ),
+            )
+        if max_bytes <= 0:
+            max_bytes = default_max
+        try:
+            content = await self._tool_offloader.read(
+                note_id, max_bytes=max_bytes,
+            )
+        except Exception as exc:  # noqa: BLE001 — chat loop must not break
+            logger.warning(
+                "scratchpad_read_offloaded failed for id=%d: %s",
+                note_id, exc,
+            )
+            return ToolResult(
+                ok=False,
+                error=f"scratchpad_read_offloaded: {type(exc).__name__}: {exc}",
+            )
+        if content is None:
+            return ToolResult(
+                ok=False,
+                error=(
+                    f"scratchpad_read_offloaded: offloaded note id={note_id} not found"
+                ),
+            )
+        return ToolResult(ok=True, output=content)
+
+    async def _scratchpad_search_offloaded(
+        self, args: dict[str, Any],
+    ) -> ToolResult:
+        """Semantic search across offloaded tool results.
+
+        Reuses the v1.3.0 :class:`~harness.agents.l2_retriever.L2Retriever`
+        for hybrid dense+BM25+curator search, but restricts the
+        corpus to notes tagged ``#tool-offload``. This is the
+        "find that big tool result from earlier" companion to
+        :meth:`_scratchpad_read_offloaded`.
+        """
+        if self._l2_retriever is None:
+            return ToolResult(
+                ok=False,
+                error=(
+                    "scratchpad_search_offloaded: L2 retriever not enabled — "
+                    "install v1.3.0 components first"
+                ),
+            )
+        if self._scratchpad is None:
+            return ToolResult(
+                ok=False,
+                error="scratchpad_search_offloaded: scratchpad not enabled in this runtime",
+            )
+        query = args.get("query")
+        if not isinstance(query, str) or not query.strip():
+            return ToolResult(
+                ok=False,
+                error="scratchpad_search_offloaded: 'query' must be a non-empty string",
+            )
+        top_k_raw = args.get("top_k", 5)
+        try:
+            top_k = int(top_k_raw)
+        except (TypeError, ValueError):
+            return ToolResult(
+                ok=False,
+                error=(
+                    f"scratchpad_search_offloaded: 'top_k' must be an integer, "
+                    f"got {top_k_raw!r}"
+                ),
+            )
+        if top_k <= 0 or top_k > 50:
+            return ToolResult(
+                ok=False,
+                error=(
+                    f"scratchpad_search_offloaded: 'top_k' must be in [1, 50], "
+                    f"got {top_k}"
+                ),
+            )
+        try:
+            # Pull the L2 corpus and filter to #tool-offload notes
+            # in Python (cheap, exact tag match). The v1.3.0
+            # retriever's curated_search takes the pre-fetched notes
+            # list as input — we just narrow the candidate set
+            # before passing it in.
+            all_l2 = await self._scratchpad.read_notes("L2", limit=200)
+            filtered = [
+                n for n in all_l2
+                if "#tool-offload" in (n.tags or [])
+            ]
+            if not filtered:
+                return ToolResult(ok=True, output="[]")
+            scored = await self._l2_retriever.curated_search(
+                query=query,
+                top_k=top_k,
+                candidate_k=min(50, len(filtered)),
+                notes=filtered,
+                router=self._l2_router,
+                model=self._l2_curator_model,
+            )
+        except Exception as exc:  # noqa: BLE001 — chat loop must not break
+            logger.warning(
+                "scratchpad_search_offloaded failed for query=%r: %s",
+                query, exc,
+            )
+            return ToolResult(
+                ok=False,
+                error=(
+                    f"scratchpad_search_offloaded: {type(exc).__name__}: {exc}"
+                ),
+            )
+        payload = [
+            {
+                "id": int(note.id),
+                "score": float(score),
+                "preview": note.content[:200],
+                "tags": list(note.tags or []),
+            }
+            for note, score in scored
+        ]
         return ToolResult(ok=True, output=json.dumps(payload, ensure_ascii=False))
 
 

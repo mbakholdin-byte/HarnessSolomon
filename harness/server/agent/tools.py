@@ -274,6 +274,67 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "required": ["query"],
         },
     },
+    {
+        "name": "scratchpad_read_offloaded",
+        "description": (
+            "Phase 3 v1.3.1: read a previously offloaded tool result "
+            "by its note id. When a tool result exceeded the offload "
+            "threshold (default 25 KB) the loop wrote the full body "
+            "to L2 scratchpad and replaced the inline message with a "
+            "stub that includes the note id and a 3-line preview. "
+            "Use this tool to pull the full body when the preview "
+            "isn't enough to make a decision. Returns up to "
+            "``max_bytes`` characters of the offloaded content "
+            "(default 4 KB)."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "integer",
+                    "description": "The note id returned in the offload stub header.",
+                },
+                "max_bytes": {
+                    "type": "integer",
+                    "description": (
+                        "Maximum number of bytes (chars) to return. "
+                        "Default ``settings.tool_offload_read_max_bytes`` "
+                        "(4096). Pass a larger value to fetch the full "
+                        "offloaded body in one call."
+                    ),
+                },
+            },
+            "required": ["id"],
+        },
+    },
+    {
+        "name": "scratchpad_search_offloaded",
+        "description": (
+            "Phase 3 v1.3.1: semantic search across offloaded tool "
+            "results. Reuses the v1.3.0 ``L2Retriever`` (hybrid "
+            "dense+BM25 with optional LLM-curator re-rank) but "
+            "restricts the corpus to notes tagged ``#tool-offload`` "
+            "(i.e. content that the loop has offloaded because the "
+            "tool output exceeded the offload threshold). Use this "
+            "to recover an earlier large tool result that you only "
+            "remember by topic, not by note id. Returns a JSON list "
+            "of ``{id, score, preview, tags}`` ordered by relevance."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Free-text query describing the offloaded result you want.",
+                },
+                "top_k": {
+                    "type": "integer",
+                    "description": "Maximum number of results to return. Default 5.",
+                },
+            },
+            "required": ["query"],
+        },
+    },
 ]
 
 
