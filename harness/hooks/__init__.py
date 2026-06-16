@@ -27,6 +27,7 @@ from harness.hooks.context import (
 )
 from harness.hooks.events import ENABLED_BY_DEFAULT, EventType
 from harness.hooks.registry import HookRegistry, HookSpec, HookTransport
+from harness.hooks.runner import HookRunner
 
 __all__ = [
     # Events
@@ -42,4 +43,6 @@ __all__ = [
     "HookSpec",
     "HookRegistry",
     "HookTransport",
+    # Runner
+    "HookRunner",
 ]
