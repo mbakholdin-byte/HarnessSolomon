@@ -1,5 +1,79 @@
 # Changelog — Solomon Harness
 
+## Phase 4.2 v1.8.0 — Hot-reload (file-watcher + agents + hooks, 2026-06-16) — Phase 4.2 = 1/12 step
+
+**Phase 4.2 v1.8.0 — 4 new files / 4 modified files / +29 tests / 1862 total tests / 0 new deps**
+
+Production hot-reload infrastructure: `FileWatcher` primitive (watchfiles Rust-backed + polling fallback), `start_agent_hot_reload` for `.harness/agents/*.md`, `start_hook_hot_reload` for `.harness/hooks/*.json`. Best-effort integration в FastAPI lifespan. Files that don't exist = skip (no crash). Malformed files = keep last good spec, log warning.
+
+### Что закрыто
+
+- **FileWatcher primitive** — `harness/watcher.py` (~290 LoC):
+  - `FileWatcher` class с polling fallback (если `watchfiles` нет).
+  - `FileChange` + `FileChangeKind` (added/modified/deleted) — coalesced per path.
+  - Debounce (default 200ms, configurable) — multiple changes в окне → один callback.
+  - `_matches_glob` для `**/*.md` / `*.json` patterns (fnmatch semantics).
+  - Fail-open: любой exception в callback или watch loop → log + skip, НЕ propagate.
+  - Singleton `get_file_watcher()` + `reset_file_watcher()` (mirror observability pattern).
+  - Trust boundary: stdlib + watchfiles only. NO imports of agents/hooks/server/observability.
+- **Hot-reload для agents** — `harness/agents/hot_reload.py` (~110 LoC):
+  - `start_agent_hot_reload(project_root)` watches `.harness/agents/*.md`.
+  - On change → `_read_override` re-parse + emit `hot_reload` event.
+  - Missing `.harness/agents/` → log + return singleton (no crash).
+- **Hot-reload для hooks** — `harness/hooks/hot_reload.py` (~190 LoC):
+  - `start_hook_hot_reload(registry, project_root)` watches `.harness/hooks/*.json`.
+  - On change → `_parse_hook_file` + `registry.register(spec)`.
+  - Supports both single object `{...}` and list `[{...}, ...]` formats.
+  - Validates required fields (`hook_id`, `event`, `transport`) + EventType enum.
+  - Missing `.harness/hooks/` → log + return singleton.
+- **Settings** — 3 new fields в `harness/config.py`:
+  - `hot_reload_enabled: bool = True` (default dev, False in prod).
+  - `hot_reload_debounce_ms: int = 200` (window for coalescing events).
+  - `hot_reload_poll_interval_s: float = 1.0` (only used if watchfiles absent).
+- **FastAPI lifespan integration** — `harness/server/app.py`:
+  - Startup: start watchers (agents + hooks) if `hot_reload_enabled=True`.
+  - Shutdown: stop watcher (cancels all background tasks).
+  - Best-effort: any init failure → log + continue (app works without hot-reload).
+- **Observability integration** — каждый reload emit'ит `hot_reload` event (kind, path, status, error). Wired через Phase 4.1 observability helpers.
+
+### Trust boundary (preserved)
+
+- `harness/watcher.py` — stdlib + watchfiles only. НЕ импортит agents/hooks/server/observability.
+- `harness/agents/hot_reload.py` — imports `harness.agents.registry` + `harness.watcher` + (lazy) `harness.observability`. Direction OK (reversed — production → observability).
+- `harness/hooks/hot_reload.py` — imports `harness.hooks.*` + `harness.watcher` + (lazy) `harness.observability`. Direction OK.
+- `harness/server/app.py` — lifespan интеграция imports `harness.agents.hot_reload` + `harness.hooks.hot_reload` lazily (lifespan scope). Pattern mirror Phase 2.2/3.5.
+
+### Lessons
+
+1. **Debounce window = editor save semantics** — editors (VSCode, vim, etc.) emit multiple events on save (write + truncate + close). 200ms window coalesces them into 1 callback. Smaller = spurious reloads. Larger = noticeable lag.
+2. **Polling fallback for portability** — `watchfiles` requires Rust toolchain. Polling fallback (`asyncio.sleep(1)` + mtime diff) works everywhere, costs 1 syscall/sec/folder. Acceptable for dev; production should use watchfiles.
+3. **Singleton + reset pattern** — file watchers are stateful (background tasks). Sharing one singleton across the app avoids duplicate watches. `reset_file_watcher()` for tests.
+4. **Lazy imports в hot_reload → observability** — `from harness.observability import ...` inside the function, not at module level. Hot-reload modules must be importable WITHOUT observability (test isolation). Direction is OK (reversed: production → observability, observability → nothing).
+5. **Best-effort lifespan integration** — hot-reload is a side-effect, not a critical path. If watcher init fails, log + continue. The app still works; users just lose hot-reload until next restart.
+6. **Per-test reset_file_watcher** — singleton leak between tests = spurious behavior. `autouse=True` fixture в начале каждого теста = clean slate. Pattern mirror `reset_observability()` в Phase 4.1 tests.
+7. **Fail-open on malformed files** — broken `.harness/agents/foo.md` or `.harness/hooks/bar.json` НЕ должно ронять watcher. Логируем warning, оставляем предыдущую spec в registry. Пользователь исправляет файл → следующий reload подхватывает.
+8. **Pattern: `_on_change_with_registry` closure** — `start_hook_hot_reload` создаёт closure, который пробрасывает `registry` в callback. Это pattern для DI в async callbacks: factory function → closure → watcher.watch.
+9. **Polling vs watchfiles на Windows** — watchfiles использует ReadDirectoryChangesW (kernel-level, zero CPU). Polling = 1 mtime check/sec. На Windows для dev — polling достаточно (тесты 29/29 pass с polling fallback).
+
+### Next (Phase 4.2+)
+
+- **Phase 4.2 Step 7+ (deferred)**: hot-reload для `.harness/privacy/*.json`, hot-reload для builtin .md agents (requires registry swap), `harness reload` CLI command.
+- **Phase 4.3: Elicitation + Notification events** — observability для hooks framework (user-facing prompts + async notifications).
+- **Phase 4.4: `harness hooks` / `harness observability` CLI** — list hooks, tail logs, scrape metrics, health snapshot.
+- **Phase 5.0+: B2 precision@5 strict DoD** — corpus redesign для retrieval metrics.
+
+### Files
+
+- NEW: `harness/watcher.py` (~290 LoC)
+- NEW: `harness/agents/hot_reload.py` (~110 LoC)
+- NEW: `harness/hooks/hot_reload.py` (~190 LoC)
+- NEW: `tests/test_hot_reload.py` (29 tests)
+- MODIFIED: `harness/config.py` (+~25 LoC: 3 new settings)
+- MODIFIED: `harness/server/app.py` (+~40 LoC: lifespan integration)
+- Version bump: 1.7.2 → 1.8.0 (pyproject, harness/__init__, app.py)
+
+---
+
 ## Phase 4.1+ v1.7.2 — API versioning migration (/api/* → /api/v1/*, 2026-06-16) — Phase 4.1 = 3/5 step
 
 **Phase 4.1+ v1.7.2 — 2 new files / 2 modified files / +20 tests / 1833 total tests / 0 new deps / 0 breaking changes**

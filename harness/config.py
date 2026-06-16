@@ -1112,6 +1112,31 @@ class Settings(BaseSettings):
             "registration time. Default ``.harness/hooks/**`` (project-local)."
         ),
     )
+
+    # === Phase 4.2: Hot-reload ===
+    hot_reload_enabled: bool = Field(
+        default=True,
+        description=(
+            "Phase 4.2: master switch for hot-reload of .harness/agents/*.md "
+            "and .harness/hooks/*.json. Default True in dev. Set False in "
+            "production for stability."
+        ),
+    )
+    hot_reload_debounce_ms: int = Field(
+        default=200, ge=0, le=5000,
+        description=(
+            "Phase 4.2: debounce window for file changes. Multiple changes "
+            "arriving within this window are batched into a single reload "
+            "event. 200ms = sweet spot for editor saves."
+        ),
+    )
+    hot_reload_poll_interval_s: float = Field(
+        default=1.0, gt=0, le=60.0,
+        description=(
+            "Phase 4.2: polling interval (seconds) for the polling "
+            "fallback path. Only used if watchfiles is not installed."
+        ),
+    )
     hooks_on_memory_write_silent_layers: str = Field(
         default="L1",
         description=(

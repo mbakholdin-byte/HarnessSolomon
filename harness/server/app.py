@@ -416,6 +416,45 @@ async def lifespan(app: FastAPI):
     print(f"[harness] session_dir: {settings.session_dir}")
     print(f"[harness] db_path: {settings.db_path}")
     print(f"[harness] project_root: {settings.project_root}")
+
+    # Phase 4.2: hot-reload watchers for .harness/agents/*.md
+    # and .harness/hooks/*.json. Best-effort — if either fails,
+    # log and continue (the app works without hot-reload).
+    app.state.hot_reload_watcher = None
+    if settings.hot_reload_enabled:
+        try:
+            from harness.agents.hot_reload import start_agent_hot_reload
+            from harness.hooks.hot_reload import start_hook_hot_reload
+            from harness.watcher import get_file_watcher
+
+            # Use the SAME singleton for both agents + hooks.
+            # Calling get_file_watcher() returns the cached instance.
+            await start_agent_hot_reload(
+                settings.project_root,
+                debounce_ms=settings.hot_reload_debounce_ms,
+            )
+            # Hook registry may or may not exist (Phase 4.0 + 2.x).
+            # If it does, wire the hooks watcher.
+            hook_registry = getattr(app.state, "hook_registry", None)
+            if hook_registry is not None:
+                await start_hook_hot_reload(
+                    hook_registry,
+                    settings.project_root,
+                    debounce_ms=settings.hot_reload_debounce_ms,
+                )
+            app.state.hot_reload_watcher = get_file_watcher()
+            print(
+                f"[harness] hot_reload: enabled "
+                f"(debounce={settings.hot_reload_debounce_ms}ms)"
+            )
+        except Exception as exc:  # noqa: BLE001 — best-effort
+            print(
+                f"[harness] hot_reload: disabled (init failed: "
+                f"{type(exc).__name__}: {exc})"
+            )
+    else:
+        print("[harness] hot_reload: disabled (settings.hot_reload_enabled=False)")
+
     yield
     # shutdown: close the outbound dispatcher's HTTP client.
     # ``outbound`` may not exist if the runner init failed (in
@@ -424,13 +463,17 @@ async def lifespan(app: FastAPI):
     outbound = getattr(app.state, "outbound", None)
     if outbound is not None:
         await outbound.aclose()
+    # Phase 4.2: stop hot-reload watcher.
+    watcher = getattr(app.state, "hot_reload_watcher", None)
+    if watcher is not None:
+        await watcher.stop()
 
 
 def create_app() -> FastAPI:
     """Build FastAPI app with middleware and routers."""
     app = FastAPI(
         title="Solomon Harness",
-        version="1.7.2",
+        version="1.8.0",
         description=(
             "Open-source agentic shell — Web MVP (Phase 0) + "
             "sub-agent system (Phase 2.0+2.1) + GitHub PR integration (Phase 2.2) "
