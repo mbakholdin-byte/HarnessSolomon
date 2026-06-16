@@ -424,13 +424,21 @@ async def lifespan(app: FastAPI):
     app.state.hot_reload_watcher = None
     if settings.hot_reload_enabled:
         try:
-            from harness.agents.hot_reload import start_agent_hot_reload
+            from harness.agents.hot_reload import (
+                start_agent_hot_reload,
+                start_builtin_agent_hot_reload,
+            )
             from harness.hooks.hot_reload import start_hook_hot_reload
             from harness.privacy.hot_reload import start_privacy_hot_reload
             from harness.watcher import get_file_watcher
 
             # Use the SAME singleton for all watchers. Calling
             # get_file_watcher() returns the cached instance.
+            # Phase 4.2+ v1.9.0: also watch built-in agents
+            # (harness/agents/builtin/*.md) for dev iteration.
+            await start_builtin_agent_hot_reload(
+                debounce_ms=settings.hot_reload_debounce_ms,
+            )
             await start_agent_hot_reload(
                 settings.project_root,
                 debounce_ms=settings.hot_reload_debounce_ms,
@@ -485,7 +493,7 @@ def create_app() -> FastAPI:
     """Build FastAPI app with middleware and routers."""
     app = FastAPI(
         title="Solomon Harness",
-        version="1.8.1",
+        version="1.9.0",
         description=(
             "Open-source agentic shell — Web MVP (Phase 0) + "
             "sub-agent system (Phase 2.0+2.1) + GitHub PR integration (Phase 2.2) "

@@ -1,5 +1,66 @@
 # Changelog — Solomon Harness
 
+## Phase 4.2+ v1.9.0 — Hot-reload builtin agents + `harness reload` CLI (2026-06-16) — Phase 4.2 = 3/12 step
+
+**Phase 4.2+ v1.9.0 — 2 new files / 4 modified files / +19 tests / 1914 total tests / 0 new deps**
+
+Hot-reload для built-in agents (bundled `harness/agents/builtin/*.md`) + новый CLI subcommand `harness reload [kind]` для force-reload без ожидания file event. Extends Phase 4.2+ v1.8.1 (privacy zones) на bundled + dev iteration.
+
+### Что закрыто
+
+- **`start_builtin_agent_hot_reload()`** — `harness/agents/hot_reload.py`:
+  - Resolves `harness/agents/builtin/` через `importlib.resources` → real `Path` (handles `MultiplexedPath` editable installs).
+  - Watches builtin dir, validates via `_read_builtin()`.
+  - On parse error → log + skip, last good stays (lazy read; no explicit cache).
+  - Wired в FastAPI lifespan (best-effort).
+- **`harness reload [kind]` CLI subcommand** — `harness/cli.py`:
+  - Kinds: `all` (default), `agents`, `hooks`, `privacy`.
+  - Re-parses `.harness/agents/*.md`, `.harness/hooks/*.json`, `.harness/privacy/*.json` локально (no server connection).
+  - `--json` для machine-readable output.
+  - Exit codes: 0 = ok, 1 = parse errors, 2 = invalid args.
+  - Default cwd = project root (override via `--project-root`).
+- **Settings** — 0 new (reuses `hot_reload_*` from v1.8.0).
+- **Tests** — `tests/test_builtin_agent_hot_reload.py` (19 tests):
+  - 2 `_builtin_dir()` tests (resolves correctly).
+  - 4 `start_builtin_agent_hot_reload()` tests (watcher, validate, ignore, delete).
+  - 9 `harness reload` CLI tests (each kind × valid/malformed/empty/json).
+  - 3 `harness reload` integration tests (all kind, error handling, default).
+  - 1 dispatcher test.
+- **Version bumps** — `pyproject.toml` (1.8.1 → 1.9.0), `harness/server/app.py` (1.8.1 → 1.9.0).
+
+### Trust boundary (preserved)
+
+- `harness/agents/hot_reload.py` — imports `harness.agents.registry`, `harness.watcher`. Lazy import of observability.
+- `harness/cli.py` — `_cmd_reload` uses `harness.agents.registry._read_override`, `harness.hooks.hot_reload._parse_hook_file`, `harness.privacy.hot_reload._parse_privacy_file` (all lazy imports).
+- NO direct imports of `harness.observability`, `harness.hooks`, `harness.server` в hot_reload.
+- Reversed direction: production → observability (allowed by AST test).
+
+### Windows/importlib gotcha (новое)
+
+- `importlib.resources.files('harness.agents.builtin')` returns `MultiplexedPath` в editable installs.
+- `MultiplexedPath` does NOT implement `os.fspath` (no `__fspath__` method).
+- Conversion strategy: `_paths[0]` is real `pathlib.Path`. Fallback: walk `iterdir()` for any fspath-compatible child.
+
+### Архитектурное решение
+
+Built-in agent specs читаются lazy через `all_specs()` на каждый agent invocation. Поэтому `start_builtin_agent_hot_reload` не делает atomic swap — следующий `all_specs()` подхватит новое содержимое. Watcher существует в основном для:
+1. Observability event emission (отслеживание кто менял builtin).
+2. Раннее обнаружение parse errors в dev.
+
+### Файлы
+
+- NEW: `tests/test_builtin_agent_hot_reload.py` (19 tests, ~430 LoC)
+- MODIFIED: `harness/agents/hot_reload.py` (+140 LoC — `_builtin_dir()`, `_on_builtin_change()`, `start_builtin_agent_hot_reload()`), `harness/cli.py` (+210 LoC — `_cmd_reload`, `_reload_agents/hooks/privacy`, argparse setup), `harness/server/app.py` (+12 LoC — builtin watcher wiring + version bump), `pyproject.toml` (1.8.1 → 1.9.0)
+
+### Roadmap
+
+- Phase 4.2 = 3/12 step (v1.8.0 + v1.8.1 + v1.9.0).
+- Phase 4.2+ remaining: (none — все 3 hot-reload ресурса и CLI закрыты).
+- Phase 4.3: Elicitation + Notification events.
+- Phase 4.4: `harness hooks` / `harness observability` CLI (new subcommands для event inspection).
+
+---
+
 ## Phase 4.2+ v1.8.1 — Hot-reload privacy zones (2026-06-16) — Phase 4.2 = 2/12 step
 
 **Phase 4.2+ v1.8.1 — 2 new files / 3 modified files / +27 tests / 1894 total tests / 0 new deps**

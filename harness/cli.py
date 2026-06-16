@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
 # Phase 1.6: ensure UTF-8 stdout on Windows. The default
 # encoding is cp1251 in some Russian Windows installs, which
@@ -645,6 +646,218 @@ async def _bootstrap_admin_token_if_needed(store) -> None:
         f"[harness] verify with: harness auth test {plaintext}",
         file=sys.stderr,
     )
+
+
+# === Phase 4.2+ v1.9.0: ``harness reload`` ===
+
+_RELOAD_KINDS = ("agents", "hooks", "privacy")
+
+
+def _reload_agents(project_root: Path) -> dict[str, object]:
+    """Re-parse all ``.harness/agents/*.md`` project overrides.
+
+    Returns a dict suitable for ``--json`` output:
+    ``{"kind": "agents", "loaded": [...], "errors": [...]}``.
+
+    Built-in agents are NOT re-parsed here — they live in the
+    package and are read lazily on every ``all_specs()`` call.
+    This command is about validating the user's project overrides.
+    """
+    from harness.agents.registry import _read_override
+
+    agents_dir = project_root / ".harness" / "agents"
+    loaded: list[str] = []
+    errors: list[dict[str, str]] = []
+    if not agents_dir.is_dir():
+        return {
+            "kind": "agents",
+            "loaded": loaded,
+            "errors": errors,
+            "dir": str(agents_dir),
+            "note": "directory does not exist",
+        }
+    for path in sorted(agents_dir.glob("*.md")):
+        if path.name.startswith("."):
+            continue
+        name = path.stem
+        try:
+            spec = _read_override(project_root, name)
+            if spec is None:
+                errors.append({"name": name, "error": "not parseable"})
+            else:
+                loaded.append(name)
+        except Exception as exc:  # noqa: BLE001
+            errors.append({"name": name, "error": str(exc)})
+    return {
+        "kind": "agents",
+        "loaded": loaded,
+        "errors": errors,
+        "dir": str(agents_dir),
+    }
+
+
+def _reload_hooks(project_root: Path) -> dict[str, object]:
+    """Re-parse all ``.harness/hooks/*.json`` files."""
+    import json
+
+    from harness.hooks.hot_reload import _parse_hook_file
+
+    hooks_dir = project_root / ".harness" / "hooks"
+    loaded: list[dict[str, str]] = []
+    errors: list[dict[str, str]] = []
+    if not hooks_dir.is_dir():
+        return {
+            "kind": "hooks",
+            "loaded": loaded,
+            "errors": errors,
+            "dir": str(hooks_dir),
+            "note": "directory does not exist",
+        }
+    for path in sorted(hooks_dir.glob("*.json")):
+        try:
+            specs = _parse_hook_file(path)
+            for spec in specs:
+                loaded.append({"file": path.name, "hook_id": spec.hook_id})
+        except (ValueError, json.JSONDecodeError) as exc:
+            errors.append({"file": path.name, "error": str(exc)})
+    return {
+        "kind": "hooks",
+        "loaded": loaded,
+        "errors": errors,
+        "dir": str(hooks_dir),
+    }
+
+
+def _reload_privacy(project_root: Path) -> dict[str, object]:
+    """Re-parse all ``.harness/privacy/*.json`` files."""
+    from harness.config import settings
+    from harness.privacy.hot_reload import _parse_privacy_file
+
+    privacy_dir = project_root / ".harness" / "privacy"
+    rule_count = 0
+    errors: list[dict[str, str]] = []
+    files: list[str] = []
+    if not privacy_dir.is_dir():
+        return {
+            "kind": "privacy",
+            "rule_count": rule_count,
+            "files": files,
+            "errors": errors,
+            "dir": str(privacy_dir),
+            "note": "directory does not exist",
+        }
+    for path in sorted(privacy_dir.glob("*.json")):
+        try:
+            rules = _parse_privacy_file(path, settings.privacy_zone_default_action)
+            rule_count += len(rules)
+            files.append(path.name)
+        except Exception as exc:  # noqa: BLE001
+            errors.append({"file": path.name, "error": str(exc)})
+    return {
+        "kind": "privacy",
+        "rule_count": rule_count,
+        "files": files,
+        "errors": errors,
+        "dir": str(privacy_dir),
+    }
+
+
+def _cmd_reload(args: argparse.Namespace) -> int:
+    """``harness reload [kind]`` — force-reload hot-reloadable resources.
+
+    Validates files in ``.harness/`` subdirs locally (no server
+    connection required). The server's hot-reload watchers will
+    pick up the same files automatically on the next file event;
+    this command is for users who want to validate without
+    waiting for a file event or who want a quick sanity check.
+
+    Kinds: ``all`` (default), ``agents``, ``hooks``, ``privacy``.
+
+    Exit codes:
+        0 — all parsed cleanly (may have 0 files).
+        1 — at least one file failed to parse.
+        2 — invalid arguments.
+    """
+    import json as _json
+
+    project_root_arg = getattr(args, "project_root", None)
+    project_root = (
+        Path(project_root_arg).resolve()
+        if project_root_arg
+        else Path.cwd()
+    )
+    if not project_root.is_dir():
+        print(
+            f"[harness] reload: project_root {project_root} is not a directory",
+            file=sys.stderr,
+        )
+        return 2
+
+    kind = args.reload_command or "all"
+    if kind not in _RELOAD_KINDS and kind != "all":
+        print(
+            f"[harness] reload: unknown kind {kind!r}; "
+            f"expected one of {('all', *_RELOAD_KINDS)}",
+            file=sys.stderr,
+        )
+        return 2
+
+    results: list[dict[str, object]] = []
+    kinds_to_run = _RELOAD_KINDS if kind == "all" else [kind]
+    for k in kinds_to_run:
+        if k == "agents":
+            results.append(_reload_agents(project_root))
+        elif k == "hooks":
+            results.append(_reload_hooks(project_root))
+        elif k == "privacy":
+            results.append(_reload_privacy(project_root))
+
+    has_errors = any(bool(r.get("errors")) for r in results)
+
+    if getattr(args, "json", False):
+        print(_json.dumps({"results": results, "ok": not has_errors}, indent=2))
+    else:
+        for r in results:
+            kind_name = r.get("kind", "?")
+            if kind_name == "privacy":
+                files = r.get("files", [])
+                print(
+                    f"[harness] reload: privacy — {r.get('rule_count', 0)} rules "
+                    f"from {len(files)} file(s) in {r.get('dir')}"
+                )
+                for f in files:
+                    print(f"  ok {f}")
+            else:
+                loaded = r.get("loaded", [])
+                print(
+                    f"[harness] reload: {kind_name} — {len(loaded)} loaded "
+                    f"from {r.get('dir')}"
+                )
+                for item in loaded:
+                    if isinstance(item, str):
+                        print(f"  ok {item}")
+                    elif isinstance(item, dict):
+                        print(f"  ok {item.get('hook_id', item.get('file', '?'))}")
+            for err in r.get("errors", []):
+                if "name" in err:
+                    print(
+                        f"  ERROR {err['name']}: {err['error']}",
+                        file=sys.stderr,
+                    )
+                elif "file" in err:
+                    print(
+                        f"  ERROR {err['file']}: {err['error']}",
+                        file=sys.stderr,
+                    )
+        if has_errors:
+            print(
+                "[harness] reload: failed (see errors above)",
+                file=sys.stderr,
+            )
+        else:
+            print("[harness] reload: ok")
+
+    return 1 if has_errors else 0
 
 
 def _cmd_auth_create(args: argparse.Namespace) -> int:
@@ -1355,6 +1568,58 @@ def _build_parser() -> argparse.ArgumentParser:
         "--base-url", default="http://127.0.0.1:8765",
         help="Base URL of the harness server (default: %(default)s).",
     )
+
+    # Phase 4.2+ v1.9.0: ``reload`` subcommand (force re-parse of
+    # hot-reloadable resources without waiting for file events).
+    reload_p = sub.add_parser(
+        "reload",
+        help=(
+            "Force-reload hot-reloadable resources (Phase 4.2+ v1.9.0). "
+            "Re-parses .harness/agents/*.md, .harness/hooks/*.json, and "
+            ".harness/privacy/*.json locally (no server required). "
+            "Use this after editing files when you want to validate them "
+            "without restarting the server."
+        ),
+    )
+    reload_sub = reload_p.add_subparsers(dest="reload_command")
+
+    def _add_common(p: argparse.ArgumentParser) -> None:
+        p.add_argument(
+            "--project-root",
+            default=None,
+            help=(
+                "Project root directory. Defaults to the current working "
+                "directory. The watcher looks for ``.harness/`` subdirs here."
+            ),
+        )
+        p.add_argument(
+            "--json", action="store_true",
+            help="Print results as JSON (machine-readable).",
+        )
+        p.set_defaults(func=_cmd_reload)
+
+    all_p = reload_sub.add_parser(
+        "all",
+        help="Reload all hot-reloadable resources (default).",
+    )
+    _add_common(all_p)
+    agents_p = reload_sub.add_parser(
+        "agents",
+        help="Re-parse .harness/agents/*.md (project overrides).",
+    )
+    _add_common(agents_p)
+    hooks_p = reload_sub.add_parser(
+        "hooks",
+        help="Re-parse .harness/hooks/*.json.",
+    )
+    _add_common(hooks_p)
+    privacy_p = reload_sub.add_parser(
+        "privacy",
+        help="Re-parse .harness/privacy/*.json.",
+    )
+    _add_common(privacy_p)
+    # If no subcommand, default to "all" with the parent's flags.
+    reload_p.set_defaults(func=_cmd_reload)
 
     # Phase 3 v1.4.0: ``sessions`` subcommand (manual /compact via CLI).
     sessions_p = sub.add_parser(
