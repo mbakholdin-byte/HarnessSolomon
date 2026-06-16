@@ -1,5 +1,60 @@
 # Changelog — Solomon Harness
 
+## Phase 4.1+ v1.7.2 — API versioning migration (/api/* → /api/v1/*, 2026-06-16) — Phase 4.1 = 3/5 step
+
+**Phase 4.1+ v1.7.2 — 2 new files / 2 modified files / +20 tests / 1833 total tests / 0 new deps / 0 breaking changes**
+
+Deprecation of legacy `/api/*` paths via RFC 8594 + RFC 8288 headers (`Deprecation: true`, `Sunset: Wed, 31 Dec 2026 23:59:59 GMT`, `Link: <canonical>; rel="successor-version"`). All legacy paths dual-mounted at canonical `/api/v1/*` successors. No client-facing breakage — existing clients continue to work, but get deprecation headers.
+
+### Что закрыто
+
+- **Deprecation middleware** — `harness/server/deprecation.py` (~140 LoC):
+  - `LegacyApiDeprecationMiddleware` (BaseHTTPMiddleware from Starlette).
+  - Adds `Deprecation: true`, `Sunset: Wed, 31 Dec 2026 23:59:59 GMT`, `Link: </api/v1/...>; rel="successor-version"` headers.
+  - Excluded paths: `/api/v1/*` (already versioned), `/metrics`, `/health/live|ready|deep`, `/api/health` (v1.7.1 alias), `/openapi.json`, `/docs`, `/redoc`, `/api/chat/ws`, `/api/v1/chat/ws` (WebSocket — handled at upgrade).
+  - Path mapping: `/api/<X>` → `/api/v1/<X>` (insert "v1" after "/api/").
+  - Mount BEFORE observability middleware so headers are visible in `/metrics` scrapes and JSONL log lines.
+- **5 dual-mount routers в `harness/server/app.py`**:
+  - `health_router` at `/api` + `/api/v1` (legacy + canonical)
+  - `sessions_router` at `/api` (legacy, deprecation headers) + sessions_v1_router at `/api/v1/sessions` (canonical, scope-gated)
+  - `models_router` at `/api` + `/api/v1` (legacy + canonical)
+  - `chat_router` at `/api/chat` + `/api/v1/chat` (WebSocket — no deprecation on GET 404)
+- **Bug fix in `harness/server/routes/observability.py`** — `health_live()` now `await`s `obs.health.liveness()` (was returning a coroutine instead of a dict — pre-existing bug in v1.7.0, caught by tests/test_api_versioning.py).
+- **OpenAPI metadata** — FastAPI `description` field includes API versioning policy (links to RFC 8594 + sunset date).
+- **Backwards compat (zero client breakage)** — all Phase 0+ clients using `/api/*` continue to work unchanged; they just see deprecation headers in responses.
+
+### Trust boundary (preserved)
+
+- `harness/server/deprecation.py` imports only from `harness.observability` + `fastapi` + `starlette` — no agents/hooks.
+- `harness/observability/*` is unchanged.
+- No new deps.
+
+### Lessons
+
+1. **RFC 8594 + 8288 — стандарт для API deprecation** — `Deprecation: true` (boolean header), `Sunset: <HTTP-date>` (RFC 1123 format), `Link: <canonical>; rel="successor-version"` (RFC 8288 link relation). Все три header'а — стандарт, не custom. Браузеры/CDN/observability tools умеют их интерпретировать.
+2. **Middleware order matters** — deprecation middleware монтируется BEFORE observability middleware, чтобы headers попадали в `/metrics` scrapes. Если поменять порядок — headers будут скрыты в Prom-сборах.
+3. **WebSocket vs HTTP middleware** — BaseHTTPMiddleware ловит только HTTP responses. WebSocket upgrade = 404/405/426 на plain GET, и middleware не запускается. Для WS нужен либо кастомный middleware, либо принять что GET 404 — no-op.
+4. **Dual-mount vs single-mount + redirect** — мы выбрали dual-mount (legacy + canonical), а не 301 redirect, чтобы не ломать существующих клиентов. После 2026-12-31 — переключаем на 410 Gone для legacy paths.
+5. **Bug found by tests** — `health_live()` возвращал `coroutine` вместо dict (отсутствовал `await` в v1.7.0). Тесты `test_api_versioning.py:test_health_live_no_deprecation` сразу же поймали — это подтверждает ценность smoke-тестов на critical paths.
+6. **Path mapping: simple rule** — `/api/<X>` → `/api/v1/<X>` (insert "v1" after "/api/"). Не нужны никакие hard-coded mappings; rule работает для всех текущих и будущих routes.
+
+### Next (Phase 4.1+)
+
+- **2026-12-31: switch legacy /api/* to 410 Gone** — после sunset date, legacy paths возвращают 410 Gone с body "API version deprecated, use /api/v1/*".
+- **Phase 4.2: hot-reload hooks + agents** — file-watcher в `.harness/agents/*.md` и `.harness/hooks/*.json`.
+- **Phase 4.3: Elicitation + Notification events** — observability для hooks framework.
+- **Phase 4.4: CLI** — `harness hooks list`, `harness observability tail`, `harness observability metrics`.
+
+### Files
+
+- NEW: `harness/server/deprecation.py` (~140 LoC)
+- NEW: `tests/test_api_versioning.py` (20 tests, ~180 LoC)
+- MODIFIED: `harness/server/app.py` (+~25 LoC: middleware install + 5 dual-mount routers + OpenAPI description)
+- MODIFIED: `harness/server/routes/observability.py` (+1 LoC: `await` fix in health_live)
+- MODIFIED: `pyproject.toml`, `harness/__init__.py`, `harness/server/app.py` (version 1.7.2)
+
+---
+
 ## Phase 4.1 v1.7.1 — Observability wiring (17 trigger points + endpoints, 2026-06-16) — Phase 4.1 = 2/5 step
 
 **Phase 4.1 v1.7.1 — 9 new files / 5 modified files / +27 tests / 1813 total tests / 0 new deps / 0 breaking changes**

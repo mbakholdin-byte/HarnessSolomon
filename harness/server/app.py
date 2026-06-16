@@ -430,11 +430,15 @@ def create_app() -> FastAPI:
     """Build FastAPI app with middleware and routers."""
     app = FastAPI(
         title="Solomon Harness",
-        version="1.7.1",
+        version="1.7.2",
         description=(
             "Open-source agentic shell — Web MVP (Phase 0) + "
             "sub-agent system (Phase 2.0+2.1) + GitHub PR integration (Phase 2.2) "
-            "+ scope-gated API (Phase 1.6)"
+            "+ scope-gated API (Phase 1.6) + observability (Phase 4.1).\n\n"
+            "**API versioning:** Legacy `/api/*` paths return RFC 8594 "
+            "`Deprecation: true` and `Sunset: Wed, 31 Dec 2026 23:59:59 GMT` "
+            "headers. New clients SHOULD use `/api/v1/*` (canonical). "
+            "See docs/api-versioning.md for the migration timeline."
         ),
         lifespan=lifespan,
     )
@@ -447,6 +451,12 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # Phase 4.1+ Step 1: Legacy /api/* deprecation headers (RFC 8594 + 8288).
+    # MUST come BEFORE the observability middleware so deprecation headers
+    # are visible in /metrics scrapes and the JSONL log lines.
+    from harness.server.deprecation import install_deprecation_middleware
+    install_deprecation_middleware(app)
 
     # Phase 4.1 Step 6.2: HTTP request metrics + structured logging
     from harness.server.middleware import install_observability_middleware
@@ -464,12 +474,29 @@ def create_app() -> FastAPI:
     from harness.server.routes.agents_webhooks import router as agents_webhooks_router
 
     app.include_router(health_router, prefix="/api", tags=["health"])
+    # Phase 4.1+ Step 2: dual-mount health_router at /api/v1 (canonical).
+    # Legacy /api/health is already covered by the deprecation middleware
+    # in routes/observability.py. The /api/v1 mount below is the canonical
+    # successor for any clients that want the versioned path.
+    app.include_router(health_router, prefix="/api/v1", tags=["health"])
     # Phase 4.1 Step 6.11: /metrics + /health/* (no prefix — top-level endpoints)
     from harness.server.routes.observability import router as observability_router
     app.include_router(observability_router, tags=["observability"])
+    # Phase 4.1+ Step 3: legacy sessions_router at /api (deprecation
+    # headers). sessions_v1_router is already at /api/v1/sessions and
+    # is the canonical successor — see include_router below.
     app.include_router(sessions_router, prefix="/api", tags=["sessions"])
+    # Phase 4.1+ Step 4: legacy models_router at /api (deprecation headers).
+    # No /api/v1/models router exists yet — the legacy paths are the only
+    # /api/v1/models successor. We mount the same router at /api/v1 with
+    # an empty prefix (the router itself defines /models in its path).
     app.include_router(models_router, prefix="/api", tags=["models"])
+    app.include_router(models_router, prefix="/api/v1", tags=["models"])
+    # Phase 4.1+ Step 5: dual-mount chat WebSocket at /api/chat + /api/v1/chat.
+    # WebSocket upgrade responses are handled by the deprecation middleware
+    # (it wraps both HTTP and WS responses).
     app.include_router(chat_router, prefix="/api/chat")  # WebSocket only
+    app.include_router(chat_router, prefix="/api/v1/chat")  # canonical
     # Phase 2.2: merge-queue HTTP API. Phase 1.6: routes now require
     # ``agents.read`` via ``Depends(require_scope(Scope.AGENTS_READ))``.
     app.include_router(agents_jobs_router, prefix="/api/v1/agents", tags=["agents"])

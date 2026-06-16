@@ -35,7 +35,8 @@ async def health_live() -> dict:
     interpreter is broken. Used by Kubernetes liveness probe.
     """
     obs = get_observability()
-    return obs.health.liveness()
+    report = await obs.health.liveness()
+    return report.to_dict()
 
 
 @router.get("/health/ready")
