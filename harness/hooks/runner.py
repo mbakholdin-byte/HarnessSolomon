@@ -127,6 +127,7 @@ class HookRunner:
         fail_open: bool = True,
         global_filter: str = "",
         llm_router: Any = None,
+        audit_sink: Any = None,
     ) -> None:
         self._registry = registry
         self._default_timeout_ms = default_timeout_ms
@@ -136,6 +137,8 @@ class HookRunner:
         self._global_filter = global_filter
         # Optional DI for LLM-as-hook transport (B1: keeps trust boundary).
         self._llm_router = llm_router
+        # Optional audit sink (DI; defaults to None = no audit).
+        self._audit_sink = audit_sink
 
     async def fire(self, context: HookContext) -> HookAggregate:
         """Dispatch all hooks for ``context.event``.
@@ -223,12 +226,27 @@ class HookRunner:
                 final_decision = "block"
                 blocked_by = decisions[0].hook_id
 
-        return HookAggregate(
+        aggregate = HookAggregate(
             final_decision=final_decision,
             decisions=tuple(decisions),
             final_payload=final_payload,
             blocked_by=blocked_by,
         )
+
+        # Optional audit (best-effort, never raises).
+        if self._audit_sink is not None:
+            try:
+                self._audit_sink.record(
+                    aggregate=aggregate,
+                    event=context.event,
+                    session_id=context.session_id,
+                    agent_id=context.agent_id,
+                    request_id=context.request_id,
+                )
+            except Exception:  # noqa: BLE001
+                pass
+
+        return aggregate
 
     async def _dispatch_one(
         self,
