@@ -1001,6 +1001,158 @@ class Settings(BaseSettings):
         ),
     )
 
+    # === Phase 4.0: Hooks framework (events + transports) ===
+    hooks_enabled: bool = Field(
+        default=True,
+        description=(
+            "Phase 4.0: master switch for the entire hooks framework. "
+            "When False, no hooks fire and the registry is bypassed. "
+            "Per-event enables are ignored when this is False. Default True."
+        ),
+    )
+    hooks_default_max_ms: int = Field(
+        default=3000,
+        ge=100,
+        le=60000,
+        description=(
+            "Phase 4.0: per-hook timeout in milliseconds. Applied via "
+            "``asyncio.wait_for``. On timeout, the runner returns "
+            "``decision='allow'`` (fail-open) and logs a warning. "
+            "Default 3000ms (3s)."
+        ),
+    )
+    hooks_max_per_event: int = Field(
+        default=10,
+        ge=1,
+        le=100,
+        description=(
+            "Phase 4.0: maximum number of hooks that can be registered "
+            "for a single event. Excess hooks are silently dropped with "
+            "a warning. Default 10."
+        ),
+    )
+    hooks_max_recursion_depth: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description=(
+            "Phase 4.0: maximum recursion depth for hooks (e.g. "
+            "``OnMemoryWrite`` fires from inside a hook that writes "
+            "memory). Depth-bounded to prevent infinite loops. Default 3."
+        ),
+    )
+    hooks_subprocess_specs: str = Field(
+        default="",
+        description=(
+            "Phase 4.0: comma-separated hook specs for subprocess "
+            "transport. Format: ``<EventType>:subprocess:<path>[:<timeout_ms>]``. "
+            "Empty = no subprocess hooks."
+        ),
+    )
+    hooks_http_specs: str = Field(
+        default="",
+        description=(
+            "Phase 4.0: comma-separated hook specs for HTTP transport. "
+            "Format: ``<EventType>:http:<url>[:<timeout_ms>][:<auth>]``. "
+            "Empty = no HTTP hooks."
+        ),
+    )
+    hooks_llm_specs: str = Field(
+        default="",
+        description=(
+            "Phase 4.0: comma-separated hook specs for LLM-as-hook "
+            "transport. Format: "
+            "``<EventType>:llm:<model>:<timeout_ms>:<prompt>``. "
+            "Empty = no LLM hooks. Note: LLM hooks add latency + cost; "
+            "use sparingly (e.g. for hard-to-formalise decisions)."
+        ),
+    )
+    hooks_filter_chain: str = Field(
+        default="",
+        description=(
+            "Phase 4.0: comma-separated match_glob filters applied to "
+            "ALL events. Format: ``<field>=<pattern>``. Example: "
+            "``session_id=*-prod,tool_name=!rm``. Empty = no global filter. "
+            "Per-hook matchers take precedence."
+        ),
+    )
+    hooks_fail_open: bool = Field(
+        default=True,
+        description=(
+            "Phase 4.0: when True, a hook timeout or exception is treated "
+            "as ``decision='allow'`` (the operation proceeds). Set False "
+            "to fail-closed (the operation is blocked). Default True "
+            "(safer for chat loop)."
+        ),
+    )
+    hooks_redact_payloads: bool = Field(
+        default=True,
+        description=(
+            "Phase 4.0: when True, hook payloads are redacted via "
+            "RedactionEngine BEFORE being passed to any hook (builtin, "
+            "subprocess, http, llm). PII / secrets never leave the trust "
+            "boundary. Default True."
+        ),
+    )
+    hooks_audit_log: bool = Field(
+        default=False,
+        description=(
+            "Phase 4.0: when True, every hook decision is written to "
+            "``<project_root>/data/audit/hooks-YYYY-MM-DD.ndjson`` "
+            "(append-only, rotated daily). Default False (no audit "
+            "overhead in production). Enable for compliance / forensic "
+            "review."
+        ),
+    )
+    hooks_subprocess_allowed_paths: str = Field(
+        default=".harness/hooks/**",
+        description=(
+            "Phase 4.0: glob pattern for allowed subprocess hook script "
+            "paths. Scripts outside the pattern are rejected at "
+            "registration time. Default ``.harness/hooks/**`` (project-local)."
+        ),
+    )
+    hooks_on_memory_write_silent_layers: str = Field(
+        default="L1",
+        description=(
+            "Phase 4.0: comma-separated memory layers whose writes do "
+            "NOT fire ``OnMemoryWrite`` hooks (e.g. hand-curated layers "
+            "where audit volume is undesirable). Default ``L1`` (hmem)."
+        ),
+    )
+    hooks_on_compaction_skip_cache_hit: bool = Field(
+        default=True,
+        description=(
+            "Phase 4.0: when True, ``OnCompaction`` is NOT fired on "
+            "compaction cache hits (returns the cached summary). Set "
+            "False to fire on every compaction. Default True (reduces "
+            "audit volume)."
+        ),
+    )
+
+    # === Per-event enable (15 settings) ===
+    hooks_pre_tool_use_enabled: bool = Field(default=True, description="Phase 4.0: enable PreToolUse event.")
+    hooks_post_tool_use_enabled: bool = Field(default=True, description="Phase 4.0: enable PostToolUse event.")
+    hooks_stop_enabled: bool = Field(default=True, description="Phase 4.0: enable Stop event.")
+    hooks_subagent_start_enabled: bool = Field(default=True, description="Phase 4.0: enable SubagentStart event.")
+    hooks_subagent_stop_enabled: bool = Field(default=True, description="Phase 4.0: enable SubagentStop event.")
+    hooks_session_start_enabled: bool = Field(default=True, description="Phase 4.0: enable SessionStart event.")
+    hooks_session_end_enabled: bool = Field(default=True, description="Phase 4.0: enable SessionEnd event.")
+    hooks_user_prompt_submit_enabled: bool = Field(default=True, description="Phase 4.0: enable UserPromptSubmit event.")
+    hooks_pre_compact_enabled: bool = Field(default=True, description="Phase 4.0: enable PreCompact event.")
+    hooks_instructions_loaded_enabled: bool = Field(default=True, description="Phase 4.0: enable InstructionsLoaded event.")
+    hooks_permission_request_enabled: bool = Field(default=True, description="Phase 4.0: enable PermissionRequest event.")
+    hooks_on_memory_write_enabled: bool = Field(default=True, description="Phase 4.0: enable OnMemoryWrite event.")
+    hooks_on_routing_decision_enabled: bool = Field(default=True, description="Phase 4.0: enable OnRoutingDecision event.")
+    hooks_on_compaction_enabled: bool = Field(default=True, description="Phase 4.0: enable OnCompaction event.")
+
+    # === Builtin hook enable (5 settings) ===
+    hooks_builtin_log_enabled: bool = Field(default=True, description="Phase 4.0: enable builtin LogHook.")
+    hooks_builtin_validate_enabled: bool = Field(default=True, description="Phase 4.0: enable builtin ValidateHook.")
+    hooks_builtin_block_dangerous_enabled: bool = Field(default=True, description="Phase 4.0: enable builtin BlockDangerousHook.")
+    hooks_builtin_inject_context_enabled: bool = Field(default=False, description="Phase 4.0: enable builtin InjectContextHook (off by default — L0 already injected via Phase 3 v1.2.1).")
+    hooks_builtin_autosave_enabled: bool = Field(default=True, description="Phase 4.0: enable builtin AutosaveHook.")
+
     # === Phase 3: Embeddings (ONNX local) ===
     embeddings_dir: Path = Field(
         default=PROJECT_ROOT / "models" / "embeddings",
