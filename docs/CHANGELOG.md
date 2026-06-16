@@ -1,5 +1,86 @@
 # Changelog — Solomon Harness
 
+## Phase 4.3 v1.10.0 — Elicitation + Notification events (2026-06-16) — Phase 4.3 = 1/12 step
+
+**Phase 4.3 v1.10.0 — 3 new files / 5 modified files / +59 tests / 1973 total tests / 0 new deps**
+
+Phase 4.0 deferred Elicitation + Notification events to a later phase; Phase 4.3 ships them. Both events are now real `EventType` enum members, enabled by default, with payload schema helpers + 2 new builtin hooks + 2 new observability counters. Hot-reload + transports (builtin/subprocess/http/llm) all work without code changes (Decision=allow/modify is the existing contract; Elicitation uses modify for default-answer injection).
+
+### Что закрыто
+
+- **`EventType.ELICITATION` + `EventType.NOTIFICATION`** — `harness/hooks/events.py`:
+  - Two new enum members. `len(EventType)` 15 → 16.
+  - Removed "DEFERRED to Phase 4.4" comment (now implemented).
+  - Both added to `ENABLED_BY_DEFAULT`.
+- **Schema helpers** — `harness/hooks/elicitation.py` (~95 LoC, stdlib only):
+  - `is_valid_elicitation_payload(payload)` — required `question` (non-empty str), optional `options`/`multi_select`/`default_answer`/`answer`/`answer_source`/`requires_confirmation`.
+  - `is_valid_notification_payload(payload)` — required `message` (non-empty str), optional `severity` ∈ {info, warn, error}, optional `channels` ∈ {stdout, webhook, desktop}.
+  - Constants: `ELICITATION_VALID_ANSWERS`, `NOTIFICATION_VALID_SEVERITIES`, `NOTIFICATION_VALID_CHANNELS`.
+  - Re-exported from `harness.hooks.__init__` for the public API.
+- **2 new builtin hooks** — `harness/hooks/builtin/`:
+  - `confirm_dangerous_hook` (`Elicitation`): when `requires_confirmation=True`, returns `modify` with `answer=default_answer` (default `"abort"`, safe fallback) and `answer_source="builtin.confirm_dangerous"`. Fail-open: Elicitation is interactive, we never hard-block the agent loop.
+  - `notify_terminal_hook` (`Notification`): writes `[severity] message` to stderr when `"stdout"` is in the `channels` list. Other channels (`webhook`, `desktop`) are reserved for future fanout.
+  - Both registered in `BUILTIN_HOOKS` (5 → 7).
+- **Observability integration** — `harness/observability/`:
+  - 2 new metrics: `elicitation_total{decision}`, `notification_total{severity, channel}`.
+  - 2 new emit helpers: `emit_elicitation_response(decision, ...)`, `emit_notification_dispatched(severity, channel, ...)`.
+  - Both fail-open + JSONL log event (with truncated question/message to mitigate PII).
+- **Settings** — `harness/config.py` (+4 fields):
+  - `hooks_elicitation_enabled` (default True)
+  - `hooks_notification_enabled` (default True)
+  - `hooks_builtin_confirm_dangerous_enabled` (default True)
+  - `hooks_builtin_notify_terminal_enabled` (default True)
+- **Tests** — `tests/test_elicitation_notification.py` (51 tests):
+  - 5 EventType enum tests (members, count, ENABLED_BY_DEFAULT, DEFERRED empty)
+  - 12 Elicitation schema tests (valid/invalid variants, type checks)
+  - 9 Notification schema tests (valid/invalid, channel/severity)
+  - 4 `confirm_dangerous_hook` tests (non-Elicitation, not-confirmation, default injection, fallback)
+  - 7 `notify_terminal_hook` tests (stderr capture for info/warn/error, empty, no-stdout channel)
+  - 3 HookRunner dispatch tests (Elicitation modify, Notification allow, no-hooks allow)
+  - 5 Settings tests (4 new flags + total)
+  - 3 BUILTIN_HOOKS registry tests (confirm/notify registered, total 7)
+  - 3 Observability emit tests (counter increments, no exceptions)
+  - Updated `tests/test_hooks_events.py` (14→16 events, parametrize +2) and `tests/test_hooks_builtin.py` (5→7 hooks, registry +2 entries).
+- **Version bumps** — `pyproject.toml`, `harness/__init__.py`, `harness/server/app.py`: 1.9.0 → 1.10.0.
+
+### Trust boundary (preserved)
+
+- `harness/hooks/elicitation.py` — stdlib only, no production imports.
+- `harness/hooks/builtin/confirm_dangerous.py` + `notify_terminal.py` — import only `harness.hooks.context` (the standard pattern for builtin hooks).
+- No new imports of `harness.agents`, `harness.server`, or other production modules. `tests/test_hooks_trust_boundary.py` + `tests/test_observability_trust_boundary.py` both pass unchanged (25/25 trust tests).
+- The reverse direction (production → observability) is preserved: `emit_elicitation_response` and `emit_notification_dispatched` follow the same fail-open pattern as `emit_hook_dispatch`.
+
+### Architecture notes
+
+- **Why fail-open on Elicitation**: an `Elicitation` hook that returns `block` would freeze the agent loop. We use `modify` to inject a default answer; the user can still gate dangerous actions via `PreToolUse:BlockDangerous` (the existing fail-closed layer) and the perms denylist. Elicitation is the *interactive* layer; if no human is around, the default answer (typically `abort`) keeps the loop safe.
+- **Why `notify_terminal` writes to stderr, not stdout**: stderr is the standard side-channel for tooling. The agent's primary output stream stays clean.
+- **Why not implement webhook/desktop fanout for Notification**: out of Phase 4.3 scope. The hook already accepts arbitrary channel names in the payload, and the metric counter tracks them — the fanout is a Phase 4.4+ concern.
+
+### Files
+
+- NEW: `harness/hooks/elicitation.py` (~95 LoC)
+- NEW: `harness/hooks/builtin/confirm_dangerous.py` (~70 LoC)
+- NEW: `harness/hooks/builtin/notify_terminal.py` (~75 LoC)
+- NEW: `tests/test_elicitation_notification.py` (51 tests, ~470 LoC)
+- MODIFIED: `harness/hooks/events.py` (+2 enum values + ENABLED_BY_DEFAULT update + docstring fix)
+- MODIFIED: `harness/hooks/__init__.py` (+3 schema helper exports)
+- MODIFIED: `harness/hooks/builtin/__init__.py` (+2 hook exports, docstring)
+- MODIFIED: `harness/config.py` (+4 settings)
+- MODIFIED: `harness/observability/metrics.py` (+2 metrics)
+- MODIFIED: `harness/observability/emit.py` (+2 emit helpers)
+- MODIFIED: `harness/observability/__init__.py` (+2 emit helper exports)
+- MODIFIED: `tests/test_hooks_events.py` (14→16 events, Phase 4.3 references)
+- MODIFIED: `tests/test_hooks_builtin.py` (5→7 hooks, Phase 4.3 references)
+- MODIFIED: `pyproject.toml` + `harness/__init__.py` + `harness/server/app.py` (version 1.9.0 → 1.10.0)
+
+### Roadmap
+
+- Phase 4.3 = 1/12 step (v1.10.0).
+- Phase 4.3 remaining: webhook/desktop fanout for Notification, interactive transport (WebSocket prompt-response) for Elicitation.
+- Phase 4.4: `harness hooks` / `harness observability` CLI (new subcommands для event inspection).
+
+---
+
 ## Phase 4.2+ v1.9.0 — Hot-reload builtin agents + `harness reload` CLI (2026-06-16) — Phase 4.2 = 3/12 step
 
 **Phase 4.2+ v1.9.0 — 2 new files / 4 modified files / +19 tests / 1914 total tests / 0 new deps**

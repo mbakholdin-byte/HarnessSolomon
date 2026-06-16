@@ -20,10 +20,12 @@ from harness.observability.cost import CostTracker, DEFAULT_COSTS, compute_cost
 from harness.observability.emit import (
     ObservabilityHandle,
     emit_compaction,
+    emit_elicitation_response,
     emit_hook_dispatch,
     emit_http_request,
     emit_llm_call,
     emit_merge_queue_event,
+    emit_notification_dispatched,
     emit_outbound_delivery,
     emit_privacy_decision,
     emit_tool_call,

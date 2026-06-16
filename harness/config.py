@@ -1170,13 +1170,19 @@ class Settings(BaseSettings):
     hooks_on_memory_write_enabled: bool = Field(default=True, description="Phase 4.0: enable OnMemoryWrite event.")
     hooks_on_routing_decision_enabled: bool = Field(default=True, description="Phase 4.0: enable OnRoutingDecision event.")
     hooks_on_compaction_enabled: bool = Field(default=True, description="Phase 4.0: enable OnCompaction event.")
+    # Phase 4.3: Elicitation + Notification events.
+    hooks_elicitation_enabled: bool = Field(default=True, description="Phase 4.3: enable Elicitation event (interactive prompts).")
+    hooks_notification_enabled: bool = Field(default=True, description="Phase 4.3: enable Notification event (fire-and-forget push).")
 
-    # === Builtin hook enable (5 settings) ===
+    # === Builtin hook enable (7 settings) ===
     hooks_builtin_log_enabled: bool = Field(default=True, description="Phase 4.0: enable builtin LogHook.")
     hooks_builtin_validate_enabled: bool = Field(default=True, description="Phase 4.0: enable builtin ValidateHook.")
     hooks_builtin_block_dangerous_enabled: bool = Field(default=True, description="Phase 4.0: enable builtin BlockDangerousHook.")
     hooks_builtin_inject_context_enabled: bool = Field(default=False, description="Phase 4.0: enable builtin InjectContextHook (off by default — L0 already injected via Phase 3 v1.2.1).")
     hooks_builtin_autosave_enabled: bool = Field(default=True, description="Phase 4.0: enable builtin AutosaveHook.")
+    # Phase 4.3: 2 new builtin hooks for Elicitation + Notification.
+    hooks_builtin_confirm_dangerous_enabled: bool = Field(default=True, description="Phase 4.3: enable builtin ConfirmDangerousHook (Elicitation default answer injector).")
+    hooks_builtin_notify_terminal_enabled: bool = Field(default=True, description="Phase 4.3: enable builtin NotifyTerminalHook (Notification fanout to stderr).")
 
     # === Phase 4.1: Observability — master switches ===
     observability_enabled: bool = Field(

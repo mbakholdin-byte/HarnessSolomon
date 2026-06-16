@@ -100,6 +100,8 @@ class PrometheusMetrics:
             "outbound_deliveries_total",
             "privacy_zone_total",
             "webhook_inbound_total",
+            "elicitation_total",
+            "notification_total",
             "active_sessions", "last_compact_age_seconds",
         ):
             setattr(self, name, _NoOpMetric())
@@ -214,6 +216,19 @@ class PrometheusMetrics:
             f"{n}_webhook_inbound_total",
             "Total inbound webhooks received",
             ["event_type", "status"],
+            registry=self._registry,
+        )
+        # Phase 4.3: Elicitation + Notification hook outcomes
+        self.elicitation_total = Counter(
+            f"{n}_elicitation_total",
+            "Total Elicitation hook decisions (interactive prompts)",
+            ["decision"],
+            registry=self._registry,
+        )
+        self.notification_total = Counter(
+            f"{n}_notification_total",
+            "Total Notification hook dispatches (fire-and-forget push)",
+            ["severity", "channel"],
             registry=self._registry,
         )
         # Sessions

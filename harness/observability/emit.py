@@ -477,3 +477,74 @@ def emit_webhook_inbound(event_type: str, status: str, *, delivery_id: str = "")
             status="ok" if status == "ok" else "error",
         )
     )
+
+
+def emit_elicitation_response(
+    decision: str,
+    *,
+    question: str = "",
+    hook_name: str = "",
+    request_id: str = "",
+) -> None:
+    """Emit an Elicitation hook decision (Phase 4.3).
+
+    Counter ``elicitation_total`` is labeled by decision
+    (``allow`` / ``modify`` / ``block``). No structured log event —
+    Elicitation is interactive, payloads can contain user-supplied
+    answers (PII risk); we log only the question text + hook name.
+    """
+    obs = get_observability()
+    if not obs.settings.observability_enabled:
+        return
+    obs.metric_inc("elicitation_total", {"decision": decision})
+    if not obs.settings.observability_jsonl_enabled:
+        return
+    # Truncate question to 200 chars — defensive against pathologically
+    # long payloads.
+    q = question[:200] if question else ""
+    obs.emit(
+        LogEvent(
+            event="elicitation_response",
+            payload={"decision": decision, "question": q, "hook_name": hook_name},
+            request_id=request_id,
+        )
+    )
+
+
+def emit_notification_dispatched(
+    severity: str,
+    channel: str,
+    *,
+    message: str = "",
+    hook_name: str = "",
+    request_id: str = "",
+) -> None:
+    """Emit a Notification hook dispatch (Phase 4.3).
+
+    Counter ``notification_total`` is labeled by ``(severity, channel)``
+    (severity ∈ info/warn/error; channel ∈ stdout/webhook/desktop).
+    Notification is fire-and-forget, so no decision counter — the
+    counter records what was actually dispatched, not the outcome.
+    """
+    obs = get_observability()
+    if not obs.settings.observability_enabled:
+        return
+    obs.metric_inc(
+        "notification_total",
+        {"severity": severity, "channel": channel},
+    )
+    if not obs.settings.observability_jsonl_enabled:
+        return
+    msg = message[:200] if message else ""
+    obs.emit(
+        LogEvent(
+            event="notification_dispatched",
+            payload={
+                "severity": severity,
+                "channel": channel,
+                "message": msg,
+                "hook_name": hook_name,
+            },
+            request_id=request_id,
+        )
+    )

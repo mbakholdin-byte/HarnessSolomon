@@ -1,8 +1,9 @@
-"""Phase 4.0: Hook event types.
+"""Phase 4.0 + Phase 4.3: Hook event types.
 
-Defines the 12 Claude Code hook events + 3 custom Solomon Harness
-events. Elicitation and Notification are DEFERRED to Phase 4.4
-(settings enforce ``False``).
+Defines the 14 Claude Code hook events + 3 custom Solomon Harness
+events. Elicitation and Notification were deferred from Phase 4.0
+and shipped in Phase 4.3 (v1.10.0) — they are now part of the
+``ENABLED_BY_DEFAULT`` set.
 
 Trust boundary: this module is stdlib only. No ``harness.agents``
 or ``harness.server`` imports.
@@ -58,7 +59,17 @@ class EventType(str, enum.Enum):
     PRE_COMPACT = "PreCompact"
     INSTRUCTIONS_LOADED = "InstructionsLoaded"
     PERMISSION_REQUEST = "PermissionRequest"
-    # Elicitation + Notification — DEFERRED to Phase 4.4 (settings enforce False)
+    # Phase 4.3: Elicitation + Notification are now implemented.
+    # ELICITATION: interactive prompt for the user/operator. Hooks may
+    #   ``modify`` the payload to inject a default answer or ``block`` to
+    #   refuse the request. Schema: ``{question, options, multi_select,
+    #   default_answer}``. Decision shape: ``allow`` (proceed with
+    #   default), ``modify`` (override answer), ``block`` (refuse).
+    # NOTIFICATION: fire-and-forget push message. Always ``allow`` —
+    #   payload has no semantic effect on agent behavior. Schema:
+    #   ``{severity, message, channels}`` (channels ∈ stdout/webhook/desktop).
+    ELICITATION = "Elicitation"
+    NOTIFICATION = "Notification"
 
     # === 3 custom Solomon events ===
     ON_MEMORY_WRITE = "OnMemoryWrite"
@@ -66,13 +77,13 @@ class EventType(str, enum.Enum):
     ON_COMPACTION = "OnCompaction"
 
 
-# Phase 4.0: events that are NOT yet implemented (settings validator
+# Phase 4.0 + 4.3: events that are NOT yet implemented (settings validator
 # rejects enabling these).
 DEFERRED_EVENTS: frozenset[EventType] = frozenset()
-"""Phase 4.0 ships all 15 events; this set is reserved for future phases."""
+"""All 17 events are implemented (Phase 4.0 + Phase 4.3). Empty for now."""
 
 
-# Phase 4.0: events that are implemented and enabled by default.
+# Phase 4.0 + 4.3: events that are implemented and enabled by default.
 ENABLED_BY_DEFAULT: frozenset[EventType] = frozenset(
     {
         EventType.PRE_TOOL_USE,
@@ -89,6 +100,9 @@ ENABLED_BY_DEFAULT: frozenset[EventType] = frozenset(
         EventType.ON_MEMORY_WRITE,
         EventType.ON_ROUTING_DECISION,
         EventType.ON_COMPACTION,
+        # Phase 4.3: Elicitation + Notification join the enabled set.
+        EventType.ELICITATION,
+        EventType.NOTIFICATION,
     }
 )
 

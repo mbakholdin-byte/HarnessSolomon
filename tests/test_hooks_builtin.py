@@ -1,4 +1,4 @@
-"""Phase 4.0: Tests for 5 builtin hooks."""
+"""Phase 4.0 + 4.3: Tests for 7 builtin hooks."""
 from __future__ import annotations
 
 import json
@@ -12,23 +12,33 @@ from harness.hooks.builtin import (
     BUILTIN_HOOKS,
     autosave_hook,
     block_dangerous_hook,
+    confirm_dangerous_hook,
     inject_context_hook,
     log_hook,
+    notify_terminal_hook,
     validate_hook,
 )
 
 
 class TestBuiltinRegistry:
-    """BUILTIN_HOOKS dict has all 5 hooks."""
+    """BUILTIN_HOOKS dict has all 7 hooks (Phase 4.0 = 5, Phase 4.3 = +2)."""
 
-    def test_all_5_present(self) -> None:
+    def test_all_7_present(self) -> None:
         assert set(BUILTIN_HOOKS) == {
             "log",
             "validate",
             "block_dangerous",
             "inject_context",
             "autosave",
+            "confirm_dangerous",
+            "notify_terminal",
         }
+
+    def test_phase43_hooks_registered(self) -> None:
+        assert "confirm_dangerous" in BUILTIN_HOOKS
+        assert "notify_terminal" in BUILTIN_HOOKS
+        assert BUILTIN_HOOKS["confirm_dangerous"] is confirm_dangerous_hook
+        assert BUILTIN_HOOKS["notify_terminal"] is notify_terminal_hook
 
 
 class TestLogHook:
