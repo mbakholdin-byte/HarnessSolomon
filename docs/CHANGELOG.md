@@ -1,5 +1,75 @@
 # Changelog — Solomon Harness
 
+## Phase 4.3+ v1.12.0 — Elicitation WebSocket transport + ElicitationBroker (2026-06-16) — Phase 4.3 = 3/12 step
+
+**Phase 4.3+ v1.12.0 — 3 new files / 3 modified files / +23 tests / 2025 total tests / 0 new deps**
+
+Phase 4.3 v1.10.0 made Elicitation events first-class; v1.11.0 added webhook/desktop fanout for Notification. **v1.12.0 closes the interactive loop**: Elicitation prompts can now reach a real human via WebSocket and block until a real answer arrives (or fall back to the default answer after timeout).
+
+### Что закрыто
+
+- **`ElicitationBroker` singleton** — `harness/elicitation.py` (~175 LoC, stdlib + asyncio only):
+  - In-memory pub/sub for pending questions. `publish(question, options, default, timeout_s)` returns a question_id; `wait(question_id)` blocks until `answer()` resolves the future or the timeout fires.
+  - Lazy future creation (per-loop, no global event-loop dependency).
+  - Stats counters: `published_total`, `answered_total`, `timed_out_total`, `pending_count`.
+  - Process-level singleton via `ElicitationBroker.get()`; `reset()` for tests.
+- **`confirm_dangerous_hook` extended** — `harness/hooks/builtin/confirm_dangerous.py`:
+  - On `Elicitation` + `requires_confirmation=True`: publishes to broker + awaits answer (timeout = `hooks_elicitation_ws_timeout_s`, default 30.0s).
+  - **Three resolution paths**, reflected in `payload["answer_source"]`:
+    - `ws_human` — a WebSocket client answered before timeout.
+    - `default_timeout` — no client responded; default answer used.
+    - `default_ws_disabled` — `hooks_elicitation_ws_enabled=False`; default answer used immediately.
+  - All paths return `modify` (never `block` — agent loop stays alive).
+- **WebSocket endpoint** — `harness/server/routes/elicitation.py` (~140 LoC):
+  - Mounted at `/api/v1/elicitation/ws` (canonical, no legacy deprecation mount).
+  - Protocol: server pushes `{action: "question", question_id, question, options, default_answer}` (diff-based, 500ms poll); client sends `{action: "answer", question_id, value}`.
+  - Also: `{action: "list"}` (snapshot of pending), `{action: "ping"}` (pong with stats), `{action: "connected"}` (hello on accept).
+  - If `hooks_elicitation_ws_enabled=False`, server closes with code 1008 (policy violation).
+  - FastAPI router wired in `harness/server/app.py` lifespan.
+- **Settings** — `harness/config.py` (+2 fields):
+  - `hooks_elicitation_ws_enabled` (default `True` — WebSocket transport on by default).
+  - `hooks_elicitation_ws_timeout_s` (default `30.0` — how long to wait for a human answer).
+- **Tests** — `tests/test_elicitation_broker.py` (23 tests):
+  - 11 broker unit tests (publish/wait/timeout, multiple concurrent, stats, singleton, lazy future, error paths).
+  - 7 WebSocket route tests (connect hello, list empty, ping/pong, publish→answer round-trip, WS disabled close 1008, invalid JSON, unknown action).
+  - 5 confirm_dangerous + broker integration tests (WS disabled, timeout, human answer wins, non-Elicitation ignored, non-confirmation ignored).
+  - Updated 2 existing tests in `tests/test_elicitation_notification.py` to disable WS in test (otherwise 30s timeout per test).
+- **Version bumps** — `pyproject.toml`, `harness/__init__.py`, `harness/server/app.py`: 1.11.0 → 1.12.0.
+
+### Trust boundary (preserved)
+
+- `harness/elicitation.py` — stdlib + asyncio + dataclasses only. NO `harness.agents`/`harness.server`/`harness.hooks` imports.
+- `harness/server/routes/elicitation.py` — fastapi + stdlib only. NO production imports (lazy import of `harness.config` + `harness.elicitation` inside the route handler).
+- `harness/hooks/builtin/confirm_dangerous.py` — only added lazy `from harness.elicitation import ElicitationBroker` inside `_resolve_answer()`. NO new top-level imports.
+- Trust boundary AST tests (`tests/test_hooks_trust_boundary.py` + `tests/test_observability_trust_boundary.py`) both pass unchanged (25/25).
+
+### Architecture notes
+
+- **Why lazy future creation**: dataclass `field(default_factory=...)` runs at instance construction, which can happen outside an event loop (e.g. sync test that calls `broker.publish()` directly). Deferring to first `wait()` keeps the broker loop-agnostic and avoids `RuntimeError: no running event loop` on import paths.
+- **Why `asyncio.to_thread` is NOT used in the broker**: the broker is in-process; the long-running wait happens on the existing event loop. No need for thread offload.
+- **Why 30s default timeout**: long enough for a human to read the question and type a response; short enough that an unattended agent loop doesn't stall forever. Operators can tune via `hooks_elicitation_ws_timeout_s`.
+- **Why diff-based WS push**: poll loop sends each `question_id` exactly once. If the WS connection drops and reconnects, missed questions can be recovered via `{action: "list"}`.
+- **Why `default_timeout` vs `ws_human` race**: the broker returns the default for both timeout-fallback and user-chose-default cases. We use the `timed_out_total` counter as a heuristic — it's not perfect (counter can increment from a concurrent question's timeout) but is good enough for telemetry.
+
+### Files
+
+- NEW: `harness/elicitation.py` (~175 LoC, broker)
+- NEW: `harness/server/routes/elicitation.py` (~140 LoC, WebSocket route)
+- NEW: `tests/test_elicitation_broker.py` (23 tests, ~360 LoC)
+- MODIFIED: `harness/hooks/builtin/confirm_dangerous.py` (~+50 LoC: `_resolve_answer` helper)
+- MODIFIED: `harness/server/app.py` (+~10 LoC: router include)
+- MODIFIED: `harness/config.py` (+2 settings)
+- MODIFIED: `tests/test_elicitation_notification.py` (2 tests updated to disable WS)
+- MODIFIED: `pyproject.toml` + `harness/__init__.py` + `harness/server/app.py` (version 1.11.0 → 1.12.0)
+
+### Roadmap
+
+- Phase 4.3 = 3/12 step (v1.10.0 + v1.11.0 + v1.12.0).
+- Phase 4.3+ remaining: defer any further interactive transport work (HTTP long-poll, Slack/Teams interactive modals).
+- Phase 4.4: `harness hooks` / `harness observability` CLI subcommands для event inspection.
+
+---
+
 ## Phase 4.3+ v1.11.0 — Notification webhook + desktop fanout (2026-06-16) — Phase 4.3 = 2/12 step
 
 **Phase 4.3+ v1.11.0 — 1 new file / 2 modified files / +29 tests / 2002 total tests / 0 new deps**

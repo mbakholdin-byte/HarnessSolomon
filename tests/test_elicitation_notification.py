@@ -201,23 +201,29 @@ class TestConfirmDangerousHook:
 
     @pytest.mark.asyncio
     async def test_injects_default_answer(self) -> None:
-        ctx = HookContext(
-            event="Elicitation",
-            session_id="s1",
-            agent_id="",
-            payload={
-                "question": "Run rm -rf /?",
-                "options": ["proceed", "abort"],
-                "default_answer": "abort",
-                "requires_confirmation": True,
-            },
-        )
-        decision = await confirm_dangerous_hook(ctx)
+        # Phase 4.3+ v1.12.0: WS broker is enabled by default with 30s
+        # timeout. Without a human client, the wait() will time out
+        # and return the default — so source is "default_timeout".
+        # For a fast test, monkey-patch Settings to disable WS.
+        from unittest.mock import patch
+        with patch("harness.config.Settings") as mock_settings:
+            mock_settings.return_value.hooks_elicitation_ws_enabled = False
+            ctx = HookContext(
+                event="Elicitation",
+                session_id="s1",
+                agent_id="",
+                payload={
+                    "question": "Run rm -rf /?",
+                    "options": ["proceed", "abort"],
+                    "default_answer": "abort",
+                    "requires_confirmation": True,
+                },
+            )
+            decision = await confirm_dangerous_hook(ctx)
         assert decision.decision == "modify"
         assert decision.output["payload"]["answer"] == "abort"
-        assert decision.output["payload"]["answer_source"] == (
-            "builtin.confirm_dangerous"
-        )
+        # Phase 4.3+ v1.12.0: source reflects which path resolved the answer.
+        assert decision.output["payload"]["answer_source"] == "default_ws_disabled"
 
     @pytest.mark.asyncio
     async def test_default_answer_fallback_abort(self) -> None:
@@ -349,25 +355,30 @@ class TestNotifyTerminalHook:
 class TestRunnerDispatchNewEvents:
     @pytest.mark.asyncio
     async def test_runner_dispatches_elicitation(self) -> None:
+        # Phase 4.3+ v1.12.0: disable WS so confirm_dangerous falls
+        # back to the default without waiting 30s.
+        from unittest.mock import patch
         registry = HookRegistry()
-        await registry.register(HookSpec(
-            hook_id="test.confirm",
-            event=EventType.ELICITATION,
-            transport="builtin",
-            callable=confirm_dangerous_hook,
-        ))
-        runner = HookRunner(registry, default_timeout_ms=1000)
-        ctx = HookContext(
-            event="Elicitation",
-            session_id="s1",
-            agent_id="",
-            payload={
-                "question": "Drop table?",
-                "default_answer": "abort",
-                "requires_confirmation": True,
-            },
-        )
-        agg = await runner.fire(ctx)
+        with patch("harness.config.Settings") as mock_settings:
+            mock_settings.return_value.hooks_elicitation_ws_enabled = False
+            await registry.register(HookSpec(
+                hook_id="test.confirm",
+                event=EventType.ELICITATION,
+                transport="builtin",
+                callable=confirm_dangerous_hook,
+            ))
+            runner = HookRunner(registry, default_timeout_ms=1000)
+            ctx = HookContext(
+                event="Elicitation",
+                session_id="s1",
+                agent_id="",
+                payload={
+                    "question": "Drop table?",
+                    "default_answer": "abort",
+                    "requires_confirmation": True,
+                },
+            )
+            agg = await runner.fire(ctx)
         assert agg.final_decision == "modify"
         assert agg.final_payload["answer"] == "abort"
 

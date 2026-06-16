@@ -1188,6 +1188,9 @@ class Settings(BaseSettings):
     hooks_notify_webhook_secret: str = Field(default="", description="Phase 4.3+: HMAC-SHA256 secret for X-Harness-Signature header (empty = no signature).")
     hooks_notify_webhook_timeout_s: float = Field(default=5.0, description="Phase 4.3+: webhook POST timeout in seconds.")
     hooks_notify_desktop_enabled: bool = Field(default=False, description="Phase 4.3+: enable desktop channel for Notification (opt-in — uses PowerShell msg/osascript/notify-send).")
+    # Phase 4.3+ v1.12.0: WebSocket interactive transport for Elicitation.
+    hooks_elicitation_ws_enabled: bool = Field(default=True, description="Phase 4.3+: enable ElicitationBroker + /api/v1/elicitation/ws endpoint (default True; disable for headless deployments).")
+    hooks_elicitation_ws_timeout_s: float = Field(default=30.0, description="Phase 4.3+: how long to wait for a human answer before falling back to default_answer.")
 
     # === Phase 4.1: Observability — master switches ===
     observability_enabled: bool = Field(

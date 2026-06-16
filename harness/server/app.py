@@ -493,7 +493,7 @@ def create_app() -> FastAPI:
     """Build FastAPI app with middleware and routers."""
     app = FastAPI(
         title="Solomon Harness",
-        version="1.11.0",
+        version="1.12.0",
         description=(
             "Open-source agentic shell — Web MVP (Phase 0) + "
             "sub-agent system (Phase 2.0+2.1) + GitHub PR integration (Phase 2.2) "
@@ -560,6 +560,12 @@ def create_app() -> FastAPI:
     # (it wraps both HTTP and WS responses).
     app.include_router(chat_router, prefix="/api/chat")  # WebSocket only
     app.include_router(chat_router, prefix="/api/v1/chat")  # canonical
+    # Phase 4.3+ v1.12.0: Elicitation WebSocket — canonical only (no legacy
+    # mount; the feature is new and the deprecation timeline is fresh).
+    from harness.server.routes.elicitation import router as elicitation_router
+    app.include_router(
+        elicitation_router, prefix="/api/v1/elicitation", tags=["elicitation"],
+    )
     # Phase 2.2: merge-queue HTTP API. Phase 1.6: routes now require
     # ``agents.read`` via ``Depends(require_scope(Scope.AGENTS_READ))``.
     app.include_router(agents_jobs_router, prefix="/api/v1/agents", tags=["agents"])
