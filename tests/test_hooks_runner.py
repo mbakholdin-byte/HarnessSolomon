@@ -367,15 +367,16 @@ class TestHookRunnerDispatch:
         assert agg.final_decision == "allow"  # fail-open
         assert "not found" in agg.decisions[0].error
 
-    async def test_http_returns_placeholder(self) -> None:
-        """HTTP transport deferred to Step 3."""
+    async def test_http_unreachable_fails_open(self) -> None:
+        """HTTP transport is now wired (Step 3). Unreachable URL fails open."""
         registry = HookRegistry()
         await registry.register(
             HookSpec(
                 hook_id="h1",
                 event=EventType.PRE_TOOL_USE,
                 transport="http",
-                url="https://example.com/hook",
+                url="https://this-host-does-not-exist.invalid/hook",
+                timeout_ms=500,
             )
         )
         runner = HookRunner(registry)
@@ -383,5 +384,5 @@ class TestHookRunnerDispatch:
             event="PreToolUse", session_id="s1", agent_id="", payload={}
         )
         agg = await runner.fire(ctx)
-        assert agg.final_decision == "allow"
-        assert "not implemented" in agg.decisions[0].error
+        assert agg.final_decision == "allow"  # fail-open on network error
+        assert agg.decisions[0].error != ""
