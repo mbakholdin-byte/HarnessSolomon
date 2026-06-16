@@ -2,9 +2,15 @@
 
 **Проект:** Solomon Harness
 **Цель:** open-source агентская оболочка с multi-model (T1/T2/T3), сильнее Claude Code и OpenCode
-**Дата:** 12.06.2026 (v1.0), 13.06.2026 (v1.1 — multi-model), 13.06.2026 (v1.2 — Web + облачный MVP)
+**Дата:** 12.06.2026 (v1.0), 13.06.2026 (v1.1 — multi-model), 13.06.2026 (v1.2 — Web + облачный MVP), 15.06.2026 (v2.0 — sync v0.4.0), 15.06.2026 (v2.10 — Phase 3 v1.5.0 closeout), **15.06.2026 (v2.11 — Phase 4 status audit)**, **16.06.2026 (v3.0 — Phase 3 = 12/12 FINAL, Phase 4 = 0/12 NOT STARTED)**
 **Автор:** Соломон
 **Заказчик:** Марк
+**Текущий tag:** `v1.5.0` (HEAD `ec8beaf`, 15.06.2026)
+**Следующий review:** после Plan agent review + ExitPlanMode на Phase 4 Step 0 → coding → tag v1.6.0
+
+> **Этот файл** — короткий canonical reference внутри репо.
+> **Полный source of truth** roadmap (90 KB, актуальный) — `C:\MyAI\_output\2026-06\12.06 Harness-Claude-Code-Architecture\roadmap.md` (v2.11).
+> Содержимое Phase 0–3 тут сокращено; детали см. в `_output/.../roadmap.md`.
 
 ---
 

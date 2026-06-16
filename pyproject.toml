@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "solomon-harness"
-version = "0.1.0"
+version = "1.5.0"
 description = "Open-source agentic harness for local LLM"
 readme = "README.md"
 license = "MIT"
@@ -66,8 +66,8 @@ harness = "harness.cli:main"
 solomon-harness = "harness.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/mark/solomon-harness"
-Issues = "https://github.com/mark/solomon-harness/issues"
+Homepage = "https://github.com/mbakholdin-byte/HarnessSolomon"
+Issues = "https://github.com/mbakholdin-byte/HarnessSolomon/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["harness"]
