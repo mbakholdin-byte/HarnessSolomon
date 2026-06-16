@@ -71,12 +71,29 @@ class HybridRetriever:
         """Return top-k ``(Memory, rrf_score)`` pairs.
 
         RRF scores are not bounded; typical values are 0.01-0.05.
+
+        Phase 5.1 fix (16.06.2026): ``BM25Retriever.retrieve`` is
+        **sync** (pure-Python, no I/O), while ``DenseRetriever.retrieve``
+        is **async** (awaits ``embedder.embed_query``). The original
+        implementation called ``asyncio.gather`` on both, which fails
+        with ``TypeError: unhashable type: 'list'`` because a sync
+        call is not a coroutine. We now wrap sync retrievers via
+        ``asyncio.to_thread`` so ``gather`` always receives awaitables.
         """
         # Fetch from both retrievers concurrently.
         import asyncio
+        import inspect
+
+        async def _call(retriever: Any, query: str, k: int) -> list:
+            """Call ``retriever.retrieve(query, k)`` whether sync or async."""
+            result = retriever.retrieve(query, k=k)
+            if inspect.isawaitable(result):
+                return await result
+            return result
+
         bm25_hits, dense_hits = await asyncio.gather(
-            self._bm25.retrieve(query, k=self._fetch_k),
-            self._dense.retrieve(query, k=self._fetch_k),
+            _call(self._bm25, query, self._fetch_k),
+            _call(self._dense, query, self._fetch_k),
         )
         scores: dict[str, float] = {}
         # Track which Memory corresponds to each id (we use the

@@ -35,6 +35,10 @@ memory/cache/
 logs/
 *.log
 harness/web/node_modules/
+
+# Local ONNX embedding models (operator-installed, see EMBEDDINGS_DIR).
+# Tests marked @pytest.mark.requires_onnx skip automatically when absent.
+models/
 harness/web/dist/
 harness/.venv/
 .harness/working/

@@ -99,4 +99,5 @@ testpaths = ["tests"]
 addopts = "-v --strict-markers"
 markers = [
     "real_llm: requires a real LLM API key in env (MINIMAX_API_KEY / ZHIPUAI_API_KEY / MOONSHOT_API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY). Skipped automatically when none is set.",
+    "requires_onnx: requires a local ONNX embedding model (intfloat/multilingual-e5-small) at the configured EMBEDDINGS_DIR. Skipped automatically when the model files are not present.",
 ]

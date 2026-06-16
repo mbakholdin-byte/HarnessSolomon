@@ -194,13 +194,28 @@ class OnnxEmbedder:
         mask = np.zeros(
             (len(texts), max_len), dtype=np.int64,
         )
+        # Phase 5.1 fix (16.06.2026): newer E5 ONNX exports
+        # (``intfloat/multilingual-e5-small`` v2+) require
+        # ``token_type_ids`` as a third input. We pass an all-zeros
+        # array — E5 doesn't use segment IDs (single sequence per
+        # example), so zeros are correct. Older 2-input exports
+        # ignore the extra input.
+        type_ids = np.zeros(
+            (len(texts), max_len), dtype=np.int64,
+        )
         for i, e in enumerate(encodings):
             ids[i, : len(e.ids)] = e.ids
             mask[i, : len(e.ids)] = e.attention_mask
-        # ONNX forward. Standard E5 export has 2 inputs: input_ids +
-        # attention_mask; output is last_hidden_state (batch, seq, dim).
+        # ONNX forward. Newer E5 exports have 3 inputs: input_ids,
+        # attention_mask, token_type_ids; output is last_hidden_state
+        # (batch, seq, dim).
         outputs = self._session.run(
-            None, {"input_ids": ids, "attention_mask": mask},
+            None,
+            {
+                "input_ids": ids,
+                "attention_mask": mask,
+                "token_type_ids": type_ids,
+            },
         )
         last_hidden = outputs[0]  # (B, T, dim)
         # Mean-pool with attention-mask weighting.
