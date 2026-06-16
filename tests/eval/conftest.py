@@ -1,7 +1,8 @@
-"""Phase 3 B-mini: shared fixtures for the eval test suite.
+"""Phase 3 B-mini + Phase 5 B2/B3: shared fixtures for the eval test suite.
 
 Provides:
     - golden_facts (50 facts, uniform distribution: 12 early / 26 mid / 12 late)
+    - golden_queries (50 queries, 30 auto + 20 manual) — Phase 5 B2/B3
     - seed_session_100 (100+ turn session, messages padded to 500/800 chars)
     - mock_summariser (AsyncMock that injects all phrases into summary)
     - compactor (ContextCompactor with B6 isolation: store=None, memory=None, etc.)
@@ -9,6 +10,8 @@ Provides:
 """
 from __future__ import annotations
 
+import random
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -16,8 +19,13 @@ import pytest
 
 from harness.config import Settings
 from harness.context import ContextCompactor
-from harness.eval import GoldenFact
+from harness.eval import GoldenFact, GoldenQuery
+from harness.eval.golden import load_golden_queries
 from harness.server.llm.router import CompletionResult
+
+
+_FIXTURES_DIR = Path(__file__).parent / "fixtures"
+_MANUAL_QUERIES_PATH = _FIXTURES_DIR / "golden_queries.jsonl"
 
 
 # Golden facts (50, uniformly distributed across the 100-turn session).
@@ -81,6 +89,73 @@ _GOLDEN_FACT_DATA: list[tuple[str, str, int, str]] = [
 ]
 
 
+# Auto-generated queries — templates per difficulty bucket.
+# Phase 5 B2 fix: queries use the phrase directly (or close paraphrase)
+# so BM25 can lift them above generic words. Difficulty controls how
+# much of the phrase leaks into the query tokens.
+_AUTO_QUERY_TEMPLATES: dict[str, list[str]] = {
+    "easy": [
+        "what is {phrase}",
+        "which feature is {phrase}",
+    ],
+    "medium": [
+        "how is {phrase} configured",
+        "explain the {phrase} design",
+    ],
+    "hard": [
+        "describe the architecture of {phrase}",
+        "summarise the role of {phrase}",
+    ],
+}
+
+
+def _generate_auto_queries(
+    facts: list[GoldenFact],
+    n: int = 30,
+    seed: int = 42,
+) -> list[GoldenQuery]:
+    """Generate ``n`` auto queries uniformly across difficulty buckets.
+
+    Returns 10 easy + 10 medium + 10 hard (n=30). Each query has
+    ``relevant_fact_ids=(fact.id,)`` (single-fact, factual_lookup) and
+    4-6 ``irrelevant_fact_ids`` from a different turn region.
+    """
+    rng = random.Random(seed)
+    # Sample 10 facts per bucket. Use turn_index quartiles to spread.
+    sorted_facts = sorted(facts, key=lambda f: f.turn_index)
+    quartile = len(sorted_facts) // 4
+    buckets = {
+        "easy": sorted_facts[:quartile],       # turns 5-15 → easy
+        "medium": sorted_facts[quartile: 3 * quartile],  # mid turns
+        "hard": sorted_facts[3 * quartile:],   # late turns → hard
+    }
+    queries: list[GoldenQuery] = []
+    fact_id_set = {f.id for f in facts}
+    qid = 1
+    for difficulty, fact_pool in buckets.items():
+        # Take 10 from each bucket (or all if less).
+        sample = rng.sample(fact_pool, min(10, len(fact_pool)))
+        templates = _AUTO_QUERY_TEMPLATES[difficulty]
+        for i, fact in enumerate(sample):
+            template = templates[i % len(templates)]
+            query_text = template.format(phrase=fact.phrase)
+            # Pick 4-6 irrelevant fact_ids from a different region.
+            other_pool = [f for f in facts if f.id != fact.id]
+            n_irrelevant = rng.randint(4, min(6, len(other_pool)))
+            irrelevant = rng.sample(other_pool, n_irrelevant)
+            irrelevant_ids = tuple(f.id for f in irrelevant)
+            queries.append(GoldenQuery(
+                id=f"AUTO-{qid:02d}",
+                query=query_text,
+                relevant_fact_ids=(fact.id,),
+                irrelevant_fact_ids=irrelevant_ids,
+                category="factual_lookup",
+                difficulty=difficulty,
+            ))
+            qid += 1
+    return queries
+
+
 @pytest.fixture
 def golden_facts() -> list[GoldenFact]:
     """50 marked facts uniformly distributed across the 100-turn session."""
@@ -88,6 +163,25 @@ def golden_facts() -> list[GoldenFact]:
         GoldenFact(id=fid, phrase=phrase, turn_index=tidx, category=cat)
         for fid, phrase, tidx, cat in _GOLDEN_FACT_DATA
     ]
+
+
+@pytest.fixture
+def golden_queries(golden_facts: list[GoldenFact]) -> list[GoldenQuery]:
+    """50 golden queries: 30 auto-generated + 20 manual from JSONL.
+
+    Phase 5 B2/B3 DoD set:
+      - 30 auto (10 easy + 10 medium + 10 hard, factual_lookup only)
+      - 10 manual factual_lookup
+      - 5 manual paraphrased
+      - 5 manual multi_hop
+
+    Threshold scope: precision@5 / recall@20 on the **subset** of
+    40 factual_lookup + paraphrased queries (multi_hop reported
+    separately per docs/PHASE5-B2-B3-PLAN.md §5.1 + sign-off 2026-06-16).
+    """
+    auto = _generate_auto_queries(golden_facts, n=30, seed=42)
+    manual = load_golden_queries(_MANUAL_QUERIES_PATH)
+    return auto + manual
 
 
 @pytest.fixture

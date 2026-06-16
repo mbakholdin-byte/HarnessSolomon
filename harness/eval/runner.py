@@ -1,28 +1,42 @@
-"""Phase 3 B-mini: EvalRunner — async orchestrator.
+"""Phase 3 B-mini + Phase 5 B2/B3: EvalRunner — async orchestrator.
 
 C6 fix: this is **async** (not sync) because ``ContextCompactor.maybe_compact``
 is async. Mirrors the pattern in ``tests/test_context_compaction.py``:
 ``@pytest.mark.asyncio`` async tests.
+
+Phase 5 (16.06.2026) adds ``run_precision`` and ``run_recall`` for B2/B3
+retrieval metrics. These are **sync** (the metrics themselves are sync)
+but wrapped in async methods to keep the runner interface uniform.
 
 Usage::
 
     runner = EvalRunner()
     retention_result = await runner.run_retention(session, facts, top_k=20)
     loss_result = await runner.run_compaction_loss(session, facts, compactor, "qwen3:8b")
+    precision_result = await runner.run_precision(corpus, queries, facts, k=5)
+    recall_result = await runner.run_recall(corpus, queries, facts, k=20)
 """
 from __future__ import annotations
 
 from harness.eval.compaction_loss import CompactionLossMetric, LossResult
-from harness.eval.golden import GoldenFact
+from harness.eval.golden import GoldenFact, GoldenQuery
 from harness.eval.retention import ContextRetentionMetric, RetentionResult
+from harness.eval.retrieval import (
+    PrecisionMetric,
+    PrecisionResult,
+    RecallMetric,
+    RecallResult,
+    session_to_corpus,
+)
+from harness.memory.schema import Memory
 
 
 class EvalRunner:
-    """Async orchestrator for the Phase 3 B-mini metrics.
+    """Async orchestrator for Phase 3 B-mini + Phase 5 B2/B3 metrics.
 
-    Wraps the two metric classes in a single fixture-driven entry point.
-    Future metrics (B2 precision@5, B3 recall@20) will be added here
-    without changing the runner's public surface.
+    Wraps the four metric classes in a single fixture-driven entry
+    point. Adding a new metric (e.g. Phase 5.1 hybrid retrieval) is
+    a single method addition.
     """
 
     def __init__(self) -> None:
@@ -48,6 +62,36 @@ class EvalRunner:
     ) -> LossResult:
         """Run B4 — compaction loss."""
         return await self._loss.measure(session, facts, compactor, model_name)
+
+    async def run_precision(
+        self,
+        corpus: list[Memory],
+        queries: list[GoldenQuery],
+        facts: list[GoldenFact],
+        k: int = 5,
+        threshold_target: float = 0.7,
+    ) -> PrecisionResult:
+        """Run B2 — precision@k (default k=5).
+
+        Sync metric wrapped in async for runner interface consistency.
+        """
+        metric = PrecisionMetric(k=k, threshold_target=threshold_target)
+        return metric.measure(corpus, queries, facts)
+
+    async def run_recall(
+        self,
+        corpus: list[Memory],
+        queries: list[GoldenQuery],
+        facts: list[GoldenFact],
+        k: int = 20,
+        threshold_target: float = 0.85,
+    ) -> RecallResult:
+        """Run B3 — recall@k (default k=20).
+
+        Sync metric wrapped in async for runner interface consistency.
+        """
+        metric = RecallMetric(k=k, threshold_target=threshold_target)
+        return metric.measure(corpus, queries, facts)
 
 
 __all__ = ["EvalRunner"]
