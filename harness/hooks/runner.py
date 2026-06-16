@@ -8,20 +8,18 @@ The runner is the single entry point for production code. It:
     4. Aggregates decisions (block > modify > allow).
     5. Returns ``HookAggregate`` for downstream code.
 
-Builtin transport is the simplest: just calls ``spec.callable(context)``.
-Subprocess / HTTP / LLM transports are dispatched via the same
-interface — Step 2 / Step 3.
+All 4 transports supported (Phase 4.0 Step 3): builtin, subprocess,
+http, llm. LLM router is injected via DI to maintain the trust
+boundary (no module-level import of ``harness.server.llm.router``).
 
 Trust boundary: stdlib + asyncio + dataclasses. NO ``harness.agents``
-or ``harness.server`` imports. LLM hook router is injected via DI
-when the LLM transport is used (see ``llm_hook.py``, deferred to Step 3).
+or ``harness.server`` imports.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
 import time
-from dataclasses import dataclass
 from typing import Any
 
 from harness.hooks.context import (
@@ -36,17 +34,6 @@ from harness.hooks.registry import HookRegistry, HookSpec
 
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class _BuiltinResult:
-    """Result of dispatching a single builtin hook."""
-
-    hook_id: str
-    decision: Decision
-    output: dict[str, Any]
-    error: str
-    duration_ms: float
 
 
 async def _invoke_builtin(
@@ -76,7 +63,6 @@ async def _invoke_builtin(
                 duration_ms=duration_ms,
                 error=f"hook returned {type(result).__name__}, expected HookDecision",
             )
-        # Preserve duration measured here.
         return HookDecision(
             decision=result.decision,
             hook_id=spec.hook_id,
@@ -90,7 +76,7 @@ async def _invoke_builtin(
             "Hook %s timed out after %dms", spec.hook_id, int(duration_ms)
         )
         return HookDecision(
-            decision="allow",  # fail-open by default
+            decision="allow",
             hook_id=spec.hook_id,
             duration_ms=duration_ms,
             error=f"timeout after {timeout_ms}ms",
@@ -101,7 +87,7 @@ async def _invoke_builtin(
             "Hook %s raised %s: %s", spec.hook_id, type(e).__name__, e
         )
         return HookDecision(
-            decision="allow",  # fail-open by default
+            decision="allow",
             hook_id=spec.hook_id,
             duration_ms=duration_ms,
             error=f"{type(e).__name__}: {e}",
@@ -112,14 +98,17 @@ class HookRunner:
     """Async dispatcher for registered hooks.
 
     Construction takes a ``HookRegistry`` and a default timeout. The
-    runner is stateless except for the registry reference, so the
-    same instance can serve all sessions / agents.
+    runner is stateless except for the registry reference + optional
+    ``llm_router`` (DI for LLM-as-hook transport), so the same
+    instance can serve all sessions / agents.
 
     Example::
 
         registry = HookRegistry()
-        registry.register(HookSpec(hook_id="h1", event=EventType.PRE_TOOL_USE,
-                                    transport="builtin", callable=my_hook))
+        await registry.register(HookSpec(
+            hook_id="h1", event=EventType.PRE_TOOL_USE,
+            transport="builtin", callable=my_hook,
+        ))
         runner = HookRunner(registry, default_timeout_ms=3000)
         ctx = HookContext(event="PreToolUse", session_id="s1", agent_id="",
                           payload={"tool_name": "read_file"})
@@ -137,6 +126,7 @@ class HookRunner:
         max_recursion_depth: int = 3,
         fail_open: bool = True,
         global_filter: str = "",
+        llm_router: Any = None,
     ) -> None:
         self._registry = registry
         self._default_timeout_ms = default_timeout_ms
@@ -144,6 +134,8 @@ class HookRunner:
         self._max_recursion_depth = max_recursion_depth
         self._fail_open = fail_open
         self._global_filter = global_filter
+        # Optional DI for LLM-as-hook transport (B1: keeps trust boundary).
+        self._llm_router = llm_router
 
     async def fire(self, context: HookContext) -> HookAggregate:
         """Dispatch all hooks for ``context.event``.
@@ -162,7 +154,6 @@ class HookRunner:
             )
             return HookAggregate(final_decision="allow", decisions=())
 
-        # Reentrancy guard: skip if event is already in the stack.
         if context.event in context.event_stack:
             logger.debug(
                 "Hook reentrancy detected for %s in stack %s — skip",
@@ -172,7 +163,6 @@ class HookRunner:
             return HookAggregate(final_decision="allow", decisions=())
 
         specs = self._registry.for_event(EventType(context.event))
-        # Filter: global filter + per-spec matcher.
         matching: list[HookSpec] = []
         for s in specs:
             if not s.enabled:
@@ -207,12 +197,8 @@ class HookRunner:
         if not matching:
             return HookAggregate(final_decision="allow", decisions=())
 
-        # Dispatch in parallel.
         results = await asyncio.gather(
-            *(
-                self._dispatch_one(s, context)
-                for s in matching
-            ),
+            *(self._dispatch_one(s, context) for s in matching),
             return_exceptions=False,
         )
 
@@ -232,12 +218,10 @@ class HookRunner:
                 if r.output.get("payload"):
                     final_payload = dict(r.output["payload"])
 
-        # If the runner is fail-closed and any hook errored, downgrade
-        # the final decision to block.
         if not self._fail_open and any(d.error for d in decisions):
             if final_decision == "allow":
                 final_decision = "block"
-                blocked_by = decisions[0].hook_id  # any error blocks
+                blocked_by = decisions[0].hook_id
 
         return HookAggregate(
             final_decision=final_decision,
@@ -251,10 +235,7 @@ class HookRunner:
         spec: HookSpec,
         context: HookContext,
     ) -> HookDecision:
-        """Dispatch a single hook by transport.
-
-        Phase 4.0 Step 2: builtin + subprocess. HTTP / LLM deferred.
-        """
+        """Dispatch a single hook by transport (Step 3: all 4)."""
         timeout = spec.timeout_ms or self._default_timeout_ms
         if spec.transport == "builtin":
             return await _invoke_builtin(spec, context, timeout_ms=timeout)
@@ -264,11 +245,35 @@ class HookRunner:
             return await invoke_subprocess_hook(
                 spec.script_path, context, timeout_ms=timeout
             )
-        # HTTP / LLM deferred to Step 3.
+        if spec.transport == "http":
+            from harness.hooks.http import invoke_http_hook
+
+            return await invoke_http_hook(
+                spec.url,
+                context,
+                timeout_ms=timeout,
+                headers=spec.headers,
+            )
+        if spec.transport == "llm":
+            if self._llm_router is None:
+                return HookDecision(
+                    decision="allow",
+                    hook_id=spec.hook_id,
+                    error="LLM hook requested but runner.llm_router is None",
+                )
+            from harness.hooks.llm_hook import LLMHook
+
+            hook = LLMHook(
+                router=self._llm_router,
+                model=spec.model,
+                prompt=spec.prompt,
+                timeout_ms=timeout,
+            )
+            return await hook(context)
         return HookDecision(
             decision="allow",
             hook_id=spec.hook_id,
-            error=f"transport {spec.transport!r} not implemented yet",
+            error=f"unknown transport {spec.transport!r}",
         )
 
 
