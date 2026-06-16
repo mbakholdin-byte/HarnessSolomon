@@ -80,10 +80,10 @@ async def test_b1_retention_after_maybe_compact(
     injects all 50 phrases into the summary, so the substring count
     should be 50.
 
-    Note: ``force_compact`` cannot be used here because of a
-    pre-existing compactor marker mismatch (looks for
-    ``[Conversation summary]`` in role=system, but ``_inject_summary``
-    produces role=user). See B4 test for full context.
+    Note: ``force_compact`` cannot be used here because it returns
+    a ``CompactResult`` (not a list of messages). See
+    ``tests/eval/test_force_compact_regression.py`` for the
+    dedicated regression test on ``force_compact.summary_preview``.
     """
     compacted = await compactor.maybe_compact(seed_session_100, "qwen3:8b")
     summary = _extract_summary(compacted)

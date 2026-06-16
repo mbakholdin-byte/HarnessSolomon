@@ -710,19 +710,30 @@ class ContextCompactor:
         )
         compacted_tokens = _estimate_tokens(compacted)
         # Extract the summary preview from the injected summary message.
+        # R5 fix (2026-06-16): ``_inject_summary`` (line ~891) emits a
+        # ``role="user"`` message with marker
+        # ``"[Compaction summary — earlier turns condensed]"`` (em-dash).
+        # The old code looked for ``"[Conversation summary]"`` in
+        # ``role="system"`` — neither matches, so ``summary_preview``
+        # was always ``"(no summary generated)"`` even when the slow
+        # path ran. We now match the actual marker/role produced by
+        # ``_inject_summary``, and slice the body after the marker up
+        # to the first blank line (preserved by ``_inject_summary``).
         preview = ""
         for m in compacted:
-            if m.get("role") == "system" and "[Conversation summary]" in (
-                m.get("content") or ""
-            ):
-                content = m.get("content", "")
-                # The summary content lives between the marker and
-                # the next \n\n (preserved by ``_inject_summary``).
+            content = m.get("content") or ""
+            # Match the real marker (em-dash) and tolerate the older
+            # ``[Conversation summary]`` form for backwards compat with
+            # any pre-v1.4.0 cached summaries.
+            if "[Compaction summary" in content:
+                start = content.find("[Compaction summary")
+            elif "[Conversation summary]" in content:
                 start = content.find("[Conversation summary]")
-                if start >= 0:
-                    tail = content[start:].split("\n\n", 1)
-                    preview = tail[0] if tail else content[start:start + 200]
-                break
+            else:
+                continue
+            tail = content[start:].split("\n\n", 1)
+            preview = tail[0] if tail else content[start:start + 200]
+            break
         if not preview:
             preview = "(no summary generated)"
         if len(preview) > 200:

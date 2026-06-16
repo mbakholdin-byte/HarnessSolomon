@@ -5,16 +5,13 @@ summary message produced by ``ContextCompactor.maybe_compact``. Target:
 ratio >= 0.95 (< 5% loss).
 
 Why ``maybe_compact`` (not ``force_compact``):
-    - ``force_compact`` (Phase 3 v1.4.0) has a pre-existing marker
-      mismatch: it looks for ``"[Conversation summary]"`` in
-      ``role="system"`` messages (compaction.py:715), but
-      ``_inject_summary`` produces ``role="user"`` messages with
-      ``"[Compaction summary - earlier turns condensed]"``. So
-      ``force_compact.summary_preview`` is always "(no summary
-      generated)" even when the slow path ran.
-    - ``maybe_compact`` correctly returns the compacted message
-      list (not a ``CompactResult``), so we can extract the
-      summary message via the B1+B5 fix matcher.
+    - ``maybe_compact`` returns the compacted message list (not a
+      ``CompactResult``), so we can extract the summary message via
+      the B1+B5 fix matcher. The metric accepts both
+      ``[Compaction summary`` and ``[Conversation summary]`` markers
+      so it also works on ``force_compact`` output (see
+      ``tests/eval/test_force_compact_regression.py`` for the
+      dedicated R5 regression test).
 
 Test scope (5 tests):
     - test_b4_loss_below_5pct: 50 facts -> ratio = 1.0

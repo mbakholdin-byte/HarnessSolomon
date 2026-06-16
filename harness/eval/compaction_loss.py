@@ -29,14 +29,12 @@ from harness.eval.golden import GoldenFact
 
 
 # Markers emitted by ``ContextCompactor._inject_summary``.
-# The compactor has two entry points with two slightly different markers:
-#   - maybe_compact: user-role message, ``[Compaction summary - earlier
-#     turns condensed]`` (harness/context/compaction.py:891).
-#   - force_compact: system-role message, ``[Conversation summary]``
-#     (harness/context/compaction.py:715).
-# Both share the prefix ``[Compaction summary`` for ``maybe_compact`` and
-# ``[Conversation summary]`` for ``force_compact``. We accept either so
-# the metric works on both paths.
+# ``_inject_summary`` (compaction.py:891) emits a ``role="user"``
+# message with ``"[Compaction summary — earlier turns condensed]"``
+# (em-dash). The legacy ``force_compact`` preview path (compaction.py:712)
+# also recognises ``[Conversation summary]`` for back-compat with
+# pre-v1.4.0 cached summaries. We accept either marker so the metric
+# works on both ``maybe_compact`` and ``force_compact`` outputs.
 _SUMMARY_MARKERS = ("[Compaction summary", "[Conversation summary]")
 
 
@@ -74,9 +72,10 @@ class LossResult:
 def _extract_summary(messages: list[dict]) -> str | None:
     """Find the compactor's summary message in a compacted message list.
 
-    Accepts both ``maybe_compact`` (``[Compaction summary``, user role)
-    and ``force_compact`` (``[Conversation summary]``, system role)
-    markers. Returns the content string of the first match, or
+    Accepts both ``[Compaction summary`` (em-dash, em-dash — emitted
+    by ``_inject_summary`` for both ``maybe_compact`` and
+    ``force_compact``) and the legacy ``[Conversation summary]``
+    marker. Returns the content string of the first match, or
     ``None`` if no summary is present.
     """
     for m in messages:
@@ -129,7 +128,10 @@ class CompactionLossMetric:
         """
         if not facts:
             return LossResult(total=0, preserved=0, ratio=1.0)
-        # Run the compactor. R5 fix: NOT force_compact (different marker).
+        # Run the compactor. We use ``maybe_compact`` (returns a list of
+        # messages) rather than ``force_compact`` (returns a
+        # ``CompactResult``) so we can extract the summary message
+        # from the list directly.
         compacted = await compactor.maybe_compact(session, model_name)
         summary = _extract_summary(compacted)
         if summary is None:
@@ -178,10 +180,13 @@ class CompactionLossMetric:
         B4 golden tests use this entry point so the summary message is
         always produced and the LLM mock contract is exercised.
 
-        R5 fix: ``force_compact`` uses the SAME ``[Compaction summary``
-        marker (verified via ``_inject_summary`` shared with
-        ``maybe_compact``), so the substring extractor works on both
-        paths.
+        ``force_compact`` uses the SAME ``[Compaction summary``
+        marker (via the shared ``_inject_summary``) as
+        ``maybe_compact``, so the substring extractor works on both
+        paths. The dedicated R5 regression test in
+        ``tests/eval/test_force_compact_regression.py`` covers the
+        ``force_compact.summary_preview`` field on the returned
+        ``CompactResult``.
         """
         if not facts:
             return LossResult(total=0, preserved=0, ratio=1.0)
