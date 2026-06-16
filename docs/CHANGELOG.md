@@ -1,5 +1,77 @@
 # Changelog — Solomon Harness
 
+## Phase 4.3+ v1.11.0 — Notification webhook + desktop fanout (2026-06-16) — Phase 4.3 = 2/12 step
+
+**Phase 4.3+ v1.11.0 — 1 new file / 2 modified files / +29 tests / 2002 total tests / 0 new deps**
+
+Extends Phase 4.3 v1.10.0 by adding two new channels for the `Notification` event: `webhook` (HTTP POST with HMAC-SHA256) and `desktop` (platform-specific toast). The `notify_terminal_hook` is refactored from a single-function stdout fanout into a dispatcher that iterates over `payload["channels"]` and routes to per-channel handlers. Failures are isolated per channel (one failure doesn't break others).
+
+### Что закрыто
+
+- **Dispatcher refactor** — `harness/hooks/builtin/notify_terminal.py` (~210 LoC):
+  - Public entry `notify_terminal_hook()` iterates `payload["channels"]` (default `["stdout"]`) and dispatches each channel via a handler from `_HANDLERS` table.
+  - Per-channel try/except — failures isolated, one channel can't break another.
+  - Backward compatible: existing `["stdout"]` payloads behave identically (stderr write with `[severity]` prefix).
+- **Webhook channel** — `_handle_webhook()`:
+  - POSTs `payload` as JSON to `settings.hooks_notify_webhook_url`.
+  - Headers: `Content-Type: application/json`, `X-Harness-Event: Notification`.
+  - Optional HMAC-SHA256 signature via `X-Harness-Signature: sha256=<hex>` when `hooks_notify_webhook_secret` is set.
+  - `urllib.request` + `asyncio.to_thread` (stdlib only, no new deps).
+  - Configurable timeout via `hooks_notify_webhook_timeout_s` (default 5.0).
+  - HTTP 4xx/5xx → log warning, do not raise. URLError/TimeoutError → log warning, do not raise.
+  - Empty URL → silently skip (webhook channel effectively disabled).
+- **Desktop channel** — `_handle_desktop()`:
+  - **Windows** (`sys.platform == "win32"`) → `msg * "[severity] message"` (always present on Windows; BurntToast not required).
+  - **macOS** (`darwin`) → `osascript -e 'display notification "..." with title "Harness"'` (escapes double quotes).
+  - **Linux** + others → `notify-send -a "Harness" "[severity] message"`.
+  - Each command launched via `asyncio.create_subprocess_exec` with 3.0s timeout.
+  - Missing command (`FileNotFoundError`) → log debug, skip silently.
+  - Non-zero exit → log debug, do not raise.
+  - Opt-in via `hooks_notify_desktop_enabled` (default **False** — desktop popups are intrusive).
+- **Settings** — `harness/config.py` (+4 fields):
+  - `hooks_notify_webhook_url` (default `""`)
+  - `hooks_notify_webhook_secret` (default `""`)
+  - `hooks_notify_webhook_timeout_s` (default `5.0`)
+  - `hooks_notify_desktop_enabled` (default `False`)
+- **Tests** — `tests/test_notify_terminal_channels.py` (29 tests):
+  - 4 severity → prefix tests (info/warn/error/unknown).
+  - 3 stdout channel regression tests (write, skip empty, dispatcher routes).
+  - 5 webhook tests (no URL skip, 200 success, HMAC signature, HTTP 500, URL error).
+  - 6 desktop tests (disabled skip, win32 msg, macOS osascript, Linux notify-send, missing command, empty message).
+  - 4 dispatcher tests (unknown channel skip, default channel = stdout, per-channel isolation, handler table = 3).
+  - 5 settings tests (4 new fields + all_present).
+  - 2 non-Notification event tests (PreToolUse short-circuit, empty message).
+- **Version bumps** — `pyproject.toml`, `harness/__init__.py`, `harness/server/app.py`: 1.10.0 → 1.11.0.
+
+### Trust boundary (preserved)
+
+- `harness/hooks/builtin/notify_terminal.py` — stdlib + `harness.config` + `harness.hooks.context`. NO new imports of `harness.agents` or `harness.server`.
+- The reverse direction (production → observability) is preserved: each handler is fail-open with explicit log warnings.
+- Webhook signing uses HMAC-SHA256 (Python stdlib `hmac` + `hashlib`) — no new deps.
+- Trust boundary AST tests (`tests/test_hooks_trust_boundary.py` + `tests/test_observability_trust_boundary.py`) both pass unchanged.
+
+### Architecture notes
+
+- **Why dispatcher pattern**: per-channel isolation is a correctness requirement — a webhook returning 500 must not prevent a desktop notification from firing. Each handler has its own try/except inside the dispatcher loop; one failure logs and continues to the next channel.
+- **Why opt-in for desktop**: desktop popups are intrusive (modal dialogs on Windows `msg *`, system notifications on macOS/Linux). The default `False` follows the principle of least surprise.
+- **Why `urllib.request` over `httpx`**: keeps the dependency surface at zero. For Notification fanout (low-volume, best-effort), stdlib `urllib` is sufficient. If throughput becomes a concern, swap to `httpx` later without changing the public API.
+- **Why HMAC optional**: zero-friction for local dev (no secret = no signature). Production users set the secret to verify the payload origin.
+
+### Files
+
+- MODIFIED: `harness/hooks/builtin/notify_terminal.py` (rewrite: ~210 LoC, was ~75 LoC — dispatcher + 3 handlers)
+- MODIFIED: `harness/config.py` (+4 settings)
+- MODIFIED: `pyproject.toml` + `harness/__init__.py` + `harness/server/app.py` (version 1.10.0 → 1.11.0)
+- NEW: `tests/test_notify_terminal_channels.py` (29 tests, ~360 LoC)
+
+### Roadmap
+
+- Phase 4.3 = 2/12 step (v1.10.0 + v1.11.0).
+- Phase 4.3+ remaining: WebSocket interactive transport для Elicitation (real prompt-response round trip).
+- Phase 4.4: `harness hooks` / `harness observability` CLI subcommands для event inspection.
+
+---
+
 ## Phase 4.3 v1.10.0 — Elicitation + Notification events (2026-06-16) — Phase 4.3 = 1/12 step
 
 **Phase 4.3 v1.10.0 — 3 new files / 5 modified files / +59 tests / 1973 total tests / 0 new deps**

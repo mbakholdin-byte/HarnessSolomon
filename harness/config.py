@@ -1183,6 +1183,11 @@ class Settings(BaseSettings):
     # Phase 4.3: 2 new builtin hooks for Elicitation + Notification.
     hooks_builtin_confirm_dangerous_enabled: bool = Field(default=True, description="Phase 4.3: enable builtin ConfirmDangerousHook (Elicitation default answer injector).")
     hooks_builtin_notify_terminal_enabled: bool = Field(default=True, description="Phase 4.3: enable builtin NotifyTerminalHook (Notification fanout to stderr).")
+    # Phase 4.3+ v1.11.0: webhook + desktop channels for Notification.
+    hooks_notify_webhook_url: str = Field(default="", description="Phase 4.3+: URL to POST Notification events to (empty = webhook channel disabled).")
+    hooks_notify_webhook_secret: str = Field(default="", description="Phase 4.3+: HMAC-SHA256 secret for X-Harness-Signature header (empty = no signature).")
+    hooks_notify_webhook_timeout_s: float = Field(default=5.0, description="Phase 4.3+: webhook POST timeout in seconds.")
+    hooks_notify_desktop_enabled: bool = Field(default=False, description="Phase 4.3+: enable desktop channel for Notification (opt-in — uses PowerShell msg/osascript/notify-send).")
 
     # === Phase 4.1: Observability — master switches ===
     observability_enabled: bool = Field(
