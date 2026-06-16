@@ -90,6 +90,25 @@ class PrivacyZoneFilter:
         """Read-only view of the configured rules (for tests / introspection)."""
         return list(self._rules)
 
+    def set_rules(self, new_rules: list[ZoneRule]) -> None:
+        """Atomically swap the rules list (Phase 4.2+ hot-reload).
+
+        Used by ``harness.privacy.hot_reload`` to reconfigure the
+        filter at runtime when ``.harness/privacy/*.json`` changes.
+        Existing in-flight ``check()`` calls are not interrupted
+        (Python attribute assignment is atomic under GIL).
+
+        Args:
+            new_rules: Replacement list of :class:`ZoneRule`. Typically
+                       a copy, but the filter stores its own internal
+                       copy so caller mutations don't affect the filter.
+
+        Note:
+            The ``enabled`` flag and ``audit`` sink are preserved
+            across swap — only the rules change.
+        """
+        self._rules = list(new_rules)
+
     def check(self, path: str) -> tuple[ZoneDecision, str | None]:
         """Determine the action to take for a given file path.
 

@@ -417,18 +417,20 @@ async def lifespan(app: FastAPI):
     print(f"[harness] db_path: {settings.db_path}")
     print(f"[harness] project_root: {settings.project_root}")
 
-    # Phase 4.2: hot-reload watchers for .harness/agents/*.md
-    # and .harness/hooks/*.json. Best-effort — if either fails,
-    # log and continue (the app works without hot-reload).
+    # Phase 4.2: hot-reload watchers for .harness/agents/*.md,
+    # .harness/hooks/*.json, and (Phase 4.2+) .harness/privacy/*.json.
+    # Best-effort — if any fails, log and continue (the app works
+    # without hot-reload).
     app.state.hot_reload_watcher = None
     if settings.hot_reload_enabled:
         try:
             from harness.agents.hot_reload import start_agent_hot_reload
             from harness.hooks.hot_reload import start_hook_hot_reload
+            from harness.privacy.hot_reload import start_privacy_hot_reload
             from harness.watcher import get_file_watcher
 
-            # Use the SAME singleton for both agents + hooks.
-            # Calling get_file_watcher() returns the cached instance.
+            # Use the SAME singleton for all watchers. Calling
+            # get_file_watcher() returns the cached instance.
             await start_agent_hot_reload(
                 settings.project_root,
                 debounce_ms=settings.hot_reload_debounce_ms,
@@ -440,6 +442,16 @@ async def lifespan(app: FastAPI):
                 await start_hook_hot_reload(
                     hook_registry,
                     settings.project_root,
+                    debounce_ms=settings.hot_reload_debounce_ms,
+                )
+            # PrivacyZoneFilter may or may not exist (Phase 3 v1.5.0).
+            # If it does, wire the privacy watcher.
+            privacy_zones_filter = getattr(app.state, "privacy_zones", None)
+            if privacy_zones_filter is not None:
+                await start_privacy_hot_reload(
+                    privacy_zones_filter,
+                    settings.project_root,
+                    default_action=settings.privacy_zone_default_action,
                     debounce_ms=settings.hot_reload_debounce_ms,
                 )
             app.state.hot_reload_watcher = get_file_watcher()
@@ -473,7 +485,7 @@ def create_app() -> FastAPI:
     """Build FastAPI app with middleware and routers."""
     app = FastAPI(
         title="Solomon Harness",
-        version="1.8.0",
+        version="1.8.1",
         description=(
             "Open-source agentic shell — Web MVP (Phase 0) + "
             "sub-agent system (Phase 2.0+2.1) + GitHub PR integration (Phase 2.2) "

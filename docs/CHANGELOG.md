@@ -1,5 +1,59 @@
 # Changelog — Solomon Harness
 
+## Phase 4.2+ v1.8.1 — Hot-reload privacy zones (2026-06-16) — Phase 4.2 = 2/12 step
+
+**Phase 4.2+ v1.8.1 — 2 new files / 3 modified files / +27 tests / 1894 total tests / 0 new deps**
+
+Hot-reload для `.harness/privacy/*.json` → `PrivacyZoneFilter` atomic swap. Extends Phase 4.2 v1.8.0 (FileWatcher primitive) на третий hot-reloadable resource. Trust boundary preserved: `harness/privacy/hot_reload.py` imports только `harness.privacy.zone_config` / `zone_filter` / `harness.watcher` (lazy import observability).
+
+### Что закрыто
+
+- **`PrivacyZoneFilter.set_rules(new_rules)`** — `harness/privacy/zone_filter.py`:
+  - Atomic swap для горячей замены rules list.
+  - Копирует input (caller mutations не влияют на filter).
+  - Preserves `enabled` flag и `audit` sink через swap.
+  - Python attribute assignment atomic под GIL — in-flight `check()` не interrupted.
+- **`harness/privacy/hot_reload.py`** (~280 LoC):
+  - `start_privacy_hot_reload(filter_, project_root, *, default_action, debounce_ms, poll_interval_s)` — watches `.harness/privacy/*.json`.
+  - On change → `_parse_privacy_file()` → `filter_.set_rules()`.
+  - Supports both formats: `{"default_action": ..., "rules": [...]}` или просто `[{"pattern": ..., "action": ...}, ...]`.
+  - Validates: pattern required, action в `{block, redact, skip}`, default_action в valid set.
+  - Malformed file → log warning + skip (last good rules stay).
+  - Deleted file → log + skip (conservative: no auto-clear; restart server to revert).
+  - Missing dir → log + return singleton (no crash).
+  - Fail-open + lazy observability import (mirror `agents/hot_reload.py` pattern).
+- **FastAPI lifespan integration** — `harness/server/app.py`:
+  - Privacy watcher wired в существующий hot-reload block (после agents/hooks).
+  - If `app.state.privacy_zones` exists (Phase 3 v1.5.0), wire the watcher.
+  - Best-effort: init failure → log + continue.
+- **Settings** — 0 new (reuses `hot_reload_*` from v1.8.0).
+- **Tests** — `tests/test_privacy_hot_reload.py` (27 tests):
+  - 14 parser tests (dict/list formats, validation, error cases).
+  - 5 atomic swap tests (replace, preserves enabled, copies input, empty).
+  - 7 watcher integration tests (no dir / empty dir / create / modify / malformed / delete / outside filter).
+  - 1 pattern constant test.
+- **Version bumps** — `pyproject.toml` (1.8.0 → 1.8.1), `harness/server/app.py` (1.8.0 → 1.8.1).
+
+### Trust boundary (preserved)
+
+- `harness/privacy/hot_reload.py` — imports `harness.privacy.zone_config`, `harness.privacy.zone_filter`, `harness.watcher`. Lazy import of observability.
+- NO direct imports of `harness.observability`, `harness.hooks`, `harness.server`.
+- Reversed direction: production → observability (allowed by AST test).
+
+### Файлы
+
+- NEW: `harness/privacy/hot_reload.py` (~280 LoC), `tests/test_privacy_hot_reload.py` (27 tests)
+- MODIFIED: `harness/privacy/zone_filter.py` (+14 LoC — `set_rules` method), `harness/server/app.py` (+12 LoC — privacy watcher wiring + version bump), `pyproject.toml` (version 1.8.0 → 1.8.1)
+
+### Roadmap
+
+- Phase 4.2 = 2/12 step (v1.8.0 + v1.8.1).
+- Phase 4.2+ remaining: hot-reload builtin agents (registry swap), `harness reload` CLI command.
+- Phase 4.3: Elicitation + Notification events.
+- Phase 4.4: `harness hooks` / `harness observability` CLI.
+
+---
+
 ## Phase 4.2 v1.8.0 — Hot-reload (file-watcher + agents + hooks, 2026-06-16) — Phase 4.2 = 1/12 step
 
 **Phase 4.2 v1.8.0 — 4 new files / 4 modified files / +29 tests / 1862 total tests / 0 new deps**
