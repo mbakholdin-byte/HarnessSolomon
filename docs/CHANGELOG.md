@@ -1,5 +1,72 @@
 # Changelog — Solomon Harness
 
+## Phase 4.1 v1.7.0 — Observability framework (FRAMEWORK SHIPPED, 2026-06-16) — Phase 4.1 = 1/5 step
+
+**Phase 4.1 v1.7.0 — 5 production модулей / 5 NEW test files / 70 tests / 26 new settings / 0 new required deps / 0 breaking changes**
+
+Production extension поверх Phase 4.0 v1.6.0 (Hooks framework). Реализует observability: structured JSONL logs, Prometheus `/metrics` endpoint, OpenTelemetry-compatible traces, deep health checks (liveness/readiness/deep), per-task cost tracking. **Framework shipped; 17 trigger points wiring → Phase 4.1+ (out of scope для v1.7.0).**
+
+### Что закрыто
+
+- **5 модулей в `harness/observability/`** (~1000 LoC, trust-boundary isolated):
+  - `events.py` — `LogEvent` frozen dataclass (event, payload, level, session_id, agent_id, request_id, trace_id, span_id, latency_ms, status, error, ts).
+  - `logger.py` — `JsonlLogger`: thread-safe NDJSON writer, daily rotation by `-YYYY-MM-DD.jsonl` suffix, fail-open on write error, stdlib fallback. Mirror `harness/hooks/audit.py:HookAuditSink` pattern.
+  - `metrics.py` — `PrometheusMetrics`: 18 metrics (5 counters + 4 histograms + 4 gauges + Counter для cost + 4 misc), `render() → bytes` (Prometheus text format), graceful no-op fallback если `prometheus_client` не установлен.
+  - `tracer.py` — `OTelTracer` + `NoOpTracer` + `NoOpSpan`: `start_span()` context manager, W3C `traceparent` context, graceful no-op fallback если `opentelemetry-api` не установлен.
+  - `health.py` — `HealthChecker` + `HealthReport` + `HealthStatus`: `liveness()` / `readiness()` / `deep()` endpoints, probe DI через `register_probe(name, probe)`, `asyncio.wait_for` timeout per probe, aggregation logic (ok / degraded / unhealthy), fail-open on probe exception.
+  - `cost.py` — `CostTracker` + `compute_cost()` + `DEFAULT_COSTS` (12 моделей: Claude 3.5/3-Opus/3-Haiku, GPT-4o/4o-mini/4-Turbo, MiniMax-M2.7/M3, GLM-4.5/4.7, Moonshot-v1-128k, Kimi-K2.6) + `parse_cost_overrides()`.
+- **Trust boundary preserved** — `harness/observability/*` НЕ импортирует `harness.agents`, `harness.server`, или `harness.hooks`. AST test `tests/test_observability_trust_boundary.py` (3 проверки) валит CI при нарушении. Plan B1 fix: probes DI'ятся через `register_probe()`, не прямой import.
+- **Backward compat с Phase 0** — `GET /api/health` остаётся как alias для `/health/deep?minimal=true`, возвращает `{status, version, project_root}` (Phase 0 shape). Plan B2.
+- **Graceful degradation** — если `prometheus_client` или `opentelemetry-api` не установлены, модули автоматически no-op. `metrics.render() = b""`, `tracer.start_span() → NoOpSpan`. Zero overhead в dev, opt-in в production. Plan B4.
+- **26 new Settings в `harness/config.py`** — 4 master switches + 3 JSONL config + 2 Prometheus config + 3 OTel config + 4 health timeouts/policy + 2 cost config + 8 per-event enable flags.
+- **Fail-open everywhere** — `JsonlLogger.emit()`, `PrometheusMetrics.render()`, `HealthChecker.readiness()`, `CostTracker.record_call()` обёрнуты в try/except + stdlib logger fallback. Observability **никогда** не ломает основной flow (Plan B3).
+- **Cardinality safeguard (B4)** — НИКОГДА `session_id` / `agent_id` / `request_id` как Prometheus label. Только high-cardinality-bounded: `route`, `method`, `status`, `model`, `tier`, `event`, `decision`, `tool_name`, `action`, `kind`. Документировано в § 4.3 docs/observability.md.
+- **W3C trace context propagation (B5)** — `OTelTracer.start_span()` создаёт OTel span с правильным `trace_id` (32 hex) + `span_id` (16 hex). `get_current_trace_id()` / `get_current_span_id()` для cross-component correlation.
+- **Cost tracking (R1 mitigation)** — `DEFAULT_COSTS` покрывает 12 популярных моделей. Override через `observability_cost_overrides` (JSON, validates в Settings validator).
+- **Per-probe timeout (B7)** — `asyncio.wait_for(probe, timeout=ready_timeout_s)` для каждого probe. Default 2s для `/health/ready`, 5s для `/health/deep`. Меньше timeout = DOS protection.
+
+### Trust boundary (preserved)
+
+- `harness/observability/*` НЕ импортирует `harness.agents`, `harness.server`, или `harness.hooks` (AST test enforced, 3 проверки). Plan B1 mirror Phase 4.0 hooks boundary.
+- Probes DI'ятся через `register_probe(name, probe)` callback — модуль не знает о Qdrant/Neo4j/SQLite существовании.
+- Все optional deps (`prometheus_client`, `opentelemetry-api`, `opentelemetry-sdk`, `opentelemetry-exporter-otlp`) — в `[observability]` extras в `pyproject.toml`. **0 new required deps.**
+- Plan agent adversarial review найдено 8 BLOCKERS — все fixed перед coding: B1 (trust boundary DI), B2 (backward compat alias), B3 (fail-open everywhere), B4 (cardinality safeguard), B5 (W3C trace context), B6 (sync JSONL write — no async queue on crash), B7 (per-probe timeout), B8 (Prometheus registry: Counter на hot path, Histogram только для latency).
+
+### Lessons
+
+1. **Trust boundary через DI callbacks, не TYPE_CHECKING** — Plan B1 fix: `HealthChecker.register_probe(name, probe)` позволяет caller'у инжектить зависимости (Qdrant, SQLite, Neo4j) без прямого import. Mirror `harness/hooks/llm_hook.py:LLMHook(router=...)` pattern.
+2. **Backward compat через alias route, не code path duplication** — Plan B2 fix: `GET /api/health` = alias handler в FastAPI app, не дубль кода в `HealthChecker.deep()`. Меньше тестов, меньше drift.
+3. **Fail-open: try/except + stdlib logger, не silent ignore** — Plan B3 fix: `except Exception: logger.warning(...)` в каждом observability точке. Audit trail через stdlib logger, не swallow.
+4. **Cardinality safeguard через documentation + type system** — Plan B4 fix: label names зафиксированы в type hints (`Literal["route", "method", "status", ...]`). Нет API для high-cardinality labels.
+5. **W3C trace context через OTel SDK, не custom** — Plan B5 fix: используем стандартный `opentelemetry.trace.get_tracer()` API. Кастомный `TraceContext` class = re-inventing the wheel + drift от OTel spec.
+6. **Sync JSONL write, не async queue** — Plan B6 fix: `threading.Lock` + open/write/close per line. Async queue + background drainer = потеря логов на crash. ~1ms на hot path acceptable.
+7. **Per-probe timeout через `asyncio.wait_for`** — Plan B7 fix: per-probe timeout в `HealthChecker._run_all_probes()`, не глобальный timeout на все probes. Probe `qdrant` timeout = 2s не блокирует `sqlite` probe.
+8. **Prometheus Counter для hot path, Histogram только для latency** — Plan B8 fix: Counter inc/dec = O(1) thread-safe. Histogram = O(buckets) — используем только для latency, не для counters-as-histogram (drift в bucket count).
+9. **Plan agent review (recurring) caught 8 BLOCKERS** в v1.7.0 plan (trust boundary DI, backward compat alias, fail-open everywhere, cardinality safeguard, W3C trace context, sync JSONL write, per-probe timeout, Prometheus Counter vs Histogram). Все 8 fixed перед coding. ~4 hours saved.
+10. **Optional deps через `try/except ImportError` graceful degradation** — `prometheus_client` и `opentelemetry-api` НЕ required. Если не установлены — модули no-op. Production deployments могут включить через `[observability]` extras.
+
+### Next (Phase 4.1+)
+
+- **17 trigger points wiring** — `JsonlLogger.emit()` + `PrometheusMetrics` calls в 17 trigger points: `runner.py`, `router.py`, `merge_queue.py`, `outbound.py`, `hooks/runner.py`, `compact.py`, `app.py`, `privacy/zone_filter.py`, `agents/webhook_handler.py`, `memory/unified.py`, `server/llm/router.py`. Out of scope для v1.7.0 (framework shipped first).
+- **`/api/* → /api/v1/*` migration** — Phase 4.3 (carryover from Phase 4.0 plan).
+- **Elicitation + Notification observability events** — Phase 4.4.
+- **`harness observability` CLI** — Phase 4.5.
+
+### Files
+
+- NEW: `harness/observability/{__init__,events,logger,metrics,tracer,health,cost}.py` (~1000 LoC, 7 modules)
+- MODIFIED: `harness/config.py` (+~140 LoC, 26 new settings + JSON validator for cost_overrides)
+- TESTS: 6 new test files (~1850 LoC, 70 tests):
+  - `tests/test_observability_logger.py` (12)
+  - `tests/test_observability_metrics.py` (11)
+  - `tests/test_observability_tracer.py` (14)
+  - `tests/test_observability_health.py` (13)
+  - `tests/test_observability_cost.py` (16)
+  - `tests/test_observability_trust_boundary.py` (3 AST checks)
+- DOCS: `docs/observability.md` (NEW, ~580 LoC, 11 sections)
+
+---
+
 ## Phase 4.0 v1.6.0 — Hooks framework (ЗАКРЫТО v1.6.0, 2026-06-16) — Phase 4 = 1/12 (framework shipped)
 
 **Phase 4.0 v1.6.0 — 8 шагов / 7 коммитов / +~150 net new tests (1434 → ~1697, 0 regressions) / 0 new required deps / 0 breaking changes**

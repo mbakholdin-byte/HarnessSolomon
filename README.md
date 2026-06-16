@@ -17,7 +17,8 @@
 - `docs/roadmap.md` — дорожная карта (16–17 недель до production)
 - `docs/PHASE-0-SPEC.md` — спецификация Фазы 0 (Web MVP)
 - `docs/PHASE-0-PLAN.md` — пошаговый план Фазы 0 (11 шагов)
-- `docs/hooks.md` — **Phase 4.0 Hooks framework** (14 events, 4 transports, 5 builtin) ⬅️ новое в v1.6.0
+- `docs/hooks.md` — **Phase 4.0 Hooks framework** (14 events, 4 transports, 5 builtin) ⬅️ v1.6.0
+- `docs/observability.md` — **Phase 4.1 Observability framework** (JSONL logs, Prometheus, OTel, health, cost) ⬅️ новое в v1.7.0
 - `docs/MODEL_REGISTRY.md` — каталог моделей (T1/T2/T3)
 - `docs/architecture.md` — архитектура
 - `docs/quickstart.md` — быстрый старт (<10 мин до первого ответа)
@@ -48,7 +49,16 @@
 - [x] 1697 tests passing, 0 regressions
 - [x] `docs/hooks.md` — полная документация (665 строк, 11 секций)
 
-**Next:** Phase 4.1 — Observability (OpenTelemetry + Prometheus), Phase 4.2 — Hot-reload hooks (file watcher)
+**Phase 4.1 — Observability framework** ✅ (FRAMEWORK SHIPPED, 2026-06-16, v1.7.0)
+
+- [x] 5 модулей: JsonlLogger (NDJSON), PrometheusMetrics (/metrics), OTelTracer (spans), HealthChecker (live/ready/deep), CostTracker (USD per call)
+- [x] Trust boundary preserved (AST test enforced, 3 checks)
+- [x] Graceful degradation: prometheus_client / opentelemetry-api → no-op if not installed
+- [x] 26 new settings, 70 tests, 0 new required deps
+- [x] `docs/observability.md` — полная документация (580 строк, 11 секций)
+- [ ] 17 trigger points wiring (Phase 4.1+)
+
+**Next:** Phase 4.1+ — wire 17 trigger points; Phase 4.2 — Hot-reload hooks (file watcher); Phase 4.3 — /api/* → /api/v1/* migration
 
 ## Стек
 

@@ -1153,6 +1153,171 @@ class Settings(BaseSettings):
     hooks_builtin_inject_context_enabled: bool = Field(default=False, description="Phase 4.0: enable builtin InjectContextHook (off by default — L0 already injected via Phase 3 v1.2.1).")
     hooks_builtin_autosave_enabled: bool = Field(default=True, description="Phase 4.0: enable builtin AutosaveHook.")
 
+    # === Phase 4.1: Observability — master switches ===
+    observability_enabled: bool = Field(
+        default=True,
+        description=(
+            "Phase 4.1: master switch. False → all observability is no-op. "
+            "Mirrors hooks_enabled pattern (Phase 4.0)."
+        ),
+    )
+    observability_jsonl_enabled: bool = Field(
+        default=True,
+        description=(
+            "Phase 4.1: write structured JSONL logs to data/logs/. "
+            "Default True (cheap, ~1ms per log line). Thread-safe."
+        ),
+    )
+    observability_prometheus_enabled: bool = Field(
+        default=False,
+        description=(
+            "Phase 4.1: enable /metrics endpoint. Default OFF (zero overhead). "
+            "Set True for production deployments with Prometheus scrape."
+        ),
+    )
+    observability_otlp_enabled: bool = Field(
+        default=False,
+        description=(
+            "Phase 4.1: export spans via OTLP. Default OFF (requires OTel SDK "
+            "extras + collector endpoint). No-op if SDK not installed."
+        ),
+    )
+
+    # === JSONL logger ===
+    observability_log_dir: Path = Field(
+        default=PROJECT_ROOT / "data" / "logs",
+        description=(
+            "Phase 4.1: directory for harness-YYYY-MM-DD.jsonl files. "
+            "Rotated daily at midnight (date suffix in filename)."
+        ),
+    )
+    observability_log_max_files: int = Field(
+        default=30, ge=1, le=365,
+        description=(
+            "Phase 4.1: max retained rotated log files. Older files are deleted "
+            "by a background task (once per hour). 30 = ~1 month retention."
+        ),
+    )
+    observability_log_max_file_size_mb: int = Field(
+        default=100, ge=1, le=1024,
+        description=(
+            "Phase 4.1: rotate file by size (in addition to daily rotation). "
+            "If a single file exceeds this, rotate early. 0 = size-based disabled."
+        ),
+    )
+
+    # === Prometheus ===
+    observability_metrics_path: str = Field(
+        default="/metrics",
+        description="Phase 4.1: path for Prometheus scrape. Standard is /metrics.",
+    )
+    observability_metrics_namespace: str = Field(
+        default="harness",
+        description="Phase 4.1: metric name prefix. All metrics start with this.",
+    )
+
+    # === OpenTelemetry ===
+    observability_otlp_endpoint: str = Field(
+        default="",
+        description=(
+            "Phase 4.1: OTLP collector endpoint (e.g. http://localhost:4317). "
+            "Empty = no OTLP export."
+        ),
+    )
+    observability_otlp_headers: str = Field(
+        default="",
+        description=(
+            "Phase 4.1: OTLP headers (comma-separated key=value). "
+            "E.g. 'api-key=abc123,x-source=harness'."
+        ),
+    )
+    observability_trace_sample_ratio: float = Field(
+        default=1.0, ge=0.0, le=1.0,
+        description=(
+            "Phase 4.1: trace sampling ratio. 1.0 = sample every request. "
+            "0.1 = sample 10% (reduce collector load)."
+        ),
+    )
+
+    # === Deep health ===
+    observability_health_ready_timeout_s: float = Field(
+        default=2.0, gt=0, le=30.0,
+        description=(
+            "Phase 4.1: per-probe timeout for /health/ready. "
+            "Default 2s. If a DB takes >2s to respond, mark as timeout."
+        ),
+    )
+    observability_health_deep_timeout_s: float = Field(
+        default=5.0, gt=0, le=60.0,
+        description=(
+            "Phase 4.1: total timeout for /health/deep. "
+            "Default 5s. Sum of all probes (sqlite+qdrant+neo4j+queue+...)."
+        ),
+    )
+    observability_health_require_qdrant: bool = Field(
+        default=False,
+        description=(
+            "Phase 4.1: when True, /health/ready returns 503 if Qdrant is down. "
+            "Default False (degraded, not unhealthy)."
+        ),
+    )
+    observability_health_require_neo4j: bool = Field(
+        default=False,
+        description=(
+            "Phase 4.1: when True, /health/ready returns 503 if Neo4j is down."
+        ),
+    )
+
+    # === Cost tracking ===
+    observability_cost_enabled: bool = Field(
+        default=True,
+        description=(
+            "Phase 4.1: compute cost_usd for every LLM call. "
+            "Default True. If False, cost is always 0.0 in logs/metrics."
+        ),
+    )
+    observability_cost_overrides: str = Field(
+        default="",
+        description=(
+            "Phase 4.1: JSON overrides for cost table. Format: "
+            "'{\"gpt-4o\": [3.00, 12.00]}'. Empty = use DEFAULT_COSTS table."
+        ),
+    )
+
+    # === Per-event enable (8 settings) ===
+    observability_log_http_requests: bool = Field(
+        default=True,
+        description="Phase 4.1: log HTTP requests (request_started, request_finished).",
+    )
+    observability_log_llm_calls: bool = Field(
+        default=True,
+        description="Phase 4.1: log LLM calls (model, tokens, cost, latency).",
+    )
+    observability_log_tool_calls: bool = Field(
+        default=True,
+        description="Phase 4.1: log tool calls (tool_name, ok, duration_ms).",
+    )
+    observability_log_hook_dispatches: bool = Field(
+        default=True,
+        description="Phase 4.1: log hook dispatch events (Phase 4.0 hooks).",
+    )
+    observability_log_compactions: bool = Field(
+        default=True,
+        description="Phase 4.1: log compaction events (mode, cache_hit, latency).",
+    )
+    observability_log_merge_queue_events: bool = Field(
+        default=True,
+        description="Phase 4.1: log merge queue events (Phase 2.x).",
+    )
+    observability_log_outbound_deliveries: bool = Field(
+        default=True,
+        description="Phase 4.1: log outbound webhook deliveries (Phase 2.5).",
+    )
+    observability_log_privacy_decisions: bool = Field(
+        default=True,
+        description="Phase 4.1: log privacy zone decisions (Phase 3 v1.5.0).",
+    )
+
     # === Phase 3: Embeddings (ONNX local) ===
     embeddings_dir: Path = Field(
         default=PROJECT_ROOT / "models" / "embeddings",
@@ -1308,6 +1473,26 @@ class Settings(BaseSettings):
                 f"embedding_precision must be 'fp32' or 'int8', "
                 f"got {self.embedding_precision!r}"
             )
+        # Phase 4.1: cost_overrides must be valid JSON object (or empty)
+        if self.observability_cost_overrides:
+            import json as _json
+            try:
+                overrides = _json.loads(self.observability_cost_overrides)
+            except _json.JSONDecodeError as e:
+                raise ValueError(
+                    f"observability_cost_overrides must be valid JSON: {e}"
+                ) from e
+            if not isinstance(overrides, dict):
+                raise ValueError(
+                    "observability_cost_overrides must be a JSON object "
+                    "(e.g. '{\"gpt-4o\": [3.00, 12.00]}')"
+                )
+            for k, v in overrides.items():
+                if not isinstance(k, str) or not isinstance(v, list) or len(v) != 2:
+                    raise ValueError(
+                        f"observability_cost_overrides: key={k!r} must map to "
+                        "[input_cost_per_1k, output_cost_per_1k] (2 floats)"
+                    )
         return self
 
 
