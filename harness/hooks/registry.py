@@ -102,9 +102,11 @@ def parse_spec(spec_string: str, *, hook_id_prefix: str = "user") -> HookSpec:
 
     - builtin:    ``PreToolUse:builtin:log``                       (1 arg)
     - subprocess: ``PreToolUse:subprocess:/path/to/hook.py:3000``  (1 arg + timeout)
-    - http:       ``PreToolUse:http:https://example.com/h:5000:Bearer abc``
-                  (URL is recognised by the ``://`` separator — the rest is
-                  ``[<timeout>][:<auth-header>]``)
+    - http:       ``PreToolUse:http:https://example.com/h:5000`` (timeout)
+                  ``PreToolUse:http:https://example.com/h:Bearer abc`` (auth)
+                  (URL is recognised by the ``://`` separator; tail is
+                  EITHER a timeout OR an auth header, NOT both — timeout
+                  must be last digit-token in the tail)
     - llm:        ``OnRoutingDecision:llm:qwen3:8b:3000:Decide whether to override``
                   (model + timeout + prompt; prompt may contain ``:``)
 

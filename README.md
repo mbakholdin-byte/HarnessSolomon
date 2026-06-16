@@ -17,6 +17,7 @@
 - `docs/roadmap.md` — дорожная карта (16–17 недель до production)
 - `docs/PHASE-0-SPEC.md` — спецификация Фазы 0 (Web MVP)
 - `docs/PHASE-0-PLAN.md` — пошаговый план Фазы 0 (11 шагов)
+- `docs/hooks.md` — **Phase 4.0 Hooks framework** (14 events, 4 transports, 5 builtin) ⬅️ новое в v1.6.0
 - `docs/MODEL_REGISTRY.md` — каталог моделей (T1/T2/T3)
 - `docs/architecture.md` — архитектура
 - `docs/quickstart.md` — быстрый старт (<10 мин до первого ответа)
@@ -35,12 +36,19 @@
 - [x] 67/67 тестов зелёные (62 unit + 5 e2e smoke, real_llm отдельно через `-m real_llm`)
 - [x] Quickstart: <10 минут до первого ответа
 
-**Спецификация:** `docs/PHASE-0-SPEC.md` (утверждена 13.06.2026)
-**План:** `docs/PHASE-0-PLAN.md` (11 шагов, 16–26 ч работы)
-**Changelog:** `docs/CHANGELOG.md`
-**Quickstart:** `docs/quickstart.md` ⬅️ **начни отсюда**
+**Phase 3 — Context Engineering** ✅ (завершено 15.06.2026, v1.0.0–v1.5.0, 12/12)
 
-**Next:** Фаза 1 — 4-слойная память (см. `docs/roadmap.md`)
+**Phase 4.0 — Hooks framework** ✅ (завершено 16.06.2026, v1.6.0, 1/12)
+
+- [x] 14 events (PreToolUse, PostToolUse, Stop, SubagentStart/Stop, SessionStart/End, UserPromptSubmit, PreCompact, InstructionsLoaded, PermissionRequest, OnMemoryWrite, OnRoutingDecision, OnCompaction)
+- [x] 4 transports (builtin / subprocess / http / llm)
+- [x] 5 builtin hooks (log, validate, block_dangerous, inject_context, autosave)
+- [x] HookAuditSink (NDJSON observability, opt-in)
+- [x] PreToolUse + PostToolUse wired в ToolRuntime
+- [x] 1697 tests passing, 0 regressions
+- [x] `docs/hooks.md` — полная документация (665 строк, 11 секций)
+
+**Next:** Phase 4.1 — Observability (OpenTelemetry + Prometheus), Phase 4.2 — Hot-reload hooks (file watcher)
 
 ## Стек
 

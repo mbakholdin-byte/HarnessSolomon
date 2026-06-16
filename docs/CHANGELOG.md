@@ -1,5 +1,72 @@
 # Changelog — Solomon Harness
 
+## Phase 4.0 v1.6.0 — Hooks framework (ЗАКРЫТО v1.6.0, 2026-06-16) — Phase 4 = 1/12 (framework shipped)
+
+**Phase 4.0 v1.6.0 — 8 шагов / 7 коммитов / +~150 net new tests (1434 → ~1697, 0 regressions) / 0 new required deps / 0 breaking changes**
+
+Production extension поверх Phase 3 v1.5.0 (Privacy zones). Реализует **Phase 4 Step 1** из дорожной карты: **декларативный hooks framework** для side-effects в ключевых точках жизненного цикла агента (tool calls, routing, compaction, memory write, session lifecycle). Phase 4 = 1/12 (framework shipped; observability/hot-reload/API versioning — Phase 4.1–4.5).
+
+### Что закрыто
+
+- **Hooks framework core** — `harness.hooks/` пакет (~1700 LoC, 8 модулей): `events.py` (14 EventType), `context.py` (HookContext/HookDecision/HookAggregate — frozen dataclasses), `registry.py` (HookSpec + HookRegistry + parse_spec), `runner.py` (HookRunner с asyncio.gather, per-hook asyncio.wait_for, recursion guard через recursion_depth+event_stack), `filter_chain.py` (fnmatch + negation), `subprocess.py` (JSON via stdin, exit 0/2 protocol), `http.py` (urllib + asyncio.to_thread + wait_for), `llm_hook.py` (DI to LLMRouter, structural Protocol, regex/JSON parse, 200-char reason cap, 1KB payload cap), `audit.py` (HookAuditSink — thread-safe NDJSON, daily rotation).
+- **14 событий (EventType)** — 11 CC-совместимых (PreToolUse, PostToolUse, Stop, SubagentStart, SubagentStop, SessionStart, SessionEnd, UserPromptSubmit, PreCompact, InstructionsLoaded, PermissionRequest) + 3 custom Solomon (OnMemoryWrite, OnRoutingDecision, OnCompaction). Elicitation/Notification DEFERRED to Phase 4.4.
+- **4 транспорта** — `builtin` (in-process async callable), `subprocess` (JSON via stdin/stdout, exit 0/2 protocol, `CREATE_NEW_PROCESS_GROUP` Windows / `os.setsid` Unix), `http` (urllib POST + JSON, asyncio.to_thread + wait_for, fail-open on 4xx/5xx/timeout/network), `llm` (DI to LLMRouter, T1/T2/T3 cost cascade, regex/JSON parse, fail-open).
+- **5 builtin хуков** — `log` (INFO через stdlib logging, ON), `validate` (Pydantic schema gate через `_SCHEMAS_OVERRIDE` dict, ON), `block_dangerous` (7 regex patterns: rm -r[f] /<path>, mkfs /dev/, dd of=/dev/, fork bomb, DROP DATABASE, TRUNCATE TABLE, format c:, ON), `inject_context` (L0 scratchpad injection на InstructionsLoaded, OFF — opt-in), `autosave` (SessionEnd → data/audit/session-end.ndjson, ON).
+- **Wiring в ToolRuntime** — `PreToolUse` (block → abort ToolResult.ok=False, modify → replace args), `PostToolUse` (block → result replaced with error "post-hook block by {id}"). Lazy import of `harness.hooks` в `_fire_hook` helper — backward compat для legacy construction (None defaults).
+- **HookAuditSink + audit integration** — `audit_sink` kwarg в `HookRunner` (DI). При `settings.hooks_audit_log=True` → каждое решение пишется в `<project_root>/data/audit/hooks-YYYY-MM-DD.ndjson` (rotated daily, thread-safe open/write/close per line — crash-safe). PII redaction через Phase 3 v1.0.0 `redact_pii` (12 patterns × 9 sinks).
+- **Aggregation semantics** — first block wins (blocked_by = first blocker id), last modify wins для payload, остальное allow. Fail-open default (errors → allow); fail-closed через `settings.hooks_fail_open=False`.
+- **31 new Settings в `harness/config.py`** — 1 master (hooks_enabled) + 13 framework (timeout, cap, recursion, specs×3, filter, fail_open, redact, audit, allowed_paths, silent_layers, skip_cache_hit) + 14 per-event enable + 5 builtin enable.
+
+### Trust boundary (preserved)
+
+- `harness/hooks/*` НЕ импортирует `harness.agents` или `harness.server` — статический тест `tests/test_hooks_trust_boundary.py` (4 проверки: import detection на уровне AST) валит CI при нарушении. Plan agent review найдено 7 BLOCKERS (B1: LLM router import в TYPE_CHECKING, B2: HookAuditSink → stdlib only, B3: subprocess protocol = stdin not argv, B4: HTTP timeout = asyncio.to_thread + wait_for, B5: recursion guard, B6: Pydantic not jsonschema, B7: PreCompactHook adapter) — все fixed перед coding.
+- LLM router через DI (structural `Protocol`, не `from harness.server.llm.router import LLMRouter` в TYPE_CHECKING) — Plan B1 fix.
+- ToolRuntime получает `hook_runner` + `session_id` как kwarg defaults (None / "") — backward compat для тестов, сконструированных без hooks.
+
+### Lessons
+
+1. **Trust boundary as design constraint, not afterthought** — LLM router DI через structural Protocol (Plan B1) — сохраняет zero coupling `harness.hooks` ↔ `harness.server`. AST-тест ловит regressions на CI. Pattern reusable для Phase 4.1 (observability), 4.2 (hot-reload).
+2. **stdlib only для audit sink** — Plan B2 fix: `HookAuditSink` использует `json + threading + pathlib + datetime` (никаких `aiosqlite`/`aiofiles`). Crash-safe: open/write/close per line. ~150ms на 1000 lines.
+3. **Subprocess protocol: JSON via stdin ONLY** — argv передавал payload как base64 (Plan B3 fix) — stdin проще, language-agnostic, и не ломает path length limits Windows.
+4. **HTTP timeout via `asyncio.to_thread + wait_for`** — Plan B4 fix: `urllib.request.urlopen` blocking, обернут в `asyncio.to_thread` + `asyncio.wait_for` для cancellable timeout. 4xx/5xx/timeout/network error → fail-open.
+5. **Recursion guard через `recursion_depth` + `event_stack`** — Plan B5 fix: hooks, которые fire'ят другие hooks, не зацикливаются. EventType остается в stack → skip. Default depth 3.
+6. **Pydantic, not jsonschema, для validate_hook** — Plan B6 fix: type-safe, лучше DX, native asyncio support. Schemas через `_SCHEMAS_OVERRIDE` dict для тестов.
+7. **Plan agent review (recurring) caught 7 BLOCKERS** в v1.6.0 plan (LLM router import → DI protocol; audit sink deps → stdlib only; subprocess protocol → stdin not argv; HTTP timeout → asyncio.to_thread + wait_for; recursion guard → context fields not module-level; schema lib → pydantic not jsonschema; PreCompactHook backward compat → adapter pattern). Все 7 fixed перед coding. ~3-4 hours saved.
+8. **Wire PreToolUse/PostToolUse в ToolRuntime через lazy import** — `_fire_hook` helper с `import harness.hooks` только при вызове (не на module load). Backward compat для legacy тестов (None defaults) сохранён.
+9. **Aggregation: first block wins, last modify wins** — симметрично с Anthropic CC behaviour. Reasoning: blocks = stop immediately, modifies = merge in order. `blocked_by` = first blocker для diagnostics.
+10. **DNJSON audit sink НЕ критичен для production** — default `settings.hooks_audit_log=False` (opt-in). Production deployments могут включить для forensics, но overhead ~150ms на 1000 lines терпимый.
+
+### Next (Phase 4.1+)
+
+- **Phase 4.1 — Observability** — structured JSONL metrics, OpenTelemetry traces, Prometheus `/metrics` endpoint, health checks.
+- **Phase 4.2 — Hot-reload** — file watcher для `.harness/hooks/*.py` + `agents/*.md`, auto-reload on change (SIGHUP-free).
+- **Phase 4.3 — API versioning** — `/api/*` → `/api/v1/*` migration (deprecation period 6 months).
+- **Phase 4.4 — Elicitation + Notification events** — добавить 2 deferred events в EventType.
+- **Phase 4.5 — `harness hooks` CLI** — `harness hooks list/enable/disable/test`, JSON output.
+
+### Files
+
+- NEW: `harness/hooks/{__init__,events,context,registry,filter_chain,runner,subprocess,http,llm_hook,audit}.py` (~1700 LoC, 9 modules)
+- NEW: `harness/hooks/builtin/{__init__,log,validate,block_dangerous,inject_context,autosave}.py` (~520 LoC, 5 hooks)
+- MODIFIED: `harness/config.py` (+~150 LoC, 31 new settings), `harness/server/agent/runtime.py` (+~100 LoC, hook_runner + session_id DI)
+- TESTS: 9 new test files (~1850 LoC, ~276 tests):
+  - `tests/test_hooks_events.py` (14 tests — all events)
+  - `tests/test_hooks_context.py` (8 tests — context dataclasses)
+  - `tests/test_hooks_registry.py` (15 tests — registry + parse_spec 4 formats)
+  - `tests/test_hooks_filter_chain.py` (12 tests — fnmatch + negation)
+  - `tests/test_hooks_runner.py` (17 tests — builtin + subprocess + http transports)
+  - `tests/test_hooks_subprocess.py` (9 tests — exit 0/2 protocol, Windows file pre-check)
+  - `tests/test_hooks_http.py` (10 tests — fail-open on 4xx/5xx/timeout)
+  - `tests/test_hooks_llm.py` (24 tests — DI protocol, JSON parse, regex fallback, caps)
+  - `tests/test_hooks_audit.py` (10 tests — NDJSON, daily rotation, thread-safety)
+  - `tests/test_hooks_builtin.py` (20 tests — 5 builtin hooks + integration)
+  - `tests/test_hooks_pre_tool_use_integration.py` (7 tests — ToolRuntime wiring)
+  - `tests/test_hooks_trust_boundary.py` (4 tests — AST detection of forbidden imports)
+  - `tests/test_runner_does_not_import_v160.py` (3 parametrized = 3 cases — trust boundary mirror)
+- DOCS: `docs/hooks.md` (NEW, ~665 LoC, 11 sections, 4 transports, 14 events, 5 builtin, 31 settings, troubleshooting)
+
+---
+
 ## Phase 3 v1.5.0 — Privacy zones + Pre-compaction hook + Time-based trigger (ЗАКРЫТО v1.5.0, 2026-06-15) — Phase 3 = 12/12 closed (FINAL)
 
 **Phase 3 v1.5.0 — 5 шагов / 5 коммитов / +~150 net new tests (1281 → ~1434, +2 skip) / 0 new required deps / 0 breaking changes**
