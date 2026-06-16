@@ -291,6 +291,15 @@ class MergeQueue:
             raise RuntimeError(
                 "enqueue_async requires a JobStore; pass store=... to MergeQueue"
             )
+        # Phase 4.1 Step 6.7: emit enqueue event.
+        try:
+            from harness.observability import emit_merge_queue_event
+            emit_merge_queue_event(
+                kind="enqueue",
+                status="ok",
+            )
+        except Exception:  # noqa: BLE001
+            pass
         job_id = await self.store.create(
             worktree_id=job.worktree_id,
             model=job.model or job.code_spec.model,
@@ -412,6 +421,35 @@ class MergeQueue:
         (Phase 2.0) cover the logic; :meth:`_run_job_async` adds
         status persistence on top.
         """
+        # Phase 4.1 Step 6.7: emit start; final status emitted at end.
+        try:
+            from harness.observability import emit_merge_queue_event
+            emit_merge_queue_event(kind="start", status="ok", job_id=job_id)
+        except Exception:  # noqa: BLE001
+            pass
+        _final_status = "merged"
+        try:
+            await self._run_job_async_impl(job, job_id)
+        except Exception as exc:  # noqa: BLE001
+            _final_status = "failed"
+            try:
+                from harness.observability import emit_merge_queue_event
+                emit_merge_queue_event(
+                    kind="finish", status="error", job_id=job_id, error=str(exc),
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            raise
+        else:
+            try:
+                from harness.observability import emit_merge_queue_event
+                emit_merge_queue_event(
+                    kind="finish", status="ok", job_id=job_id,
+                )
+            except Exception:  # noqa: BLE001
+                pass
+
+    async def _run_job_async_impl(self, job: MergeJob, job_id: str) -> None:
         repo = self._job_repo(job)
         async with self._locks.lock_for(repo):
             await self._emit(job_id, "started")

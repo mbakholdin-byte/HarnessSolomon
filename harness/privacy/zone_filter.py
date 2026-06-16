@@ -116,6 +116,14 @@ class PrivacyZoneFilter:
         for rule in self._rules:
             if match_glob(path, rule.pattern):
                 self._safe_audit(rule.action, path, rule.pattern)
+                # Phase 4.1 Step 6.9: emit privacy decision.
+                try:
+                    from harness.observability import emit_privacy_decision
+                    emit_privacy_decision(
+                        action=rule.action, path=path, pattern=rule.pattern,
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
                 return (rule.action, rule.pattern)
 
         return ("allow", None)

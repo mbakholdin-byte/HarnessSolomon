@@ -149,6 +149,26 @@ class HookRunner:
         Recursion guard: if ``context.recursion_depth`` exceeds
         ``max_recursion_depth``, short-circuits to ``allow``.
         """
+        import time as _time
+        from harness.observability import emit_hook_dispatch
+
+        _start = _time.monotonic()
+        aggregate = await self._fire_impl(context)
+        # Phase 4.1 Step 6.5: emit hook dispatch metric + log AFTER
+        # the aggregate is built. decision ∈ {allow, block, modify}.
+        try:
+            emit_hook_dispatch(
+                event=context.event,
+                decision=aggregate.final_decision,
+                duration_s=_time.monotonic() - _start,
+                hook_name=aggregate.blocked_by or "",
+                request_id=context.request_id or "",
+            )
+        except Exception:  # noqa: BLE001 — observability must never break hooks
+            logger.debug("emit_hook_dispatch failed for %s", context.event, exc_info=True)
+        return aggregate
+
+    async def _fire_impl(self, context: HookContext) -> HookAggregate:
         if context.recursion_depth >= self._max_recursion_depth:
             logger.debug(
                 "Hook recursion depth %d exceeded %d — short-circuit allow",

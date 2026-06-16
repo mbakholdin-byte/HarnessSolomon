@@ -17,6 +17,20 @@ from __future__ import annotations
 
 from harness.observability.events import LogEvent
 from harness.observability.cost import CostTracker, DEFAULT_COSTS, compute_cost
+from harness.observability.emit import (
+    ObservabilityHandle,
+    emit_compaction,
+    emit_hook_dispatch,
+    emit_http_request,
+    emit_llm_call,
+    emit_merge_queue_event,
+    emit_outbound_delivery,
+    emit_privacy_decision,
+    emit_tool_call,
+    emit_webhook_inbound,
+    get_observability,
+    reset_observability,
+)
 from harness.observability.health import HealthChecker, HealthReport, HealthStatus
 from harness.observability.logger import JsonlLogger
 from harness.observability.metrics import PrometheusMetrics
@@ -41,4 +55,17 @@ __all__ = [
     "CostTracker",
     "DEFAULT_COSTS",
     "compute_cost",
+    # Singleton + emit helpers (Phase 4.1 Step 6)
+    "ObservabilityHandle",
+    "get_observability",
+    "reset_observability",
+    "emit_http_request",
+    "emit_llm_call",
+    "emit_tool_call",
+    "emit_hook_dispatch",
+    "emit_compaction",
+    "emit_merge_queue_event",
+    "emit_outbound_delivery",
+    "emit_privacy_decision",
+    "emit_webhook_inbound",
 ]

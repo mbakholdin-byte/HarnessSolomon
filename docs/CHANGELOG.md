@@ -1,5 +1,84 @@
 # Changelog — Solomon Harness
 
+## Phase 4.1 v1.7.1 — Observability wiring (17 trigger points + endpoints, 2026-06-16) — Phase 4.1 = 2/5 step
+
+**Phase 4.1 v1.7.1 — 9 new files / 5 modified files / +27 tests / 1813 total tests / 0 new deps / 0 breaking changes**
+
+Production wiring of observability into the 17 trigger points deferred from v1.7.0. Adds the singleton `ObservabilityHandle` access layer, FastAPI middleware for HTTP request metrics, Prometheus `/metrics` endpoint, and 3 health endpoints (`/health/live`, `/health/ready`, `/health/deep`).
+
+### Что закрыто
+
+- **Singleton wiring layer** — `harness/observability/emit.py` (308 LoC):
+  - `ObservabilityHandle` dataclass (settings + logger + metrics + tracer + health + cost).
+  - `get_observability()` — process-level singleton, double-checked locking, lazy-init from Settings, thread-safe.
+  - `reset_observability()` — for tests + hot-reload.
+  - 9 high-level helpers (`emit_http_request`, `emit_llm_call`, `emit_tool_call`, `emit_hook_dispatch`, `emit_compaction`, `emit_merge_queue_event`, `emit_outbound_delivery`, `emit_privacy_decision`, `emit_webhook_inbound`) — all fail-open (try/except + stdlib logger), all gate on per-event Settings flags.
+  - `handle.metric_inc/metric_observe/metric_add/metric_set/span/emit` — uniform low-level API.
+- **HTTP request middleware** — `harness/server/middleware.py` (~95 LoC):
+  - `ObservabilityMiddleware` records `http_requests_total{route,method,status}` + `http_request_duration_seconds{route,method}` on every request.
+  - Route label uses FastAPI route template (e.g. `/api/v1/agents/jobs/{id}`) — never raw path → cardinality safe.
+  - Falls back to normalised path (UUIDs/numerics → `{uuid}`/`{id}`) for unmatched routes.
+  - Adds `x-request-id` header (generated or echoed).
+- **5 trigger points в `harness/agents/` / `harness/hooks/` / `harness/privacy/`**:
+  - `router.py` (LLM router) — `emit_llm_call` at completion + error path. Tier from model catalog, cost via `compute_cost()`.
+  - `merge_queue.py` — `emit_merge_queue_event` at enqueue/start/finish, try/finally pattern in `_run_job_async`.
+  - `outbound.py` — `emit_outbound_delivery` at 2xx, 4xx, 5xx, timeout/giveup.
+  - `webhook_handler.py` — `emit_webhook_inbound` at start + on signature verify fail.
+  - `privacy/zone_filter.py` — `emit_privacy_decision` on every non-allow match.
+- **3 trigger points в `harness/server/agent/`, `harness/hooks/`, `harness/context/`**:
+  - `runtime.py` (ToolRuntime) — `emit_tool_call` after PostToolUse hook fires.
+  - `hooks/runner.py` — `emit_hook_dispatch` at end of `fire()` with final decision.
+  - `context/compaction.py` — `emit_compaction` in `force_compact` (cache-hit + slow-path) + `_safe_pre_compact_hook` (pre_compact mode).
+- **5 HTTP endpoints** — `harness/server/routes/observability.py` (~60 LoC):
+  - `GET /metrics` — Prometheus text format (no-op if `prometheus_client` missing or `observability_prometheus_enabled=False`).
+  - `GET /health/live` — liveness (always 200 unless Python broken).
+  - `GET /health/ready` — readiness (configurable probes; 503 if `require_qdrant` / `require_neo4j` set + dep down).
+  - `GET /health/deep` — deep probe (all registered probes with full timeout).
+  - `GET /api/health` — backward-compat alias for `/health/deep` (Phase 0+).
+- **Per-event opt-out via Settings** — 8 flags (`observability_log_http_requests`, `observability_log_llm_calls`, etc.). Disabling → zero-overhead no-op (test verified).
+- **Master switch** — `observability_enabled=False` → all `handle.emit()` calls no-op (test verified).
+
+### Trust boundary (preserved)
+
+- `harness/observability/*` still does NOT import `harness.agents`, `harness.server`, or `harness.hooks` (AST test enforced, 3 checks).
+- Production modules (agents/server/hooks/privacy) DO import `harness.observability` (singleton handle + helpers) — **reversed direction is allowed**, the boundary is one-way.
+- No new deps. `JsonlLogger` + `PrometheusMetrics` + `OTelTracer` + `HealthChecker` + `CostTracker` already shipped in v1.7.0.
+
+### Lessons
+
+1. **Trigger point wrapping = no flow changes** — every emit is in a `try/except` + fires at the end of the existing function. No business-logic refactor needed; observability is purely additive.
+2. **Cardinality safeguard via route template, not raw path** — FastAPI's `request.scope["route"].path` gives `/api/v1/agents/jobs/{id}` instead of `/api/v1/agents/jobs/abc-123`. Plan B4 mitigation, applies here too.
+3. **Per-event Settings opt-out is more useful than master switch** — 8 flags let operators disable noisy event classes (e.g. `observability_log_tool_calls=False` in dev) without losing the others. Master switch is the kill switch.
+4. **try/finally > insert-at-each-return** — for `force_compact` and `_run_job_async`, wrapping the body in a new `_impl` method with try/finally in the wrapper is cleaner than emitting at every return point.
+5. **Backward-compat alias route, not code path duplication** — `/api/health` = FastAPI alias for `/health/deep`. Same as Phase 4.0 docs/hooks.md "use existing route, not duplicate".
+
+### Next (Phase 4.1+)
+
+- Phase 4.1 Step 7 (deferred): `/api/* → /api/v1/*` migration + OpenAPI schema sync.
+- Phase 4.2: Hot-reload hooks + agents via file watcher.
+- Phase 4.3: Elicitation + Notification observability events.
+- Phase 4.4: `harness observability` CLI (tail logs, scrape metrics, health snapshot).
+
+### Files
+
+- NEW: `harness/observability/emit.py` (308 LoC)
+- NEW: `harness/server/middleware.py` (~95 LoC)
+- NEW: `harness/server/routes/observability.py` (~60 LoC)
+- NEW: `tests/test_observability_wiring.py` (27 tests)
+- MODIFIED: `harness/observability/__init__.py` (+26 LoC, public API exports)
+- MODIFIED: `harness/server/app.py` (+12 LoC, middleware + router)
+- MODIFIED: `harness/server/llm/router.py` (+30 LoC, LLM call emit)
+- MODIFIED: `harness/server/agent/runtime.py` (+12 LoC, tool call emit)
+- MODIFIED: `harness/hooks/runner.py` (+18 LoC, hook dispatch emit)
+- MODIFIED: `harness/agents/merge_queue.py` (+40 LoC, queue events)
+- MODIFIED: `harness/agents/outbound.py` (+25 LoC, delivery emit)
+- MODIFIED: `harness/agents/webhook_handler.py` (+20 LoC, inbound emit)
+- MODIFIED: `harness/privacy/zone_filter.py` (+7 LoC, privacy decision)
+- MODIFIED: `harness/context/compaction.py` (+60 LoC, compaction events)
+- MODIFIED: `pyproject.toml`, `harness/__init__.py`, `harness/server/app.py` (version 1.7.1)
+
+---
+
 ## Phase 4.1 v1.7.0 — Observability framework (FRAMEWORK SHIPPED, 2026-06-16) — Phase 4.1 = 1/5 step
 
 **Phase 4.1 v1.7.0 — 5 production модулей / 5 NEW test files / 70 tests / 26 new settings / 0 new required deps / 0 breaking changes**

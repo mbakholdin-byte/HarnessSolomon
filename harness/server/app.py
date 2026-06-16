@@ -430,7 +430,7 @@ def create_app() -> FastAPI:
     """Build FastAPI app with middleware and routers."""
     app = FastAPI(
         title="Solomon Harness",
-        version="0.6.0",
+        version="1.7.1",
         description=(
             "Open-source agentic shell — Web MVP (Phase 0) + "
             "sub-agent system (Phase 2.0+2.1) + GitHub PR integration (Phase 2.2) "
@@ -448,6 +448,10 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    # Phase 4.1 Step 6.2: HTTP request metrics + structured logging
+    from harness.server.middleware import install_observability_middleware
+    install_observability_middleware(app)
+
     # Routers
     from harness.server.routes.health import router as health_router
     from harness.server.routes.sessions import router as sessions_router
@@ -460,6 +464,9 @@ def create_app() -> FastAPI:
     from harness.server.routes.agents_webhooks import router as agents_webhooks_router
 
     app.include_router(health_router, prefix="/api", tags=["health"])
+    # Phase 4.1 Step 6.11: /metrics + /health/* (no prefix — top-level endpoints)
+    from harness.server.routes.observability import router as observability_router
+    app.include_router(observability_router, tags=["observability"])
     app.include_router(sessions_router, prefix="/api", tags=["sessions"])
     app.include_router(models_router, prefix="/api", tags=["models"])
     app.include_router(chat_router, prefix="/api/chat")  # WebSocket only

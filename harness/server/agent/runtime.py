@@ -29,6 +29,7 @@ from harness.server.agent.safety import (
     resolve_safe_path,
 )
 from harness.config import settings as _settings
+from harness.observability import emit_tool_call as _emit_tool_call
 from harness.redaction import redact as _redact
 
 logger = logging.getLogger(__name__)
@@ -292,6 +293,16 @@ class ToolRuntime:
                 ok=False,
                 error=f"post-hook block by {post_agg.blocked_by}",
             )
+        # Phase 4.1 Step 6.4: emit tool call metric + log.
+        try:
+            _emit_tool_call(
+                tool_name=name,
+                duration_s=((result.duration_ms or 0) / 1000.0),
+                status="ok" if result.ok else "error",
+                error=result.error or "",
+            )
+        except Exception:  # noqa: BLE001 — observability must never break tools
+            logger.debug("emit_tool_call failed for %s", name, exc_info=True)
         return result
 
     async def _fire_hook(self, *, event: str, payload: dict) -> Any:

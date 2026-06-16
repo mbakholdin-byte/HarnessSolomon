@@ -55,6 +55,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 from harness.config import Settings
 from harness.context.prompts import SUMMARY_SYSTEM_PROMPT
+from harness.observability import emit_compaction as _emit_compaction
 from harness.server.llm.router import LLMRouter
 
 if TYPE_CHECKING:
@@ -574,6 +575,8 @@ class ContextCompactor:
             return
         # Read timeout at call time (mirror v1.4.0 reflection pattern).
         max_ms = int(getattr(self._settings, "pre_compact_max_ms", 5000))
+        # Phase 4.1 Step 6.6: pre-compact event timing.
+        _obs_start = time.monotonic()
         try:
             await asyncio.wait_for(
                 hook(
@@ -591,11 +594,30 @@ class ContextCompactor:
                 "pre_compact_hook timeout (%dms) for session=%s",
                 max_ms, session_id,
             )
+            try:
+                _emit_compaction(
+                    mode="pre_compact",
+                    cache_hit=False,
+                    duration_s=time.monotonic() - _obs_start,
+                    session_id=session_id,
+                )
+            except Exception:  # noqa: BLE001
+                pass
         except Exception as exc:  # noqa: BLE001 — hook MUST fail-open
             logger.warning(
                 "pre_compact_hook failed for session=%s: %s",
                 session_id, exc,
             )
+        else:
+            try:
+                _emit_compaction(
+                    mode="pre_compact",
+                    cache_hit=False,
+                    duration_s=time.monotonic() - _obs_start,
+                    session_id=session_id,
+                )
+            except Exception:  # noqa: BLE001
+                pass
 
     async def force_compact(
         self,
@@ -645,6 +667,11 @@ class ContextCompactor:
                 summary_preview="",
                 cache_hit=False,
             )
+        # Phase 4.1 Step 6.6: start timer for emit_compaction.
+        _obs_start = time.monotonic()
+        _obs_mode = "manual"
+        _obs_cache_hit = False
+        _obs_session_id = session_id or self._session_id or ""
         effective_session_id = session_id or self._session_id
         ctx = _model_ctx(model, self._settings)
         # Force threshold=0 so the slow path always runs. Target stays
@@ -689,6 +716,16 @@ class ContextCompactor:
                     preview = (cached.summary[:200] + "…") if len(
                         cached.summary
                     ) > 200 else cached.summary
+                    # Phase 4.1 Step 6.6: emit cache-hit event.
+                    try:
+                        _emit_compaction(
+                            mode=_obs_mode,
+                            cache_hit=True,
+                            duration_s=time.monotonic() - _obs_start,
+                            session_id=_obs_session_id,
+                        )
+                    except Exception:  # noqa: BLE001
+                        logger.debug("emit_compaction failed", exc_info=True)
                     return CompactResult(
                         original_tokens=tokens,
                         compacted_tokens=cached.compacted_tokens,
@@ -747,6 +784,16 @@ class ContextCompactor:
                 original_tokens=tokens,
                 compacted_tokens=compacted_tokens,
             )
+        # Phase 4.1 Step 6.6: emit slow-path event (cache_hit=False).
+        try:
+            _emit_compaction(
+                mode=_obs_mode,
+                cache_hit=False,
+                duration_s=time.monotonic() - _obs_start,
+                session_id=_obs_session_id,
+            )
+        except Exception:  # noqa: BLE001
+            logger.debug("emit_compaction failed", exc_info=True)
         return CompactResult(
             original_tokens=tokens,
             compacted_tokens=compacted_tokens,

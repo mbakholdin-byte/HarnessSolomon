@@ -15,10 +15,12 @@ return a `_hidden_params["response_cost"]` of its own.
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, AsyncIterator
 
 from pydantic import BaseModel
 
+from harness.observability import emit_llm_call
 from harness.server.llm.models import DEFAULT_MAX_TOOLS, get_model
 
 logger = logging.getLogger(__name__)
@@ -131,11 +133,51 @@ class LLMRouter:
         if tools is not None:
             call_kwargs["tools"] = tools
 
-        # litellm.completion is a sync function. In production we run it in
-        # a worker thread to avoid blocking the event loop. In tests, the
-        # function may be an AsyncMock, in which case we await it directly.
-        response = await self._call_litellm_completion(model, messages, **call_kwargs)
-        return self._normalize_completion(model, response)
+        # Phase 4.1 Step 6.3: observe LLM call (latency, cost, tokens).
+        tier = "T3"  # default
+        try:
+            spec = get_model(model)
+            if spec is not None:
+                tier = spec.tier
+        except Exception:  # noqa: BLE001 — never block on tier lookup
+            pass
+        start = time.monotonic()
+        status = "ok"
+        error_msg = ""
+        try:
+            # litellm.completion is a sync function. In production we run it in
+            # a worker thread to avoid blocking the event loop. In tests, the
+            # function may be an AsyncMock, in which case we await it directly.
+            response = await self._call_litellm_completion(model, messages, **call_kwargs)
+        except Exception as exc:  # noqa: BLE001 — capture for observability
+            status = "error"
+            error_msg = str(exc)
+            duration = time.monotonic() - start
+            emit_llm_call(
+                model=model,
+                tier=tier,
+                prompt_tokens=0,
+                completion_tokens=0,
+                duration_s=duration,
+                status=status,
+                error=error_msg,
+            )
+            raise
+        result = self._normalize_completion(model, response)
+        duration = time.monotonic() - start
+        try:
+            usage = result.usage or {}
+            emit_llm_call(
+                model=model,
+                tier=tier,
+                prompt_tokens=int(usage.get("prompt_tokens", 0) or 0),
+                completion_tokens=int(usage.get("completion_tokens", 0) or 0),
+                duration_s=duration,
+                status=status,
+            )
+        except Exception:  # noqa: BLE001 — observability must never break completion
+            logger.debug("emit_llm_call failed", exc_info=True)
+        return result
 
     async def _call_litellm_completion(
         self, model: str, messages: list[dict], **call_kwargs: Any

@@ -236,6 +236,11 @@ class OutboundWebhookDispatcher:
 
     async def _deliver_one(self, url: str, event: dict[str, Any]) -> None:
         """POST to one URL with exponential backoff retries."""
+        # Phase 4.1 Step 6.8: timing.
+        import time as _time
+        from harness.observability import emit_outbound_delivery
+        _obs_start = _time.monotonic()
+        _kind = str(event.get("kind") or event.get("event") or "unknown")
         headers = {"Content-Type": "application/json"}
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
@@ -260,6 +265,14 @@ class OutboundWebhookDispatcher:
                 last_err = f"http_error: {e}"
             else:
                 if 200 <= resp.status_code < 300:
+                    try:
+                        emit_outbound_delivery(
+                            kind=_kind,
+                            status_code=str(resp.status_code),
+                            duration_s=_time.monotonic() - _obs_start,
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
                     return  # success
                 if 400 <= resp.status_code < 500:
                     # 4xx = "client error, won't fix by retrying".
@@ -270,6 +283,15 @@ class OutboundWebhookDispatcher:
                         event.get("kind"), url, resp.status_code,
                         resp.text[:200],
                     )
+                    try:
+                        emit_outbound_delivery(
+                            kind=_kind,
+                            status_code=str(resp.status_code),
+                            duration_s=_time.monotonic() - _obs_start,
+                            error=resp.text[:200] or "",
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
                     return
                 # 5xx — retry.
                 last_err = f"http {resp.status_code}: {resp.text[:200]}"
@@ -287,6 +309,16 @@ class OutboundWebhookDispatcher:
             "outbound: giving up on %s for %s after %d attempt(s): %s",
             event.get("kind"), url, self.max_retries + 1, last_err,
         )
+        # Phase 4.1 Step 6.8: emit giveup event.
+        try:
+            emit_outbound_delivery(
+                kind=_kind,
+                status_code="timeout" if last_err.startswith("timeout") else "5xx",
+                duration_s=_time.monotonic() - _obs_start,
+                error=last_err,
+            )
+        except Exception:  # noqa: BLE001
+            pass
 
 
 __all__ = [

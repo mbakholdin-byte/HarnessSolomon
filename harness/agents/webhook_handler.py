@@ -382,10 +382,26 @@ class WebhookHandler:
             successfully recorded. ``None`` for redeliveries
             (the route should still return 200 in that case).
         """
+        # Phase 4.1 Step 6.10: emit inbound event at start.
+        try:
+            from harness.observability import emit_webhook_inbound
+            emit_webhook_inbound(event_type=event_type, status="ok", delivery_id=delivery_id)
+        except Exception:  # noqa: BLE001
+            pass
         # 1. HMAC verify — fails before any expensive work.
-        verify_github_signature(
-            body=body, signature_header=signature, secret=self.secret,
-        )
+        try:
+            verify_github_signature(
+                body=body, signature_header=signature, secret=self.secret,
+            )
+        except Exception as exc:
+            try:
+                from harness.observability import emit_webhook_inbound
+                emit_webhook_inbound(
+                    event_type=event_type, status="error", delivery_id=delivery_id,
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            raise
         # 2. Fast-path duplicate check (avoids the JSON parse).
         if await self.store.is_duplicate(delivery_id):
             logger.info("webhook redelivery: delivery_id=%s", delivery_id)
