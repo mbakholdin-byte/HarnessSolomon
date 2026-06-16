@@ -91,6 +91,8 @@ class ToolRuntime:
         reflection: Any = None,
         events_collector: Any = None,
         privacy_zones: Any = None,
+        hook_runner: Any = None,
+        session_id: str = "",
     ) -> None:
         self.project_root = project_root.resolve(strict=False)
         #: Phase 3 v1.2.0: optional scratchpad store. When ``None`` the
@@ -158,6 +160,14 @@ class ToolRuntime:
         #: or the filter is disabled, the check short-circuits to
         #: ``("allow", None)``.
         self._privacy_zones = privacy_zones
+        #: Phase 4.0: optional hook runner. When set, ``execute`` fires
+        #: ``PreToolUse`` and ``PostToolUse`` events. ``None`` disables
+        #: hooks entirely (backward compat with pre-v4.0). The runner is
+        #: typed as ``Any`` to keep the trust boundary: the runtime does
+        #: not import the hooks package at module level.
+        self._hook_runner = hook_runner
+        #: Phase 4.0: session id (for hook context).
+        self._session_id = session_id
 
     # --- privacy zone helper ---
 
@@ -209,6 +219,24 @@ class ToolRuntime:
 
     async def execute(self, name: str, args: dict[str, Any]) -> ToolResult:
         """Dispatch to the right handler. Unknown tool → error result."""
+        # Phase 4.0: fire PreToolUse hook before dispatch.
+        pre_agg = await self._fire_hook(
+            event="PreToolUse",
+            payload={"tool_name": name, "arguments": args},
+        )
+        if pre_agg is not None and pre_agg.final_decision == "block":
+            reason = ""
+            for d in pre_agg.decisions:
+                if d.hook_id == pre_agg.blocked_by:
+                    reason = d.output.get("reason", "no reason")
+                    break
+            return ToolResult(
+                ok=False,
+                error=f"blocked by hook {pre_agg.blocked_by}: {reason}",
+            )
+        # Apply pre-hook payload modifications (if any).
+        if pre_agg is not None and pre_agg.final_decision == "modify":
+            args = pre_agg.final_payload.get("arguments", args)
         start = time.monotonic()
         try:
             if name == "read_file":
@@ -248,7 +276,44 @@ class ToolRuntime:
         if result.duration_ms is None:
             elapsed_ms = int((time.monotonic() - start) * 1000)
             result = result.model_copy(update={"duration_ms": elapsed_ms})
+        # Phase 4.0: fire PostToolUse hook after dispatch.
+        post_agg = await self._fire_hook(
+            event="PostToolUse",
+            payload={
+                "tool_name": name,
+                "arguments": args,
+                "ok": result.ok,
+                "output": result.output[:500] if result.output else "",
+                "error": result.error,
+            },
+        )
+        if post_agg is not None and post_agg.final_decision == "block":
+            return ToolResult(
+                ok=False,
+                error=f"post-hook block by {post_agg.blocked_by}",
+            )
         return result
+
+    async def _fire_hook(self, *, event: str, payload: dict) -> Any:
+        """Fire a hook via the injected ``hook_runner`` (Phase 4.0).
+
+        Returns the ``HookAggregate`` (or ``None`` if no runner is set).
+        All hook failures are swallowed — they never break tool execution.
+        """
+        if self._hook_runner is None:
+            return None
+        try:
+            from harness.hooks import EventType, HookContext
+
+            ctx = HookContext(
+                event=event,
+                session_id=self._session_id,
+                agent_id="",
+                payload=payload,
+            )
+            return await self._hook_runner.fire(ctx)
+        except Exception:  # noqa: BLE001
+            return None
 
     # --- file tools ---
 
