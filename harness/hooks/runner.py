@@ -253,12 +253,18 @@ class HookRunner:
     ) -> HookDecision:
         """Dispatch a single hook by transport.
 
-        Phase 4.0 Step 1: builtin only. Subprocess / HTTP / LLM deferred.
+        Phase 4.0 Step 2: builtin + subprocess. HTTP / LLM deferred.
         """
+        timeout = spec.timeout_ms or self._default_timeout_ms
         if spec.transport == "builtin":
-            timeout = spec.timeout_ms or self._default_timeout_ms
             return await _invoke_builtin(spec, context, timeout_ms=timeout)
-        # Non-builtin transports deferred to Step 2/3.
+        if spec.transport == "subprocess":
+            from harness.hooks.subprocess import invoke_subprocess_hook
+
+            return await invoke_subprocess_hook(
+                spec.script_path, context, timeout_ms=timeout
+            )
+        # HTTP / LLM deferred to Step 3.
         return HookDecision(
             decision="allow",
             hook_id=spec.hook_id,

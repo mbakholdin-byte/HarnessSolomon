@@ -347,16 +347,35 @@ class TestHookRunnerFilter:
 
 
 class TestHookRunnerDispatch:
-    """Non-builtin transports return placeholder in Step 1."""
+    """Subprocess transport is now wired (Step 2). HTTP/LLM still placeholder."""
 
-    async def test_subprocess_returns_placeholder(self) -> None:
+    async def test_subprocess_missing_script_fails_open(self) -> None:
         registry = HookRegistry()
         await registry.register(
             HookSpec(
                 hook_id="h1",
                 event=EventType.PRE_TOOL_USE,
                 transport="subprocess",
-                script_path="/tmp/hook.py",
+                script_path="/nonexistent/hook.py",
+            )
+        )
+        runner = HookRunner(registry)
+        ctx = HookContext(
+            event="PreToolUse", session_id="s1", agent_id="", payload={}
+        )
+        agg = await runner.fire(ctx)
+        assert agg.final_decision == "allow"  # fail-open
+        assert "not found" in agg.decisions[0].error
+
+    async def test_http_returns_placeholder(self) -> None:
+        """HTTP transport deferred to Step 3."""
+        registry = HookRegistry()
+        await registry.register(
+            HookSpec(
+                hook_id="h1",
+                event=EventType.PRE_TOOL_USE,
+                transport="http",
+                url="https://example.com/hook",
             )
         )
         runner = HookRunner(registry)
