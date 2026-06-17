@@ -1,5 +1,84 @@
 # Changelog — Solomon Harness
 
+## Phase 4.7 v1.17.0 — PermissionRequest в 5 file tools + live tail + stats diff + audit filter (2026-06-17) — Phase 4 = 5/12 step
+
+**Phase 4.7 v1.17.0 — 4 new files / 7 modified files / +66 tests / 2225 total tests / 0 new deps**
+
+Phase 4.6 закрыл observability read path (audit + payload validation + Slack/Teams). v1.17.0 расширяет observability (live tail + diff), добавляет фильтр regex в audit, и завершает PermissionRequest wiring в file tools (после Phase 4.5, где был только `_bash`).
+
+### Что закрыто
+
+**PermissionRequest в 5 file tools (`harness/server/agent/runtime.py`)**:
+- Phase 4.5 v1.15.0 закрыл PermissionRequest только для `_bash`. v1.17.0 расширяет на `_read_file`, `_write_file`, `_edit_file`, `_grep`, `_glob`.
+- `_READ_DENYLIST_PATTERNS` (7 patterns): `__pycache__/`, `.git/`, `.env`, `.key`, `.pem`, `secrets/`, `node_modules/`.
+- `_WRITE_DENYLIST_PATTERNS` (superset + .exe, .dll, .so для binary writes).
+- Helpers: `_match_read_denylist(path) → str | None`, `_match_write_denylist(path) → str | None`.
+- Contract: `_resolve_permission_via_hook` (Phase 4.5) переиспользован без изменений. `safe_fire()` НЕ используется — `runner.fire()` напрямую, поскольку PermissionRequest требует override reading через `aggregate.final_payload`.
+- Trust boundary: `runtime.py` уже импортирует `harness.hooks.runner`. Helpers — stdlib only.
+- 19 tests passed (4 denylist unit + 8 per-tool positive/negative + 4 hook override + 1 truncation + 1 regression на `_bash`).
+
+**`harness hooks audit --follow` + `harness observability metrics --follow` (`harness/cli_follow.py` NEW ~350 LoC)**:
+- Cross-platform live tail без watchdog dependency (polling 250ms / `--interval-ms`).
+- `hooks audit --follow`: `seek(0, SEEK_END)` + poll for new lines; `--filter REGEX`, `--max-bytes` с auto-rotate, `--json` NDJSON, SIGINT → exit 0, 30s без новых записей → hint "press Ctrl+C".
+- `observability metrics --follow`: poll `PrometheusMetrics.snapshot()`, print diff с предыдущим snapshot (только changed counters/gauges), `--filter`, `--json`, SIGINT → exit 0.
+- 17 tests passed.
+
+**`harness observability stats --diff BEFORE.json AFTER.json` (`harness/cli_observability.py` + `cli.py`)**:
+- Сравнение 2 JSON snapshots: Δ per metric, NEW/REMOVED marking, exit 0 если нет изменений, exit 2 при дельте (для shell scripting).
+- Pretty table по умолчанию, `--json` → NDJSON.
+- 17 tests passed.
+
+**`harness hooks audit --filter REGEX` (`harness/cli_hooks.py` + `cli.py`)**:
+- `re.search` на `json.dumps(entry, sort_keys=True)` ПОСЛЕ structured filters (AND semantics с `--event`/`--decision`/`--session`).
+- Invalid regex → exit 1 + error message.
+- Skip malformed lines (JSON parse error) с warning.
+- 13 tests passed.
+
+### Tests
+
+**+66 net new tests, 2225 total (was 2159), 2 skipped.**
+
+Breakdown:
+- `tests/test_runtime_permission_wiring.py` — 19 tests (Coder)
+- `tests/test_cli_follow.py` — 17 tests (Prog)
+- `tests/test_cli_stats_diff.py` — 17 tests (Admin)
+- `tests/test_cli_audit_filter.py` — 13 tests (Admin)
+
+Full suite: 2222 passed + 2 skipped + 1 pre-existing flake (test_l2_retrieval test order dependency, не регрессия) + 1 pre-existing flake (test_elicitation_notification Settings mock race, не регрессия).
+
+### Architecture notes
+
+- **Why PermissionRequest в 5 file tools, а не только `_bash`:** Симметрия. File reads/writes — такая же potential destructive surface, как и bash. Phase 4.5 закрыл `_bash`, но agents которые используют `read_file` для чтения `.env` или `write_file` для перезаписи `secrets/` минуют PermissionRequest hook contract. v1.17.0 закрывает gap.
+- **Why polling-only live tail (no watchdog required):** watchdog — external dep, требующий rust+watchdog wheels. Polling 250ms с `selectors.DefaultSelector` (POSIX) / `msvcrt` (Windows) — zero deps, sufficient для operator UX. Можно добавить watchdog optional в v1.18.0 если demand появится.
+- **Why `stats --diff` exit code 2 при изменениях:** shell scripting convention — `diff` returns 1 при differences, `grep` returns 1 при no match. v1.17.0 следует BSD convention для CI integration: `if harness observability stats --diff before.json after.json; then echo "no regression"; else echo "metrics changed"; fi`.
+- **Why `audit --filter` на JSON-serialized entry, а не per-field:** Operators часто хотят найти "всё где упоминается `confirm_dangerous` ИЛИ timeout > 1000ms". Field-by-field filter ограничен; full-text regex покрывает use case без добавления новых flags.
+
+### Trust boundary (preserved)
+
+- `harness/cli_follow.py` — stdlib + `harness.hooks.audit` + `harness.observability.metrics` + `harness.config`. NO `harness.agents`/`harness.server`. AST-enforced.
+- `harness/server/agent/runtime.py` — добавлены 2 denylist helpers (stdlib `re` only). NO new imports of `harness.hooks.*` schemas layer.
+- `harness/cli_hooks.py` + `harness/cli_observability.py` — добавлены `--filter`/`--diff` parsers. Trust boundary unchanged.
+
+### Files
+
+NEW (~1050 LoC production + ~1100 LoC tests):
+- `harness/cli_follow.py` (~350 LoC)
+- `tests/test_runtime_permission_wiring.py` (~420 LoC)
+- `tests/test_cli_follow.py` (~440 LoC)
+- `tests/test_cli_stats_diff.py` (~380 LoC)
+- `tests/test_cli_audit_filter.py` (~300 LoC)
+
+MODIFIED:
+- `harness/server/agent/runtime.py` — 5 PermissionRequest call sites + 2 denylist helpers + 2 patterns
+- `harness/cli.py` — subparsers для `--follow`, `--diff`, `--filter`
+- `harness/cli_hooks.py` — `_cmd_hooks_audit` принимает `--filter`
+- `harness/cli_observability.py` — `_cmd_observability_stats` принимает `--diff`
+- `harness/__init__.py` (1.16.0 → 1.17.0)
+- `harness/server/app.py` (FastAPI `version="1.16.0"` → `"1.17.0"`)
+- `pyproject.toml` (version 1.16.0 → 1.17.0)
+- `tests/test_privacy_zones_sinks.py` — updated fixtures (`.env` → `.txt` для изоляции от нового denylist)
+- `tests/test_redaction_sinks.py` — same isolation fix
+
 ## Phase 4.6 v1.16.0 — hooks audit CLI + payload schema validation + Slack/Teams notification channels (2026-06-17) — Phase 4 = 4/12 step
 
 **Phase 4.6 v1.16.0 — 4 new files / 7 modified files / +67 tests / 2159 total tests / 0 new deps**
