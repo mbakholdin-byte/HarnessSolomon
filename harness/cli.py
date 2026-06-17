@@ -1652,6 +1652,200 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     compact_p.set_defaults(func=_cmd_sessions_compact)
 
+    # === Phase 4.4 v1.13.0: ``hooks`` subcommand (local inspection) ===
+    from harness.cli_hooks import (
+        _cmd_hooks_list as _cmd_hooks_list_impl,
+        _cmd_hooks_show as _cmd_hooks_show_impl,
+        _cmd_hooks_status as _cmd_hooks_status_impl,
+    )
+
+    def _add_hooks_common(p: argparse.ArgumentParser) -> None:
+        p.add_argument(
+            "--project-root", default=None,
+            help=(
+                "Project root directory (default: current working directory). "
+                "The CLI looks for ``.harness/hooks/*.json`` here."
+            ),
+        )
+        p.add_argument(
+            "--json", action="store_true",
+            help="Print results as JSON (machine-readable).",
+        )
+
+    hooks_p = sub.add_parser(
+        "hooks",
+        help=(
+            "Inspect the hook registry (Phase 4.4 v1.13.0). "
+            "Lists builtin + project hooks, shows one hook's spec, "
+            "or summarises hot-reload status. Local — no server needed."
+        ),
+    )
+    hooks_sub = hooks_p.add_subparsers(dest="hooks_command")
+
+    hooks_list_p = hooks_sub.add_parser(
+        "list",
+        help="List all registered hooks (builtin + project).",
+    )
+    _add_hooks_common(hooks_list_p)
+    hooks_list_p.add_argument(
+        "--event", default=None,
+        help=(
+            "Comma-separated list of event names to include "
+            "(e.g. 'PreToolUse,Elicitation'). Case-sensitive, "
+            "matches EventType.value (PascalCase)."
+        ),
+    )
+    hooks_list_p.add_argument(
+        "--transport", default=None,
+        help="Comma-separated list of transports: builtin,subprocess,http,llm.",
+    )
+    # Tri-state: ``--enabled`` shows only enabled hooks, ``--disabled``
+    # shows only disabled hooks, neither shows all.
+    enabled_group = hooks_list_p.add_mutually_exclusive_group()
+    enabled_group.add_argument(
+        "--enabled", action="store_const", const="yes", dest="enabled_flag",
+        help="Show only enabled hooks.",
+    )
+    enabled_group.add_argument(
+        "--disabled", action="store_const", const="no", dest="enabled_flag",
+        help="Show only disabled hooks.",
+    )
+    hooks_list_p.set_defaults(func=_cmd_hooks_list_impl, enabled_flag=None)
+
+    hooks_show_p = hooks_sub.add_parser(
+        "show",
+        help="Show full spec for one hook by id.",
+    )
+    _add_hooks_common(hooks_show_p)
+    hooks_show_p.add_argument(
+        "hook_id",
+        help="Hook id (e.g. 'builtin.log', 'builtin.confirm_dangerous').",
+    )
+    hooks_show_p.set_defaults(func=_cmd_hooks_show_impl)
+
+    hooks_status_p = hooks_sub.add_parser(
+        "status",
+        help="Local hot-reload status summary.",
+    )
+    _add_hooks_common(hooks_status_p)
+    hooks_status_p.set_defaults(func=_cmd_hooks_status_impl)
+    # If no subcommand, default to "list" with the parent's flags.
+    hooks_p.set_defaults(func=_cmd_hooks_list_impl)
+
+    # === Phase 4.4 v1.13.0: ``observability`` subcommand (local + HTTP) ===
+    from harness.cli_observability import (
+        _cmd_observability_health as _cmd_observability_health_impl,
+        _cmd_observability_log as _cmd_observability_log_impl,
+        _cmd_observability_metrics as _cmd_observability_metrics_impl,
+        _cmd_observability_stats as _cmd_observability_stats_impl,
+    )
+
+    obs_p = sub.add_parser(
+        "observability",
+        help=(
+            "Inspect the observability layer (Phase 4.4 v1.13.0). "
+            "Tail the JSONL log, scrape /metrics, probe /health/*, "
+            "or show the in-process counter snapshot."
+        ),
+    )
+    obs_sub = obs_p.add_subparsers(dest="obs_command")
+
+    obs_log_p = obs_sub.add_parser(
+        "log",
+        help=(
+            "Tail the JSONL log file. Local read — no server required. "
+            "Filter by --event (top-level event field), read a "
+            "specific --date (UTC, YYYY-MM-DD)."
+        ),
+    )
+    obs_log_p.add_argument(
+        "--tail", type=int, default=20,
+        help="Number of last lines to read (default 20).",
+    )
+    obs_log_p.add_argument(
+        "--event", default=None,
+        help="Comma-separated list of event names to include.",
+    )
+    obs_log_p.add_argument(
+        "--date", default=None,
+        help="UTC date in YYYY-MM-DD format (default: today UTC).",
+    )
+    obs_log_p.add_argument(
+        "--max-bytes", type=int, default=1_048_576,
+        help=(
+            "Cap the file read to the last N bytes (default 1 MiB) "
+            "to avoid OOM on long-running servers."
+        ),
+    )
+    obs_log_p.add_argument(
+        "--json", action="store_true",
+        help="Print entries as a JSON array.",
+    )
+    obs_log_p.set_defaults(func=_cmd_observability_log_impl)
+
+    obs_metrics_p = obs_sub.add_parser(
+        "metrics",
+        help=(
+            "Scrape GET /metrics. Output is Prometheus text format; "
+            "--filter is a regex on metric NAMES. "
+            "(No --json — the wire format is not JSON.)"
+        ),
+    )
+    obs_metrics_p.add_argument(
+        "--base-url", default="http://127.0.0.1:8765",
+        help="Base URL of the harness server (default: %(default)s).",
+    )
+    obs_metrics_p.add_argument(
+        "--filter", default=None,
+        help="Regex on metric names. HELP/TYPE for matches are kept.",
+    )
+    obs_metrics_p.add_argument(
+        "--timeout-s", type=float, default=5.0,
+        help="HTTP timeout in seconds (default 5).",
+    )
+    obs_metrics_p.set_defaults(func=_cmd_observability_metrics_impl)
+
+    obs_health_p = obs_sub.add_parser(
+        "health",
+        help=(
+            "GET /health/{level} (live|ready|deep). "
+            "Exit 0=ok, 1=degraded, 2=unhealthy/HTTP-error."
+        ),
+    )
+    obs_health_p.add_argument(
+        "--level", choices=["live", "ready", "deep"], default="deep",
+        help="Health endpoint level (default deep).",
+    )
+    obs_health_p.add_argument(
+        "--base-url", default="http://127.0.0.1:8765",
+        help="Base URL of the harness server (default: %(default)s).",
+    )
+    obs_health_p.add_argument(
+        "--timeout-s", type=float, default=5.0,
+        help="HTTP timeout in seconds (default 5).",
+    )
+    obs_health_p.add_argument(
+        "--json", action="store_true",
+        help="Print raw report as JSON.",
+    )
+    obs_health_p.set_defaults(func=_cmd_observability_health_impl)
+
+    obs_stats_p = obs_sub.add_parser(
+        "stats",
+        help=(
+            "In-process PrometheusMetrics snapshot. The CLI starts "
+            "fresh — counters are 0 unless incremented in this process. "
+            "Use `harness observability metrics` for live server values."
+        ),
+    )
+    obs_stats_p.add_argument(
+        "--json", action="store_true",
+        help="Print snapshot as JSON.",
+    )
+    obs_stats_p.set_defaults(func=_cmd_observability_stats_impl)
+    # If no subcommand, default to "log" (most common entry point).
+    obs_p.set_defaults(func=_cmd_observability_log_impl)
+
     return parser
 
 

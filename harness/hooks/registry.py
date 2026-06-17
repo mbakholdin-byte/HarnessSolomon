@@ -303,10 +303,100 @@ class HookRegistry:
         return any(s.hook_id == hook_id for s in self.all_specs())
 
 
+# === Phase 4.4: process-level singleton for the CLI ===
+
+# Lazy import to avoid a top-level ``harness.hooks.builtin`` import
+# (which would in turn import observability helpers from some hooks).
+# CLI callers should use :func:`get_registry` to obtain the singleton
+# (with all builtin specs pre-loaded). The server uses its own
+# ``app_state["hook_registry"]`` and does NOT call this helper.
+
+_instance: "HookRegistry | None" = None
+_builtin_loaded: bool = False
+
+
+def _load_builtin_specs(registry: "HookRegistry") -> None:
+    """Register all 7 builtin hooks as ``HookSpec`` into ``registry``.
+
+    Sync registration because the CLI is not async. The builtin
+    hooks themselves are still async callables — we just attach
+    their references to the spec for ``hooks show`` introspection.
+
+    Idempotent: a second call is a no-op (``_builtin_loaded`` guard).
+    """
+    global _builtin_loaded
+    if _builtin_loaded:
+        return
+    # Lazy import — the builtin hooks may transitively import
+    # observability helpers.
+    from harness.hooks.builtin import BUILTIN_HOOKS
+
+    # Mirror the wiring documented in ``harness/hooks/builtin/__init__.py``
+    # and exercised by the harness test suite. Priority is the
+    # registry default (100). Each spec gets a unique hook_id.
+    defaults = {
+        "log":              ("PreToolUse",  "log"),
+        "validate":         ("PreToolUse",  "validate"),
+        "block_dangerous":  ("PreToolUse",  "block_dangerous"),
+        "inject_context":   ("UserPromptSubmit", "inject_context"),
+        "autosave":         ("SessionEnd",  "autosave"),
+        "confirm_dangerous":("Elicitation", "confirm_dangerous"),
+        "notify_terminal":  ("Notification","notify_terminal"),
+    }
+    for name, (event_name, hook_name) in defaults.items():
+        callable_obj = BUILTIN_HOOKS.get(hook_name)
+        spec = HookSpec(
+            hook_id=f"builtin.{hook_name}",
+            event=EventType(event_name),
+            transport="builtin",
+            enabled=True,
+            priority=100,
+            matcher="",
+            callable=callable_obj,
+        )
+        # Sync register (we are in a CLI process; no running loop).
+        existing = registry._specs.setdefault(spec.event, [])
+        for i, s in enumerate(existing):
+            if s.hook_id == spec.hook_id:
+                existing[i] = spec
+                break
+        else:
+            existing.append(spec)
+            existing.sort(key=lambda s: s.priority)
+    _builtin_loaded = True
+
+
+def get_registry() -> "HookRegistry":
+    """Return the process-level HookRegistry singleton.
+
+    The singleton starts empty. Builtin specs are loaded on the
+    first call (sync, no event loop). Use :func:`reset_registry`
+    in tests to clear state.
+
+    The server does NOT use this helper — it constructs its own
+    ``HookRegistry`` and holds it in ``app_state``. This singleton
+    is for the CLI's local inspection use case only.
+    """
+    global _instance
+    if _instance is None:
+        _instance = HookRegistry()
+        _load_builtin_specs(_instance)
+    return _instance
+
+
+def reset_registry() -> None:
+    """Reset the singleton. For tests only."""
+    global _instance, _builtin_loaded
+    _instance = None
+    _builtin_loaded = False
+
+
 __all__ = [
     "HookTransport",
     "BuiltinHook",
     "HookSpec",
     "HookRegistry",
     "parse_spec",
+    "get_registry",
+    "reset_registry",
 ]

@@ -263,5 +263,63 @@ class PrometheusMetrics:
         """Prometheus content-type for /metrics endpoint."""
         return CONTENT_TYPE_LATEST
 
+    def snapshot(self) -> dict[str, dict[tuple[tuple[str, str], ...], float]]:
+        """Return a JSON-safe snapshot of current counter/gauge values.
+
+        Format::
+
+            {
+                "metric_name": {
+                    (("label", "value"), ...): <value>,
+                },
+                ...
+            }
+
+        - Histograms are skipped (they have bucket counters; the
+          ``render()`` text is the canonical export).
+        - Counters and gauges are read from the live ``prometheus_client``
+          objects when available, falling back to parsing ``render()``.
+        - No-op stubs (prometheus_client not installed) yield ``{}``.
+
+        Used by ``harness observability stats`` (Phase 4.4 v1.13.0) so
+        the CLI can render a per-counter summary without re-implementing
+        the Prometheus text parser.
+
+        Trust boundary: stdlib + ``re`` only. No external imports.
+        """
+        out: dict[str, dict[tuple[tuple[str, str], ...], float]] = {}
+        if not self._enabled:
+            return out
+        # Prefer introspecting the live prometheus_client objects
+        # (avoids a roundtrip through ``render()``).
+        for attr in dir(self):
+            if attr.startswith("_"):
+                continue
+            metric = getattr(self, attr, None)
+            if metric is None:
+                continue
+            cls_name = type(metric).__name__
+            if cls_name not in ("Counter", "Gauge"):
+                continue
+            # Walk children (one per label-set). The metric
+            # object's ``_metrics`` dict maps the labels tuple
+            # to a ``_Value`` instance with a ``.get()`` method.
+            metrics_dict = getattr(metric, "_metrics", None)
+            if not isinstance(metrics_dict, dict):
+                continue
+            for labels, value in metrics_dict.items():
+                # ``labels`` is a frozendict-like mapping; we
+                # convert to a stable tuple of (k, v) pairs.
+                if hasattr(labels, "items"):
+                    label_items = tuple(sorted(labels.items()))
+                else:
+                    label_items = ()
+                try:
+                    v = float(value.get())
+                except Exception:  # noqa: BLE001 — defensive
+                    continue
+                out.setdefault(attr, {})[label_items] = v
+        return out
+
 
 __all__ = ["PrometheusMetrics", "DEFAULT_BUCKETS", "_NoOpMetric"]

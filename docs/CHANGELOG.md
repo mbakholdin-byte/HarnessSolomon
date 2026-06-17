@@ -1,5 +1,80 @@
 # Changelog — Solomon Harness
 
+## Phase 4.4 v1.13.0 — `harness hooks` / `harness observability` CLI (2026-06-17) — Phase 4 = 1/12 step
+
+**Phase 4.4 v1.13.0 — 3 new files / 5 modified files / +40 tests / 2057 total tests / 0 new deps**
+
+Phase 4.3 closed the hooks runtime (events, transport, elicitation WS). v1.13.0 makes the layer **inspectable from the operator's shell** — two new subcommands expose the hook registry and the observability layer without booting the FastAPI server. Also fixes a pre-existing stale `HealthChecker(version="1.7.1")` and adds `PrometheusMetrics.snapshot()` for offline counter dumps.
+
+### Что закрыто
+
+- **`harness hooks <list|show|status>`** — local hook registry inspection (`harness/cli_hooks.py`, ~340 LoC):
+  - `harness hooks list [--event E] [--transport T] [--enabled|--disabled] [--json]` — lists all 7 builtin hooks + project overrides from `.harness/hooks/*.json`. Comma-separated filter values (matches `--scopes` precedent). Mutually exclusive `--enabled` / `--disabled` flags. `--json` wraps in `{"hooks":[...], "count": N, "errors":[...]}`.
+  - `harness hooks show <hook_id> [--json]` — full spec for one hook. Transport-specific fields (callable_name | script_path | url+headers | model+prompt). **`Authorization` header is redacted** (`Bearer ***`) in pretty + JSON output to avoid secret leakage.
+  - `harness hooks status [--json]` — local hot-reload summary (total_specs, builtin_specs, project_specs, files_errored).
+  - `harness hooks` (no subcommand) → defaults to `list`.
+
+- **`harness observability <log|metrics|health|stats>`** — observability layer access (`harness/cli_observability.py`, ~390 LoC):
+  - `harness observability log [--tail N] [--event E] [--date YYYY-MM-DD] [--max-bytes M] [--json]` — local JSONL log read (no server). Date is **UTC** to match `JsonlLogger._path_for`. Tail N → filter by event. Max-bytes cap (default 1 MiB) for OOM safety.
+  - `harness observability metrics [--base-url] [--filter REGEX] [--timeout-s]` — `GET /metrics`, output is raw Prometheus text. `--filter` regex on metric NAMES; keeps HELP/TYPE blocks for matched metrics. **No `--json`** (Prometheus is not JSON).
+  - `harness observability health [--level live|ready|deep] [--base-url] [--json]` — `GET /health/{level}`. Exit codes: 0=ok, 1=degraded, 2=unhealthy/HTTP-error/invalid-args.
+  - `harness observability stats [--json]` — in-process `PrometheusMetrics.snapshot()` (no HTTP). Caveat documented in help: CLI starts fresh → counters are 0 unless incremented in this process. For live server values, use `observability metrics`.
+  - `harness observability` (no subcommand) → defaults to `log`.
+
+- **`harness.hooks.registry.get_registry()` + `reset_registry()`** — process-level singleton (~50 LoC, lazy builtin loading). Mirrors the pattern used for `ElicitationBroker.get()`. Loaded with the 7 builtin `HookSpec`s on first access. CLI-only; the server constructs its own `HookRegistry` and does NOT call this helper.
+
+- **`PrometheusMetrics.snapshot()`** — JSON-safe counter/gauge dump (`dict[metric_name, dict[labels, value]]`). Walks live `prometheus_client` Counter/Gauge objects via their internal `_metrics` dict. No-op path (`{}`) when prometheus_client is not installed. Used by `observability stats`.
+
+- **`HealthChecker(version=...)`** — now reads from `harness.__version__` (was hard-coded `"1.7.1"` for 5 versions — bug introduced in v1.7.1, stale at v1.12.0). `/health/*` now reports the real harness version.
+
+- **Trust boundary preserved**: new `cli_hooks.py` and `cli_observability.py` modules do NOT hard-import `harness.agents` or `harness.server`. Enforced by `TestTrustBoundary` source-grep tests.
+
+- **Project file parser improvement**: `harness cli_hooks._parse_project_hooks` re-implements the local file parse (instead of calling `_parse_hook_file` from `hot_reload.py`) to extract transport-specific fields (`script_path`, `url`, `headers`, `model`, `prompt`) that the hot-reload helper discards. Same error semantics (malformed JSON → entry in `errors[]`, no crash).
+
+### Tests
+
+- `tests/test_cli_hooks.py` — 19 tests:
+  - 5 list tests (7 builtins, --event, --transport, --enabled/--disabled, --json)
+  - 2 project tests (valid spec, malformed file)
+  - 5 show tests (found, not-found, --json, no-arg → exit 2, Authorization redaction)
+  - 2 status tests (no project dir, --json)
+  - 3 CLI parser tests (subcommand wiring)
+  - 2 trust boundary tests
+- `tests/test_cli_observability.py` — 21 tests:
+  - 4 log tests (no file, tail + filter, --json, --date)
+  - 6 metrics tests (filter HELP/TYPE pairing, no-match, invalid regex, endpoint, conn-error, HTTP-error)
+  - 6 health tests (ok/degraded/unhealthy exit codes, --json, invalid level, conn-error)
+  - 2 stats tests (empty when no prometheus_client, --json)
+  - 2 CLI parser tests
+  - 1 PrometheusMetrics.snapshot() contract test
+
+**+40 net new tests, 2057 total (was 2017), 2 skipped, 0 regressions in this PR.**
+
+### Files
+
+NEW:
+- `harness/cli_hooks.py` (~340 LoC, list/show/status subcommands)
+- `harness/cli_observability.py` (~390 LoC, log/metrics/health/stats subcommands)
+- `tests/test_cli_hooks.py` (19 tests)
+- `tests/test_cli_observability.py` (21 tests)
+
+MODIFIED:
+- `harness/cli.py` (+~180 LoC: subparsers for `hooks` + `observability`)
+- `harness/hooks/registry.py` (+~50 LoC: `get_registry()`, `reset_registry()`, `_load_builtin_specs()`)
+- `harness/observability/metrics.py` (+~50 LoC: `PrometheusMetrics.snapshot()`)
+- `harness/observability/emit.py` (+2 LoC: import `__version__` for HealthChecker)
+- `harness/__init__.py` (1.12.0 → 1.13.0)
+- `harness/server/app.py` (FastAPI `version="1.12.0"` → `"1.13.0"`)
+- `pyproject.toml` (version 1.12.0 → 1.13.0)
+- `docs/CHANGELOG.md` (this section)
+
+### Next (Phase 4.4+)
+
+- Wire the remaining 11 hook events into production (Stop, SubagentStart/Stop, SessionStart/End, UserPromptSubmit, PreCompact, InstructionsLoaded, PermissionRequest, OnMemoryWrite, OnRoutingDecision, OnCompaction).
+- HTTP long-poll alternative для Elicitation WS.
+- `harness chat` (TUI/REPL wrapper over the WebSocket).
+- 2026-12-31: switch legacy `/api/*` to 410 Gone.
+
 ## Phase 4.3+ v1.12.0 — Elicitation WebSocket transport + ElicitationBroker (2026-06-16) — Phase 4.3 = 3/12 step
 
 **Phase 4.3+ v1.12.0 — 3 new files / 3 modified files / +23 tests / 2025 total tests / 0 new deps**

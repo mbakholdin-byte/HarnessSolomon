@@ -169,7 +169,11 @@ def _build(settings: Settings) -> ObservabilityHandle:
         otlp_endpoint=settings.observability_otlp_endpoint,
         otlp_headers=settings.observability_otlp_headers,
     )
-    health = HealthChecker(version="1.7.1")
+    # Phase 4.4 v1.13.0: read version from package __version__ so the
+    # health endpoint /health/* reports the real version, not a hard-coded
+    # stale string (was "1.7.1" at v1.12.0).
+    from harness import __version__ as _harness_version
+    health = HealthChecker(version=_harness_version)
     health.configure(
         ready_timeout_s=settings.observability_health_ready_timeout_s,
         deep_timeout_s=settings.observability_health_deep_timeout_s,
