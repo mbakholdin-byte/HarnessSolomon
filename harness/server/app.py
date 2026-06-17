@@ -552,7 +552,7 @@ def create_app() -> FastAPI:
     """Build FastAPI app with middleware and routers."""
     app = FastAPI(
         title="Solomon Harness",
-        version="1.14.0",
+        version="1.15.0",
         description=(
             "Open-source agentic shell — Web MVP (Phase 0) + "
             "sub-agent system (Phase 2.0+2.1) + GitHub PR integration (Phase 2.2) "
@@ -624,6 +624,35 @@ def create_app() -> FastAPI:
     from harness.server.routes.elicitation import router as elicitation_router
     app.include_router(
         elicitation_router, prefix="/api/v1/elicitation", tags=["elicitation"],
+    )
+    # Phase 4.3+ v1.15.0: HTTP long-poll fallback for Elicitation.
+    # Mounted unconditionally (the router enforces the
+    # ``hooks_elicitation_longpoll_enabled`` flag per-request, returning
+    # 403 when disabled) so operators can flip the flag at runtime
+    # without restarting the server. The default is False — WS-first
+    # policy. Conditional import mirrors the WS router pattern.
+    from harness.server.routes.elicitation_longpoll import (
+        router as elicitation_longpoll_router,
+    )
+    app.state.hooks_elicitation_longpoll_enabled = (
+        settings.hooks_elicitation_longpoll_enabled
+    )
+    app.state.hooks_elicitation_longpoll_timeout_s = (
+        settings.hooks_elicitation_longpoll_timeout_s
+    )
+    app.state.hooks_elicitation_longpoll_interval_s = (
+        settings.hooks_elicitation_longpoll_interval_s
+    )
+    app.include_router(
+        elicitation_longpoll_router,
+        prefix="/api/v1/elicitation",
+        tags=["elicitation-longpoll"],
+    )
+    print(
+        f"[harness] elicitation_longpoll: "
+        f"{'enabled' if settings.hooks_elicitation_longpoll_enabled else 'disabled'} "
+        f"(timeout={settings.hooks_elicitation_longpoll_timeout_s}s, "
+        f"interval={settings.hooks_elicitation_longpoll_interval_s}s)"
     )
     # Phase 2.2: merge-queue HTTP API. Phase 1.6: routes now require
     # ``agents.read`` via ``Depends(require_scope(Scope.AGENTS_READ))``.

@@ -28,6 +28,10 @@ from pydantic import BaseModel, Field
 from harness.agents.spec import AgentSpec
 from harness.config import settings
 # Phase 4.4+ v1.14.0: OnRoutingDecision hook fires after classify().
+# Phase 4.5 v1.15.0: block/modify semantics are now honoured — the
+# classifier swaps in a fallback agent on ``block`` and overrides
+# ``decision.agent`` from the modify payload.
+from harness.hooks.context import Decision
 from harness.hooks.runner import safe_fire
 from harness.server.llm.router import CompletionResult, LLMRouter
 
@@ -145,16 +149,53 @@ class LLMRouterClassifier:
                 agent=_first_available(specs), fallback=True,
                 confidence=0.0, raw_response=str(e),
             )
-            await self._fire_routing_hook(decision, used_model, task, "llm_error")
+            # Phase 4.5 v1.15.0: honour block/modify. On ``block`` we
+            # can't construct a meaningful fallback here (we already
+            # are in the fallback path), so we ignore the decision —
+            # the LLM-error decision is returned as-is.
+            await self._fire_routing_hook(
+                decision, used_model, task, "llm_error", specs=specs,
+            )
             return decision
 
         result = await self._parse(response, specs, task=task, used_model=used_model)
         trigger = "fallback_exhausted" if result.fallback else "user_prompt"
         if result.confidence < 0.5 and not result.fallback:
             trigger = "low_confidence"
-        await self._fire_routing_hook(
-            result, used_model or settings.subagent_default_model, task, trigger,
+        # Phase 4.5 v1.15.0: block/modify semantics.
+        verdict, hook_payload = await self._fire_routing_hook(
+            result, used_model or settings.subagent_default_model,
+            task, trigger, specs=specs,
         )
+        if verdict == "block":
+            # Replace the LLM-chosen agent with the first available
+            # candidate. The caller still gets a usable decision.
+            fallback_agent = _first_available(specs)
+            logger.info(
+                "OnRoutingDecision block: overriding %s → %s (fallback)",
+                result.agent, fallback_agent,
+            )
+            return RouterDecision(
+                agent=fallback_agent,
+                confidence=0.0,
+                fallback=True,
+                raw_response=result.raw_response,
+            )
+        if verdict == "modify":
+            # A modify hook may have injected a new ``chosen_agent``
+            # in the aggregate payload (key ``"chosen_agent"``).
+            new_agent = str(hook_payload.get("chosen_agent", "")).strip()
+            if new_agent and new_agent != result.agent:
+                logger.info(
+                    "OnRoutingDecision modify: overriding %s → %s",
+                    result.agent, new_agent,
+                )
+                return RouterDecision(
+                    agent=new_agent,
+                    confidence=result.confidence,
+                    fallback=result.fallback,
+                    raw_response=result.raw_response,
+                )
         return result
 
     # --- helpers ---
@@ -233,8 +274,15 @@ class LLMRouterClassifier:
         model: str,
         task: str,
         trigger: str,
-    ) -> None:
-        """Phase 4.4+ v1.14.0: fire OnRoutingDecision hook.
+        specs: Sequence[AgentSpec] | None = None,
+    ) -> tuple[Decision, dict]:
+        """Phase 4.4+ v1.14.0 / Phase 4.5 v1.15.0: fire OnRoutingDecision.
+
+        Returns ``(decision, payload)`` where ``decision`` is the
+        aggregate ``"allow"`` / ``"block"`` / ``"modify"`` string and
+        ``payload`` is the aggregate's ``final_payload`` (which for
+        ``"modify"`` carries the hook's overridden values). Callers
+        inspect the payload to honour modify semantics.
 
         ``trigger`` is one of:
           - "user_prompt" — top-level user task classification
@@ -243,13 +291,17 @@ class LLMRouterClassifier:
           - "fallback_exhausted" — all fallbacks exhausted
           - "low_confidence" — LLM confidence below threshold
 
-        Block semantics: an OnRoutingDecision block is currently
-        logged-only (we return the same decision; full re-route
-        behavior is a Phase 4.5 concern).
+        Failures in the hook subsystem are swallowed (we return
+        ``("allow", {})`` on any error — routing must never break on
+        a hook regression).
         """
+        payload_out: dict = {}
         try:
-            await safe_fire(
-                "OnRoutingDecision",
+            from harness.hooks.context import HookContext
+            from harness.hooks.runner import get_global_hook_runner
+
+            ctx = HookContext(
+                event="OnRoutingDecision",
                 session_id="",
                 agent_id=decision.agent,
                 payload={
@@ -261,8 +313,22 @@ class LLMRouterClassifier:
                     "task_preview": task[:200] if task else "",
                 },
             )
+            try:
+                runner = get_global_hook_runner()
+                agg = await runner.fire(ctx)
+                payload_out = dict(agg.final_payload)
+                return agg.final_decision, payload_out
+            except Exception:  # noqa: BLE001 — registry not configured, etc.
+                # Fallback to the fail-open wrapper.
+                decision_str = await safe_fire(
+                    "OnRoutingDecision",
+                    session_id="",
+                    agent_id=decision.agent,
+                    payload=ctx.payload,
+                )
+                return decision_str, dict(ctx.payload)
         except Exception:  # noqa: BLE001 — hooks must never break routing
-            pass
+            return "allow", {}
 
 
 def _first_available(specs: Sequence[AgentSpec]) -> str:

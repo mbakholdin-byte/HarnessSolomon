@@ -348,12 +348,16 @@ class ContextCompactor:
                     ctx = _model_ctx(model, self._settings)
                     target = int(ctx * self._settings.compaction_target_ratio)
                     tokens = _estimate_tokens(messages)
-                    compacted = await self._run_slow_path(
+                    # Phase 4.5 v1.15.0: request the trimmed-without-
+                    # summary result so an OnCompaction ``block`` can
+                    # drop the summary without data loss.
+                    compacted, trimmed_no_sum = await self._run_slow_path(
                         messages, model,
                         effective_session_id=effective_session_id,
                         target=target,
                         tokens=tokens,
                         cache_enabled=False,
+                        return_trimmed=True,
                     )
                     try:
                         self._idle_trigger.mark_compacted(
@@ -365,13 +369,18 @@ class ContextCompactor:
                             "compactor: idle_trigger.mark_compacted failed: %s",
                             exc,
                         )
-                    # Phase 4.4+ v1.14.0: OnCompaction hook (idle path).
-                    await self._emit_on_compaction(
+                    # Phase 4.4+ v1.14.0 / Phase 4.5 v1.15.0:
+                    # OnCompaction hook (idle path). On ``block`` the
+                    # helper returns ``trimmed_no_sum`` (sliding-
+                    # window-only result), on ``allow``/``modify`` it
+                    # returns ``compacted``.
+                    compacted = await self._emit_on_compaction(
                         compacted,
                         source_tokens=tokens,
                         cache_hit=False,
                         mode="idle_trigger",
                         session_id=effective_session_id or "",
+                        trimmed_without_summary=trimmed_no_sum,
                     )
                     return compacted
             except Exception as exc:  # noqa: BLE001 — fail-open
@@ -471,12 +480,15 @@ class ContextCompactor:
                 )
                 # Fall through to the slow path.
         # Slow path: sliding window → summarise → persist.
-        compacted = await self._run_slow_path(
+        # Phase 4.5 v1.15.0: request the trimmed-without-summary so
+        # an OnCompaction ``block`` can drop the summary safely.
+        compacted, trimmed_no_sum = await self._run_slow_path(
             messages, model,
             effective_session_id=effective_session_id,
             target=target,
             tokens=tokens,
             cache_enabled=cache_enabled,
+            return_trimmed=True,
         )
         # Phase 3 v1.5.0: tell the idle trigger we just ran a
         # compact so the next ``should_trigger`` call sees a fresh
@@ -493,16 +505,19 @@ class ContextCompactor:
                 logger.warning(
                     "compactor: idle_trigger.mark_compacted failed: %s", exc,
                 )
-        # Phase 4.4+ v1.14.0: OnCompaction hook (slow-path call site).
-        # The slow path always runs on cache-miss by construction
-        # (the cache hit branch returned ``rebuilt`` above at line
-        # 458 or 466). So cache_hit=False here.
-        await self._emit_on_compaction(
+        # Phase 4.4+ v1.14.0 / Phase 4.5 v1.15.0: OnCompaction hook
+        # (slow-path call site). The slow path always runs on
+        # cache-miss by construction (the cache hit branch returned
+        # ``rebuilt`` above). So cache_hit=False here. The helper
+        # returns the appropriate list (compacted or trimmed) based
+        # on the aggregate decision.
+        compacted = await self._emit_on_compaction(
             compacted,
             source_tokens=tokens,
             cache_hit=False,
             mode="auto",
             session_id=effective_session_id or "",
+            trimmed_without_summary=trimmed_no_sum,
         )
         return compacted
 
@@ -514,21 +529,33 @@ class ContextCompactor:
         cache_hit: bool,
         mode: str,
         session_id: str,
-    ) -> None:
-        """Phase 4.4+ v1.14.0: fire OnCompaction hook (helper).
+        trimmed_without_summary: list[dict[str, Any]] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Phase 4.4+ v1.14.0 / Phase 4.5 v1.15.0: fire OnCompaction.
 
-        Honors ``hooks_on_compaction_skip_cache_hit`` setting (default
-        ON — only fires for cache-miss, not cache-hit). Block is
-        logged-only (data loss would occur if we dropped the
-        summary). All exceptions swallowed — hooks must never break
-        compaction.
+        Returns the message list the caller should use:
+          - ``"allow"`` → return ``compacted`` unchanged.
+          - ``"block"``  → drop the summary and return the
+            sliding-window-only result (``trimmed_without_summary``).
+            This avoids the LLM-summary cost the hook is rejecting
+            while preserving the recent tail (no data loss for
+            recent turns).
+          - ``"modify"`` → currently no payload to mutate; log + allow.
+
+        When ``trimmed_without_summary`` is ``None`` (the caller did
+        not compute it), ``block`` degrades to ``allow`` (we have no
+        safe fallback) and logs a warning.
+
+        Honours ``hooks_on_compaction_skip_cache_hit`` (default ON —
+        only fires for cache-miss). All exceptions swallowed — hooks
+        must never break compaction.
         """
         try:
             if not self._settings.hooks_on_compaction_skip_cache_hit or not cache_hit:
                 compacted_tokens = sum(
                     len(str(m.get("content", ""))) for m in compacted
                 ) // 4
-                await safe_fire(
+                verdict = await safe_fire(
                     "OnCompaction",
                     session_id=session_id,
                     agent_id="",
@@ -539,8 +566,32 @@ class ContextCompactor:
                         "mode": mode,
                     },
                 )
+                if verdict == "block":
+                    if trimmed_without_summary is not None:
+                        logger.info(
+                            "OnCompaction block: dropping summary, "
+                            "keeping sliding-window result "
+                            "(session=%s, mode=%s)", session_id, mode,
+                        )
+                        return list(trimmed_without_summary)
+                    logger.warning(
+                        "OnCompaction block received but no sliding-"
+                        "window fallback provided (session=%s, "
+                        "mode=%s); falling back to allow.",
+                        session_id, mode,
+                    )
+                elif verdict == "modify":
+                    # No payload to mutate for compaction (the summary
+                    # is free-form text and downstream callers don't
+                    # read a specific key from the aggregate payload).
+                    logger.debug(
+                        "OnCompaction modify has no effect (no payload "
+                        "to mutate); treating as allow (session=%s).",
+                        session_id,
+                    )
         except Exception:  # noqa: BLE001 — hooks must never break compaction
             pass
+        return list(compacted)
 
     async def _run_slow_path(
         self,
@@ -551,13 +602,23 @@ class ContextCompactor:
         target: int,
         tokens: int,
         cache_enabled: bool,
-    ) -> list[dict[str, Any]]:
+        return_trimmed: bool = False,
+    ) -> "list[dict[str, Any]] | tuple[list[dict[str, Any]], list[dict[str, Any]]]":
         """Shared slow-path body for ``maybe_compact`` and ``force_compact``.
 
         Phase 3 v1.4.0: extracted from ``maybe_compact`` so that
         ``force_compact`` (manual ``/compact``) can skip the threshold
         check and always run the trim → summarise → persist pipeline.
         Pure refactor: identical behavior to the previous inline block.
+
+        Phase 4.5 v1.15.0: ``return_trimmed=True`` returns a 2-tuple
+        ``(compacted_with_summary, trimmed_without_summary)`` so the
+        caller can honour an ``OnCompaction`` ``block`` decision by
+        dropping the summary. When ``return_trimmed=False`` (default)
+        the function returns just the compacted list (legacy
+        contract). ``trimmed_without_summary`` is the sliding-window
+        result computed before the summary was injected; it is
+        always available (it's an intermediate value).
         """
         run_start = time.monotonic()
         # Phase 3 v1.5.0: pre-compact hook fires AFTER cache-miss
@@ -573,7 +634,9 @@ class ContextCompactor:
         # Step 1: sliding window.
         trimmed = self._sliding_window(messages, target)
         if _estimate_tokens(trimmed) <= target:
-            return trimmed
+            # Sliding window alone brought us under target — no
+            # summary needed. ``trimmed`` IS the result.
+            return (trimmed, trimmed) if return_trimmed else trimmed
         # Step 2: drop the oldest non-system, non-recent block, summarise
         # the dropped part, and prepend the summary after the system
         # message. The summariser may be slow; we still cap total cost
@@ -581,10 +644,10 @@ class ContextCompactor:
         # via the sliding window pre-trim).
         dropped_region = self._extract_dropped(messages, trimmed)
         if not dropped_region:
-            return trimmed
+            return (trimmed, trimmed) if return_trimmed else trimmed
         summary = await self._summarise(dropped_region)
         if not summary:
-            return trimmed  # summariser failed — fall back to raw trim
+            return (trimmed, trimmed) if return_trimmed else trimmed  # summariser failed — fall back to raw trim
         compacted = self._inject_summary(trimmed, summary)
         # Step 3: persist to UnifiedMemory (best-effort, fire-and-forget).
         if self._settings.compaction_persist_to_memory and self._memory is not None:
@@ -636,7 +699,7 @@ class ContextCompactor:
                         session_id=effective_session_id,
                         error=str(e),
                     )
-        return compacted
+        return (compacted, trimmed) if return_trimmed else compacted
 
     async def _safe_pre_compact_hook(
         self,
@@ -819,12 +882,27 @@ class ContextCompactor:
                 )
                 # Fall through to slow path.
         # Slow path (no cache hit, or cache bypassed).
-        compacted = await self._run_slow_path(
+        # Phase 4.5 v1.15.0: request the trimmed-without-summary so
+        # an OnCompaction ``block`` can drop the summary safely.
+        compacted, trimmed_no_sum = await self._run_slow_path(
             messages, model,
             effective_session_id=effective_session_id,
             target=target,
             tokens=tokens,
             cache_enabled=cache_enabled,
+            return_trimmed=True,
+        )
+        # Phase 4.4+ v1.14.0 / Phase 4.5 v1.15.0: OnCompaction hook
+        # (force_compact path). cache_hit=False here (the cache hit
+        # branch returned above). On ``block`` we drop the summary
+        # and use the trimmed-only result.
+        compacted = await self._emit_on_compaction(
+            compacted,
+            source_tokens=tokens,
+            cache_hit=False,
+            mode=_obs_mode,
+            session_id=_obs_session_id,
+            trimmed_without_summary=trimmed_no_sum,
         )
         compacted_tokens = _estimate_tokens(compacted)
         # Extract the summary preview from the injected summary message.
@@ -837,7 +915,11 @@ class ContextCompactor:
         # path ran. We now match the actual marker/role produced by
         # ``_inject_summary``, and slice the body after the marker up
         # to the first blank line (preserved by ``_inject_summary``).
+        # Phase 4.5 v1.15.0: when OnCompaction blocked the summary,
+        # ``compacted`` is the trimmed-only list and no preview is
+        # expected — we report "(summary blocked by hook)".
         preview = ""
+        saw_summary = False
         for m in compacted:
             content = m.get("content") or ""
             # Match the real marker (em-dash) and tolerate the older
@@ -849,11 +931,12 @@ class ContextCompactor:
                 start = content.find("[Conversation summary]")
             else:
                 continue
+            saw_summary = True
             tail = content[start:].split("\n\n", 1)
             preview = tail[0] if tail else content[start:start + 200]
             break
         if not preview:
-            preview = "(no summary generated)"
+            preview = "(summary blocked by hook)" if not saw_summary else "(no summary generated)"
         if len(preview) > 200:
             preview = preview[:200] + "…"
         # Phase 3 v1.4.0: audit log for manual compact.
@@ -875,16 +958,6 @@ class ContextCompactor:
             )
         except Exception:  # noqa: BLE001
             logger.debug("emit_compaction failed", exc_info=True)
-        # Phase 4.4+ v1.14.0: OnCompaction hook (force_compact path).
-        # cache_hit=False here (the cache hit branch returned above
-        # at the cache_lookup True branch).
-        await self._emit_on_compaction(
-            compacted,
-            source_tokens=tokens,
-            cache_hit=False,
-            mode=_obs_mode,
-            session_id=_obs_session_id,
-        )
         return CompactResult(
             original_tokens=tokens,
             compacted_tokens=compacted_tokens,

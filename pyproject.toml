@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "solomon-harness"
-version = "1.14.0"
+version = "1.15.0"
 description = "Open-source agentic harness for local LLM"
 readme = "README.md"
 license = "MIT"

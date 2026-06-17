@@ -1191,6 +1191,37 @@ class Settings(BaseSettings):
     # Phase 4.3+ v1.12.0: WebSocket interactive transport for Elicitation.
     hooks_elicitation_ws_enabled: bool = Field(default=True, description="Phase 4.3+: enable ElicitationBroker + /api/v1/elicitation/ws endpoint (default True; disable for headless deployments).")
     hooks_elicitation_ws_timeout_s: float = Field(default=30.0, description="Phase 4.3+: how long to wait for a human answer before falling back to default_answer.")
+    # Phase 4.3+ v1.15.0: HTTP long-poll fallback for Elicitation. Used
+    # when the WebSocket transport is unavailable (corporate firewall,
+    # reverse proxy without WS upgrade, mobile carrier with aggressive
+    # connection recycling). Default False — WS-first policy; operators
+    # opt in by setting HARNESS_HOOKS_ELICITATION_LONGPOLL_ENABLED=true.
+    hooks_elicitation_longpoll_enabled: bool = Field(
+        default=False,
+        description=(
+            "Phase 4.3+ v1.15.0: enable HTTP long-poll fallback for "
+            "Elicitation (/api/v1/elicitation/poll + /answer). Default "
+            "False — WS is the primary transport; this is the fallback "
+            "for environments where WS is unavailable. When False, the "
+            "long-poll endpoints return 403."
+        ),
+    )
+    hooks_elicitation_longpoll_timeout_s: float = Field(
+        default=30.0,
+        description=(
+            "Phase 4.3+ v1.15.0: max seconds a GET /poll request will "
+            "block waiting for a pending question before returning an "
+            "empty body / 404. Default 30s (matches the broker timeout)."
+        ),
+    )
+    hooks_elicitation_longpoll_interval_s: float = Field(
+        default=0.25,
+        description=(
+            "Phase 4.3+ v1.15.0: polling interval (seconds) for the "
+            "internal broker.pending() check loop inside the long-poll "
+            "endpoint. Lower = snappier response at higher CPU cost."
+        ),
+    )
 
     # === Phase 4.1: Observability — master switches ===
     observability_enabled: bool = Field(

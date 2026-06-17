@@ -434,8 +434,126 @@ def _cmd_hooks_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_hooks_dispatch(args: argparse.Namespace) -> int:
+    """Phase 4.5 v1.15.0: ``harness hooks dispatch <event>``.
+
+    Fires a single hook event against the global registry and prints
+    the aggregate decision (``allow`` / ``block`` / ``modify``).
+    Useful for shell-based testing of hook configurations without
+    spinning up the FastAPI server.
+
+    Exit codes:
+        0 — event fired (regardless of decision).
+        1 — internal error during dispatch.
+        2 — invalid arguments (unknown event name, malformed --payload).
+
+    The ``--project-root`` flag is accepted for parity with the
+    other ``hooks`` subcommands; it is used to load
+    ``.harness/hooks/*.json`` overrides into the global registry
+    before firing. When omitted, only the built-in hooks fire.
+    """
+    import asyncio
+
+    from harness.hooks.events import EventType
+
+    # Validate the event name against the EventType enum.
+    event_name = args.event
+    valid_event_values = {e.value for e in EventType}
+    if event_name not in valid_event_values:
+        print(
+            f"[harness] hooks dispatch: unknown event {event_name!r}. "
+            f"Valid events: {', '.join(sorted(valid_event_values))}",
+            file=sys.stderr,
+        )
+        return 2
+
+    # Parse the payload (default empty dict).
+    payload: dict[str, Any] = {}
+    if args.payload:
+        try:
+            parsed = json.loads(args.payload)
+        except json.JSONDecodeError as exc:
+            print(
+                f"[harness] hooks dispatch: --payload is not valid JSON: {exc}",
+                file=sys.stderr,
+            )
+            return 2
+        if not isinstance(parsed, dict):
+            print(
+                "[harness] hooks dispatch: --payload must be a JSON object, "
+                f"got {type(parsed).__name__}",
+                file=sys.stderr,
+            )
+            return 2
+        payload = parsed
+
+    # Load project overrides into the global registry before firing
+    # so the dispatch observes the same hooks production code does.
+    project_root = Path(args.project_root).resolve() if args.project_root else Path.cwd()
+    if project_root.is_dir():
+        specs, parse_errors = _parse_project_hooks(project_root)
+        for spec in specs:
+            # Register each project spec. We import the registry
+            # inside the function to keep the module's import-time
+            # surface minimal.
+            from harness.hooks.registry import get_registry
+            registry = get_registry()
+            try:
+                asyncio.run(registry.register(spec))
+            except Exception as exc:  # noqa: BLE001
+                print(
+                    f"[harness] hooks dispatch: failed to register "
+                    f"project hook {spec.hook_id!r}: {exc}",
+                    file=sys.stderr,
+                )
+        for err in parse_errors:
+            print(
+                f"  ERROR {err['file']}: {err['error']}",
+                file=sys.stderr,
+            )
+
+    from harness.hooks.runner import safe_fire
+
+    decision = asyncio.run(
+        safe_fire(
+            event_name,
+            session_id=args.session or "",
+            agent_id=args.agent or "",
+            payload=payload,
+        )
+    )
+
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "event": event_name,
+                    "decision": decision,
+                    "session_id": args.session or "",
+                    "agent_id": args.agent or "",
+                    "payload": payload,
+                },
+                ensure_ascii=False, indent=2,
+            )
+        )
+    else:
+        print(f"event    : {event_name}")
+        print(f"decision : {decision}")
+        if args.session:
+            print(f"session  : {args.session}")
+        if args.agent:
+            print(f"agent    : {args.agent}")
+        if payload:
+            preview = json.dumps(payload, ensure_ascii=False)
+            if len(preview) > 200:
+                preview = preview[:197] + "..."
+            print(f"payload  : {preview}")
+    return 0
+
+
 __all__ = [
     "_cmd_hooks_list",
     "_cmd_hooks_show",
     "_cmd_hooks_status",
+    "_cmd_hooks_dispatch",
 ]

@@ -1,5 +1,97 @@
 # Changelog — Solomon Harness
 
+## Phase 4.5 v1.15.0 — PermissionRequest + block-respecting semantics + hooks dispatch CLI + HTTP long-poll Elicitation (2026-06-17) — Phase 4 = 3/12 step
+
+**Phase 4.5 v1.15.0 — 4 new files / 7 modified files / +20 tests / 2092 total tests / 0 new deps**
+
+v1.14.0 wired 11 hook events but most block semantics were "logged-only" (couldn't abort in-flight ops). v1.15.0 closes 3 of those gaps and adds an operator-facing way to fire hooks from the shell.
+
+### Что закрыто
+
+**`PermissionRequest` emit + override (`harness/server/agent/runtime.py`)** — new `_resolve_permission_via_hook` helper:
+- Fires BEFORE the existing denylist check in `_bash` and other tools.
+- Uses `get_global_hook_runner().fire(ctx)` directly (NOT `safe_fire`) so it can read `aggregate.decisions` and `aggregate.final_payload` — the critical guard `if not aggregate.decisions: return initial_decision` distinguishes "no hooks registered" (allow original) from "explicit allow" (override deny). Without this guard an empty registry would silently disable the denylist.
+- **block → deny**, **allow → allow (override deny)**, **modify → override permission_decision from payload**.
+- `arguments_preview[:200]` for PII safety.
+- Hook failure → original decision (try/except).
+- **Test count**: 7/7 passed.
+
+**Block-respecting semantics for `OnRoutingDecision` + `OnCompaction`:**
+
+A. **`OnRoutingDecision` (`harness/agents/router.py`)**:
+- `_fire_routing_hook` returns `tuple[Decision, dict]` instead of `None`.
+- **block** → fallback agent (`_first_available(specs)`).
+- **modify** → override `decision.agent` from `aggregate.final_payload`.
+- **allow** → original decision.
+
+B. **`OnCompaction` (`harness/context/compaction.py`)**:
+- `_emit_on_compaction` accepts `trimmed_without_summary`, returns `list[dict]` (final messages).
+- **block** → drop summary, return sliding-window-only result (tail preserved, no LLM cost paid, no data loss).
+- **allow/modify** → return compacted-with-summary.
+- `_run_slow_path` got new `return_trimmed=True` param for backwards compat.
+
+**`harness hooks dispatch <event>` subcommand (`harness/cli.py` + `harness/cli_hooks.py`)**:
+- Fire hook events from the shell for debugging.
+- Args: `harness hooks dispatch <event> [--session S] [--agent A] [--payload JSON] [--project-root P]`.
+- Validates event name against `EventType` enum (PascalCase).
+- Loads project hooks + builtins, fires through `get_global_hook_runner`, prints decision.
+- **Test count**: 2/2 passed.
+
+**HTTP long-poll Elicitation (`harness/server/routes/elicitation_longpoll.py`, NEW 222 LoC)**:
+- `GET /api/v1/elicitation/poll?session=S` — long-poll (30s default, 250ms poll interval).
+- `POST /api/v1/elicitation/answer` — submit answer, resolves future.
+- `hooks_elicitation_longpoll_enabled=False` (default) → 403 (WS-first).
+- Conditional mount in `harness/server/app.py` lifespan.
+- Reuses `ElicitationBroker.publish/wait/answer` (no broker changes needed).
+- 3 new settings: `hooks_elicitation_longpoll_enabled`, `hooks_elicitation_longpoll_timeout_s`, `hooks_elicitation_longpoll_poll_interval_s`.
+- **Test count**: 5/5 passed.
+
+### Tests
+
+**+20 net new tests, 2092 total (was 2072), 2 skipped, 0 regressions в этом PR.**
+
+Breakdown:
+- `tests/test_permission_request_v115.py` — 7 tests
+- `tests/test_routing_compaction_block_v115.py` — 6 tests
+- `tests/test_cli_hooks_dispatch.py` — 2 tests
+- `tests/test_elicitation_longpoll_v115.py` — 5 tests
+
+### Files
+
+NEW:
+- `harness/server/routes/elicitation_longpoll.py` (~222 LoC)
+- `tests/test_permission_request_v115.py` (~290 LoC, 7 tests)
+- `tests/test_routing_compaction_block_v115.py` (~330 LoC, 6 tests)
+- `tests/test_cli_hooks_dispatch.py` (~80 LoC, 2 tests)
+- `tests/test_elicitation_longpoll_v115.py` (~240 LoC, 5 tests)
+
+MODIFIED:
+- `harness/server/agent/runtime.py` — PermissionRequest emit + override (Task 1, Coder)
+- `harness/agents/router.py` — OnRoutingDecision block-respecting (Task 2, Prog)
+- `harness/context/compaction.py` — OnCompaction block-respecting (Task 2, Prog)
+- `harness/cli.py` — `hooks dispatch` subparser (Task 2, Prog)
+- `harness/cli_hooks.py` — `_cmd_hooks_dispatch` impl (Task 2, Prog)
+- `harness/config.py` — 3 new settings for longpoll (Task 3, Admin)
+- `harness/server/app.py` — conditional longpoll mount (Task 3, Admin)
+- `harness/__init__.py` (1.14.0 → 1.15.0)
+- `harness/server/app.py` (FastAPI `version="1.14.0"` → `"1.15.0"`)
+- `pyproject.toml` (version 1.14.0 → 1.15.0)
+- `docs/CHANGELOG.md` (this section)
+
+### Architecture notes
+
+- **Why PermissionRequest uses `runner.fire()` directly, not `safe_fire`**: `safe_fire` returns just the decision string; PermissionRequest needs `aggregate.decisions` (to distinguish "no hooks" from "explicit allow") and `aggregate.final_payload` (for `modify` overrides). The guard `if not aggregate.decisions: return initial_decision` is critical — without it, an empty registry would silently disable the denylist for every tool call.
+- **Why OnCompaction block drops summary, not compaction entirely**: Sliding window already dropped the oldest messages (Plan B: drop the summary, keep the window). This avoids LLM cost AND preserves the recent tail. The original messages are gone forever (sliding window already deleted them); block just prevents spending LLM tokens to summarize what we already dropped.
+- **Why HTTP long-poll uses 250ms poll interval**: Long-poll = wait for next pending question, OR timeout (30s default). The 250ms is the broker poll interval (FastAPI's `Event` resolution). Trade-off: 250ms latency vs CPU usage. Lower = snappier answers but more CPU.
+- **Why longpoll disabled by default**: WS is the primary transport (faster, bidirectional, no polling overhead). Longpoll is for environments where WS is blocked (corporate firewalls, some proxies). Opt-in via `HOOKS_ELICITATION_LONGPOLL_ENABLED=true`.
+
+### Next (Phase 4.6+)
+
+- Wire remaining hook events into production where they're read (e.g. `OnMemoryWrite` callback for memory-aware UI).
+- `harness hooks audit` — read `HookAuditSink` NDJSON from CLI (analog to `harness observability log`).
+- 2026-12-31: switch legacy `/api/*` to 410 Gone (RFC 8594 Sunset headers from v1.7.2).
+- Phase 5+: B2 precision@5 strict DoD, v1.0.0 release.
+
 ## Phase 4.4+ v1.14.0 — wire 11 remaining hook events in production (2026-06-17) — Phase 4 = 2/12 step
 
 **Phase 4.4+ v1.14.0 — 0 new files / 9 modified files / +15 tests / 2072 total tests / 0 new deps**

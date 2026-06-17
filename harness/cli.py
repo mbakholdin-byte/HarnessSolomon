@@ -1654,6 +1654,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # === Phase 4.4 v1.13.0: ``hooks`` subcommand (local inspection) ===
     from harness.cli_hooks import (
+        _cmd_hooks_dispatch as _cmd_hooks_dispatch_impl,
         _cmd_hooks_list as _cmd_hooks_list_impl,
         _cmd_hooks_show as _cmd_hooks_show_impl,
         _cmd_hooks_status as _cmd_hooks_status_impl,
@@ -1729,6 +1730,42 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     _add_hooks_common(hooks_status_p)
     hooks_status_p.set_defaults(func=_cmd_hooks_status_impl)
+
+    # Phase 4.5 v1.15.0: ``harness hooks dispatch <event>`` — fire an
+    # event against the global registry and print the decision.
+    hooks_dispatch_p = hooks_sub.add_parser(
+        "dispatch",
+        help=(
+            "Fire a hook event and print the aggregate decision "
+            "(Phase 4.5 v1.15.0). Useful for shell-based testing "
+            "of hook configurations without the server."
+        ),
+    )
+    _add_hooks_common(hooks_dispatch_p)
+    hooks_dispatch_p.add_argument(
+        "event",
+        help=(
+            "Hook event name (PascalCase, matches EventType.value). "
+            "Examples: 'PreToolUse', 'OnRoutingDecision', 'OnCompaction'."
+        ),
+    )
+    hooks_dispatch_p.add_argument(
+        "--session", default="",
+        help="Session id to attach to the HookContext (default: empty).",
+    )
+    hooks_dispatch_p.add_argument(
+        "--agent", default="",
+        help="Agent id to attach to the HookContext (default: empty).",
+    )
+    hooks_dispatch_p.add_argument(
+        "--payload", default="{}",
+        help=(
+            "JSON object string for the event payload (default: '{}'). "
+            "Example: --payload '{\"tool_name\": \"bash\"}'."
+        ),
+    )
+    hooks_dispatch_p.set_defaults(func=_cmd_hooks_dispatch_impl)
+
     # If no subcommand, default to "list" with the parent's flags.
     hooks_p.set_defaults(func=_cmd_hooks_list_impl)
 

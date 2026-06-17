@@ -425,6 +425,108 @@ class ToolRuntime:
             return ToolResult(ok=False, error=f"write_file: {exc}")
         return ToolResult(ok=True, output=f"wrote {len(content)} bytes to {path_str}")
 
+    # --- Phase 4.5 v1.15.0: PermissionRequest override resolution ---
+
+    async def _resolve_permission_via_hook(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any],
+        *,
+        initial_decision: str,
+        denied_reason: str = "",
+    ) -> str:
+        """Fire ``PermissionRequest`` BEFORE the denylist check and
+        apply hook overrides to the permission decision.
+
+        Phase 4.5 v1.15.0 semantics:
+
+        * Hook returns ``"allow"`` — final decision is ``"allow"`` even
+          if ``initial_decision`` was ``"deny"`` (this is the
+          denylist-override escape hatch).
+        * Hook returns ``"block"`` — final decision is ``"deny"`` even
+          if ``initial_decision`` was ``"allow"``.
+        * Hook returns ``"modify"`` with
+          ``output["payload"]["permission_decision"]`` — that value
+          (``"allow"`` / ``"deny"``) becomes the final decision.
+        * Hook failure / unknown event / no registered hooks — the
+          ``initial_decision`` is returned unchanged (fail-open, but
+          explicit: production code never silently flips a deny).
+
+        Edge case: a hook may return ``"allow"`` for a tool that is
+        NOT in the denylist. In that case ``initial_decision`` was
+        already ``"allow"``, so the override is a no-op — the tool
+        proceeds as it would have anyway. This keeps the hook
+        contract uniform regardless of whether the denylist matched.
+
+        PII safety: ``arguments_preview`` is truncated to 200 chars
+        before being placed in the payload (see truncation below).
+
+        Returns the final permission decision: ``"allow"`` or
+        ``"deny"``. ``safe_fire`` is used indirectly via the global
+        runner so all emission behaviour (observability counter,
+        audit log, recursion guard) is preserved. We bypass the
+        convenience wrapper only to read the aggregate's
+        ``final_payload`` for the ``modify`` path.
+        """
+        from harness.hooks.context import HookContext
+        from harness.hooks.runner import get_global_hook_runner
+
+        # Truncate to 200 chars — keeps PII / large arguments out of
+        # the audit log and prevents payload size blow-ups in hook
+        # transports (subprocess stdin, HTTP POST body).
+        arguments_preview = str(arguments)[:200]
+
+        ctx = HookContext(
+            event="PermissionRequest",
+            session_id=self._session_id,
+            agent_id="",
+            payload={
+                "tool_name": tool_name,
+                "arguments_preview": arguments_preview,
+                "permission_decision": initial_decision,
+                "denied_reason": denied_reason or "",
+            },
+        )
+        try:
+            runner = get_global_hook_runner()
+            aggregate = await runner.fire(ctx)
+        except Exception as exc:  # noqa: BLE001 — hooks must never break tools
+            logger.debug(
+                "PermissionRequest hook failed for %s: %s: %s",
+                tool_name, type(exc).__name__, exc,
+            )
+            return initial_decision
+
+        # No hooks fired for PermissionRequest → keep the original
+        # denylist decision. We MUST distinguish "no hooks" from
+        # "hook explicitly returned allow" — otherwise an empty
+        # registry would silently disable the denylist (security
+        # regression). ``aggregate.decisions`` is empty iff no hook
+        # was dispatched.
+        if not aggregate.decisions:
+            return initial_decision
+
+        final = aggregate.final_decision
+        if final == "block":
+            return "deny"
+        if final == "allow":
+            # Explicit hook allow overrides an initial deny.
+            return "allow"
+        # modify: hook MAY override permission_decision in its payload.
+        override = (
+            aggregate.final_payload.get("permission_decision")
+            if aggregate.final_payload
+            else None
+        )
+        if override == "allow":
+            return "allow"
+        if override == "deny":
+            return "deny"
+        # modify without a valid override → keep initial (caller's
+        # denylist decision stands; the hook signalled "I want to
+        # change SOMETHING" but not the permission itself).
+        return initial_decision
+
     # --- subprocess tools ---
 
     async def _bash(self, args: dict[str, Any]) -> ToolResult:
@@ -440,16 +542,41 @@ class ToolRuntime:
                 error=f"bash: 'timeout' must be an int in [{MIN_BASH_TIMEOUT}, {MAX_BASH_TIMEOUT}]",
             )
 
-        # 1. Safety check FIRST — before spawning any process.
+        # 1. Compute initial permission from the denylist.
         denied_pattern = is_bash_denied(command)
-        if denied_pattern is not None:
-            logger.warning("bash denied by safety pattern: %s", denied_pattern)
+        initial_decision = "deny" if denied_pattern is not None else "allow"
+        denied_reason = (
+            f"matches safety pattern {denied_pattern!r}"
+            if denied_pattern is not None
+            else ""
+        )
+
+        # 2. Phase 4.5 v1.15.0: fire PermissionRequest BEFORE the
+        #    denylist short-circuits. The hook may override the
+        #    permission (allow-on-denylist, block-on-allow, or modify
+        #    with an explicit decision). See
+        #    ``_resolve_permission_via_hook`` for the full contract.
+        final_decision = await self._resolve_permission_via_hook(
+            tool_name="bash",
+            arguments=args,
+            initial_decision=initial_decision,
+            denied_reason=denied_reason,
+        )
+        if final_decision == "deny":
+            logger.warning(
+                "bash denied: safety_pattern=%s, hook_overrode_to_deny=%s",
+                denied_pattern, initial_decision == "allow",
+            )
             return ToolResult(
                 ok=False,
-                error=f"denied: matches safety pattern {denied_pattern!r}",
+                error=(
+                    f"denied: {denied_reason}"
+                    if denied_reason
+                    else "denied: blocked by PermissionRequest hook"
+                ),
             )
 
-        # 2. Spawn via shell. We accept the security tradeoff here because
+        # 3. Spawn via shell. We accept the security tradeoff here because
         #    the tool is explicitly named "bash" — the LLM is expected to
         #    use it for shell-style composition.
         try:
