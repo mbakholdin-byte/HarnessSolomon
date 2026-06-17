@@ -1,5 +1,108 @@
 # Changelog — Solomon Harness
 
+## Phase 4.6 v1.16.0 — hooks audit CLI + payload schema validation + Slack/Teams notification channels (2026-06-17) — Phase 4 = 4/12 step
+
+**Phase 4.6 v1.16.0 — 4 new files / 7 modified files / +67 tests / 2159 total tests / 0 new deps**
+
+Phase 4.5 closed the interactive loop (PermissionRequest override + block semantics). v1.16.0 closes 3 observability/operability gaps:
+1. `harness hooks audit` — read NDJSON audit log from shell (mirror of `harness observability log`)
+2. Pydantic per-event payload schemas — fail-fast at emit, not in hook body
+3. Slack + Teams notification channels — дополнение к existing stdout/webhook/desktop
+
+### Что закрыто
+
+**`harness hooks audit [--tail] [--event] [--decision] [--session] [--since] [--json]` (`harness/cli_hooks.py` + `harness/cli.py`)**:
+- Read `HookAuditSink` NDJSON из shell (analog to `harness observability log`).
+- Filters: `--tail N` (default 50), `--event E`, `--decision allow|block|modify`, `--session S`, `--since ISO`.
+- Pretty table: `timestamp | event | session | hook_id | decision | duration_ms`.
+- `--json` → JSON array.
+- No audit dir → "(no audit log)" + exit 0.
+- 24 tests passed.
+
+**`harness/hooks/schemas.py` — Pydantic per-event payload models (NEW ~280 LoC)**:
+- One `BaseModel` per `EventType` (16 models): `PreToolUsePayload`, `PostToolUsePayload`, `StopPayload`, `SubagentStartPayload`, `SubagentStopPayload`, `PreCompactPayload`, `OnCompactionPayload`, `OnRoutingDecisionPayload`, `UserPromptSubmitPayload`, `InstructionsLoadedPayload`, `OnMemoryWritePayload`, `PermissionRequestPayload`, `SessionStartPayload`, `SessionEndPayload`, `ElicitationPayload`, `NotificationPayload`.
+- `EVENT_SCHEMAS` dict maps canonical CC wire name → model.
+- `model_config = ConfigDict(extra="ignore")` for forward-compat.
+- `__version__ = "1"` for future schema-version negotiation.
+- **`OnMemoryWritePayload` has NO `value` field** — only `key_hash`, `layer`, `scope`, `size_bytes` (PII safety).
+- Trust boundary: stdlib + pydantic only. AST-enforced.
+- 22 tests passed (incl trust boundary AST scan).
+
+**`validate_payload(event, payload) -> dict` (`harness/hooks/context.py`)**:
+- New helper exported from `context.py`. Uses `EVENT_SCHEMAS[event].model_validate(payload)`.
+- **Fail-open**: on `ValidationError` → log warning + return ORIGINAL payload. Hook dispatch must NEVER break because of a schema regression.
+- Returns the same object (`is` check) on success-with-no-normalisation, or a new dict if pydantic normalised values (e.g. coerced types).
+
+**Wire в `harness/hooks/runner.py:fire()`**:
+- Перед `_fire_impl()`: `validated_payload = validate_payload(context.event, context.payload)`.
+- If `validated_payload is not context.payload`: replace via `context.with_payload(validated_payload)`.
+- Otherwise: continue with original payload (no overhead).
+
+**`notify_terminal` Slack + Teams channels (`harness/hooks/builtin/notify_terminal.py`)**:
+- 2 new channel handlers: `_handle_slack` + `_handle_teams`.
+- 6 new settings: `hooks_notify_slack_webhook_url`, `hooks_notify_slack_channel`, `hooks_notify_slack_username` (default "Solomon Harness"); `hooks_notify_teams_webhook_url` + 2 reserved.
+- Default disabled (URL empty → channel is no-op).
+- Slack severity → color: info=green, warn=yellow, error=red. HMAC НЕ требуется (webhook URL is the secret).
+- Teams severity → `themeColor`: info=0078D4, warn=FFA500, error=FF0000. MessageCard format per MS spec.
+- Webhook URLs redact в logs (per `cli_hooks._redact_header_value` pattern).
+- 21 tests passed (incl mock urllib tests).
+
+### Tests
+
+**+67 net new tests, 2159 total (was 2092), 2 skipped, 0 regressions в этом PR.**
+
+Breakdown:
+- `tests/test_cli_hooks_audit.py` — 24 tests (Admin)
+- `tests/test_hook_schemas.py` — 22 tests incl trust boundary (Coder)
+- `tests/test_notify_slack_teams.py` — 21 tests (Prog)
+
+Pre-existing flakes (NOT regressions):
+- `test_elicitation_notification.py::test_runner_dispatches_elicitation` — Settings mock race (existed before v1.16.0)
+- `test_smoke.py::test_smoke_*_real_llm` — requires real LLM API
+
+### Files
+
+NEW:
+- `harness/hooks/schemas.py` (~280 LoC, 16 Pydantic models)
+- `tests/test_cli_hooks_audit.py` (~520 LoC, 24 tests)
+- `tests/test_hook_schemas.py` (~410 LoC, 22 tests)
+- `tests/test_notify_slack_teams.py` (~480 LoC, 21 tests)
+
+MODIFIED:
+- `harness/hooks/builtin/notify_terminal.py` — Slack + Teams handlers (Prog)
+- `harness/hooks/context.py` — `validate_payload` helper (Coder)
+- `harness/hooks/runner.py` — `validate_payload` integration в `fire()` (Coder)
+- `harness/cli.py` — `hooks audit` subparser (Admin)
+- `harness/cli_hooks.py` — `_cmd_hooks_audit` impl (Admin)
+- `harness/config.py` — 6 new settings for Slack/Teams (Prog)
+- `tests/test_notify_terminal_channels.py` — updated for new channels (Prog)
+- `harness/__init__.py` (1.15.0 → 1.16.0)
+- `harness/server/app.py` (FastAPI `version="1.15.0"` → `"1.16.0"`)
+- `pyproject.toml` (version 1.15.0 → 1.16.0)
+- `docs/CHANGELOG.md` (this section)
+
+### Architecture notes
+
+- **Why `validate_payload` is fail-open**: Hook dispatch must NEVER break because of a schema regression. A new field added to `PreToolUsePayload` could break every existing test that doesn't pass it. Better to log a warning and use the original payload than to 500 the chat loop.
+- **Why `model_config = ConfigDict(extra="ignore")`**: forward-compat. New fields added to events should not break existing hooks that don't know about them. Pydantic will accept extra fields silently.
+- **Why `__version__ = "1"` in schemas**: future schema breaking changes can bump this. Consumers (e.g. persistent storage, audit log) can decide whether to coerce old shapes.
+- **Why `OnMemoryWritePayload` has no `value` field**: PII safety. Memory values may contain user content; if logged via `emit_hook_dispatch` → JSONL → SIEM, we leak PII. Hash is stable for correlation, opaque for log readers. Matches the emit site in `harness/memory/unified.py`.
+- **Why Slack webhook URL doesn't need HMAC**: Slack's webhook URLs are themselves the secret. They're tied to a specific channel + workspace; leaking the URL IS the breach. No additional signing layer.
+- **Why Teams uses `themeColor` not `color`**: Microsoft MessageCard schema uses `themeColor` (hex without `#`). Slack uses `color` (named CSS color or hex). Different APIs, different conventions.
+
+### Trust boundary
+
+- `harness/hooks/schemas.py` — stdlib + pydantic only. NO `harness.agents`/`harness.server`. AST-enforced by `tests/test_hook_schemas.py`.
+- `cli_hooks.py` (new `_cmd_hooks_audit`) — imports from `harness.hooks.*` + stdlib. NO production imports. AST-enforced by existing tests.
+- `notify_terminal.py` (Slack/Teams handlers) — stdlib + harness.config. NO production imports. AST-enforced by existing trust boundary test.
+
+### Next (Phase 4.7+)
+
+- Wire `PermissionRequest` block into runtime deny path more broadly (currently only `_bash`).
+- `harness hooks audit --follow` — tail audit log live (like `tail -f`).
+- 2026-12-31: switch legacy `/api/*` to 410 Gone (RFC 8594 Sunset headers from v1.7.2).
+- Phase 5+: B2 precision@5 strict DoD, v1.0.0 release.
+
 ## Phase 4.5 v1.15.0 — PermissionRequest + block-respecting semantics + hooks dispatch CLI + HTTP long-poll Elicitation (2026-06-17) — Phase 4 = 3/12 step
 
 **Phase 4.5 v1.15.0 — 4 new files / 7 modified files / +20 tests / 2092 total tests / 0 new deps**

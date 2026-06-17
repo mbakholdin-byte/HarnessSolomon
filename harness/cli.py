@@ -1654,6 +1654,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # === Phase 4.4 v1.13.0: ``hooks`` subcommand (local inspection) ===
     from harness.cli_hooks import (
+        _cmd_hooks_audit as _cmd_hooks_audit_impl,
         _cmd_hooks_dispatch as _cmd_hooks_dispatch_impl,
         _cmd_hooks_list as _cmd_hooks_list_impl,
         _cmd_hooks_show as _cmd_hooks_show_impl,
@@ -1765,6 +1766,55 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     hooks_dispatch_p.set_defaults(func=_cmd_hooks_dispatch_impl)
+
+    # Phase 4.6 v1.16.0: ``harness hooks audit`` — read the NDJSON
+    # audit log from disk (today's UTC file by default).
+    hooks_audit_p = hooks_sub.add_parser(
+        "audit",
+        help=(
+            "Read the hook audit log (Phase 4.6 v1.16.0). "
+            "Prints the last N entries from "
+            "<project_root>/data/audit/hooks-YYYY-MM-DD.ndjson "
+            "(today's UTC file). Apply filters with --event, "
+            "--decision, --session, --since."
+        ),
+    )
+    _add_hooks_common(hooks_audit_p)
+    hooks_audit_p.add_argument(
+        "--tail", type=int, default=50,
+        help=(
+            "Number of entries to show (default: 50). "
+            "Set to 0 for all entries in today's file."
+        ),
+    )
+    hooks_audit_p.add_argument(
+        "--event", default=None,
+        help=(
+            "Filter by event name (exact match, case-sensitive). "
+            "Examples: 'PreToolUse', 'OnRoutingDecision'."
+        ),
+    )
+    hooks_audit_p.add_argument(
+        "--decision", default=None,
+        choices=["allow", "block", "modify"],
+        help=(
+            "Filter by aggregate final_decision. "
+            "One of: allow, block, modify."
+        ),
+    )
+    hooks_audit_p.add_argument(
+        "--session", default=None,
+        help="Filter by session_id (exact match).",
+    )
+    hooks_audit_p.add_argument(
+        "--since", default=None,
+        help=(
+            "Show only entries with ts >= since (ISO-8601). "
+            "Examples: '2026-06-17T00:00:00Z', "
+            "'2026-06-17T12:00:00+00:00'."
+        ),
+    )
+    hooks_audit_p.set_defaults(func=_cmd_hooks_audit_impl)
 
     # If no subcommand, default to "list" with the parent's flags.
     hooks_p.set_defaults(func=_cmd_hooks_list_impl)

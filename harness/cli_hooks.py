@@ -21,6 +21,7 @@ import argparse
 import json
 import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -551,9 +552,298 @@ def _cmd_hooks_dispatch(args: argparse.Namespace) -> int:
     return 0
 
 
+# === Phase 4.6 v1.16.0: ``harness hooks audit`` ============================
+#
+# Reads the NDJSON audit log written by ``harness.hooks.audit.HookAuditSink``.
+# We do NOT reuse ``HookAuditSink.tail()`` here because:
+#   1) ``tail()`` only reads today's file; the CLI should let the
+#      operator specify which date's file to read (future flag).
+#   2) ``tail()`` does not apply filters; we want one-pass filter+tail.
+#   3) The CLI is read-only and a single-function parser is easy to
+#      test without instantiating a sink.
+#
+# The on-disk format (one JSON object per line) is documented in
+# ``harness/hooks/audit.py::HookAuditSink.record`` and in
+# ``docs/hooks.md`` §8. We re-derive the schema here defensively
+# rather than importing the sink's private ``_path_for`` helper.
+
+_AUDIT_DIR_NAME = "data/audit"
+
+
+def _audit_dir_for(project_root: Path) -> Path:
+    """Resolve ``<project_root>/data/audit``.
+
+    Matches the path used by ``HookAuditSink`` (which receives
+    ``audit_dir`` directly; production wiring passes
+    ``project_root / "data/audit"``). Kept here so the CLI does
+    not import from harness.hooks.audit (which would be safe but
+    would create an unnecessary module-level dependency).
+    """
+    return project_root / _AUDIT_DIR_NAME
+
+
+def _audit_file_for(audit_dir: Path, when: datetime | None = None) -> Path:
+    """Return the audit file path for a given day (UTC).
+
+    Mirrors ``HookAuditSink._path_for`` but reads from the CLI
+    side. Defaults to today's UTC date so the CLI shows the
+    current day by default (matching the sink's rotation policy).
+    """
+    when = when or datetime.now(timezone.utc)
+    return audit_dir / f"hooks-{when.strftime('%Y-%m-%d')}.ndjson"
+
+
+def read_audit_log(
+    path: Path,
+    *,
+    tail: int = 50,
+    event: str | None = None,
+    decision: str | None = None,
+    session: str | None = None,
+    since: str | None = None,
+) -> list[dict[str, Any]]:
+    """Parse an NDJSON audit log and apply filters.
+
+    Args:
+        path: File to read (e.g. ``data/audit/hooks-2026-06-17.ndjson``).
+            If the file does not exist, returns ``[]``.
+        tail: Maximum number of entries to return. The last ``tail``
+            entries (by file order) are returned after filtering.
+            Set to ``0`` (or a very large number) to return all.
+        event: If set, keep only entries whose ``event`` equals
+            this value (case-sensitive, exact match).
+        decision: If set (one of ``allow``/``block``/``modify``),
+            keep only entries whose
+            ``aggregate.final_decision`` matches.
+        session: If set, keep only entries whose ``session_id``
+            matches.
+        since: ISO-8601 timestamp; keep only entries whose ``ts``
+            is ``>= since``. Parsed loosely (a trailing ``Z`` is
+            accepted; naive datetimes are treated as UTC).
+
+    Returns:
+        A list of dicts in file order (oldest first). Each dict is
+        the raw JSON object from the file (no reshaping). Lines
+        that fail to parse as JSON are skipped silently — the
+        audit log is append-only and a partial line should not
+        abort the read.
+    """
+    if not path.exists():
+        return []
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+
+    # Parse the ``since`` filter once (loose ISO-8601).
+    since_dt: datetime | None = None
+    if since:
+        candidate = since.strip()
+        if candidate.endswith("Z"):
+            candidate = candidate[:-1] + "+00:00"
+        try:
+            since_dt = datetime.fromisoformat(candidate)
+        except ValueError:
+            # If the operator passed garbage, treat it as no filter
+            # rather than crashing — the CLI prints a warning.
+            since_dt = None
+        else:
+            if since_dt.tzinfo is None:
+                since_dt = since_dt.replace(tzinfo=timezone.utc)
+
+    out: list[dict[str, Any]] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            # Skip malformed lines (append-only log; partial writes
+            # are possible if the process was killed mid-line).
+            continue
+        if not isinstance(entry, dict):
+            continue
+
+        if event is not None and entry.get("event") != event:
+            continue
+        if session is not None and entry.get("session_id") != session:
+            continue
+
+        aggregate = entry.get("aggregate")
+        if isinstance(aggregate, dict):
+            entry_decision = aggregate.get("final_decision")
+        else:
+            entry_decision = None
+        if decision is not None and entry_decision != decision:
+            continue
+
+        if since_dt is not None:
+            ts_raw = entry.get("ts")
+            if isinstance(ts_raw, str):
+                ts_candidate = ts_raw.rstrip("Z")
+                try:
+                    entry_dt = datetime.fromisoformat(ts_candidate)
+                except ValueError:
+                    # Unparseable timestamp — drop the entry rather
+                    # than guessing.
+                    continue
+                else:
+                    if entry_dt.tzinfo is None:
+                        entry_dt = entry_dt.replace(tzinfo=timezone.utc)
+                    if entry_dt < since_dt:
+                        continue
+            else:
+                # No usable timestamp — drop.
+                continue
+
+        out.append(entry)
+
+    if tail and tail > 0:
+        return out[-tail:]
+    return out
+
+
+def _print_audit_table(entries: list[dict[str, Any]], *, source: str) -> None:
+    """Pretty-print audit entries as a fixed-width table.
+
+    Columns: ``timestamp | event | session | hook_id | decision | duration_ms``.
+    ``hook_id`` comes from the aggregate's ``blocked_by`` (if set)
+    or the first decision's ``hook_id``. ``duration_ms`` is the
+    sum of all per-hook durations (best-effort proxy for total
+    dispatch cost).
+    """
+    print(f"Hook audit log ({source}):")
+    if not entries:
+        print("  (no entries)")
+        return
+
+    cols = [
+        ("timestamp", 26),
+        ("event", 16),
+        ("session", 12),
+        ("hook_id", 24),
+        ("decision", 8),
+        ("duration_ms", 11),
+    ]
+    header = "  " + "  ".join(f"{name:<{w}}" for name, w in cols)
+    print(header)
+    print("  " + "-" * (sum(w for _, w in cols) + 2 * (len(cols) - 1)))
+
+    for e in entries:
+        ts = str(e.get("ts", ""))[:26]
+        event = str(e.get("event", ""))[:16]
+        session = str(e.get("session_id", ""))[:12]
+        aggregate = e.get("aggregate") if isinstance(e.get("aggregate"), dict) else {}
+        decision = str(aggregate.get("final_decision", ""))[:8]
+        # hook_id: prefer blocked_by, else first decision's hook_id.
+        hook_id = str(aggregate.get("blocked_by") or "")
+        if not hook_id:
+            decisions = aggregate.get("decisions")
+            if isinstance(decisions, list) and decisions:
+                first = decisions[0]
+                if isinstance(first, dict):
+                    hook_id = str(first.get("hook_id", ""))
+        hook_id = hook_id[:24]
+        # duration_ms: sum of per-hook durations.
+        duration = 0.0
+        decisions = aggregate.get("decisions")
+        if isinstance(decisions, list):
+            for d in decisions:
+                if isinstance(d, dict):
+                    try:
+                        duration += float(d.get("duration_ms", 0.0) or 0.0)
+                    except (TypeError, ValueError):
+                        pass
+        duration_s = f"{duration:.1f}"[:11]
+
+        print(
+            "  "
+            + "  ".join(
+                f"{v:<{w}}"
+                for v, (_, w) in zip(
+                    (ts, event, session, hook_id, decision, duration_s), cols,
+                )
+            )
+        )
+
+
+def _cmd_hooks_audit(args: argparse.Namespace) -> int:
+    """Phase 4.6 v1.16.0: ``harness hooks audit`` — read the NDJSON audit log.
+
+    Reads ``<project_root>/data/audit/hooks-YYYY-MM-DD.ndjson``
+    (today's UTC file by default) and prints the last N entries
+    after applying the requested filters.
+
+    Exit codes:
+        0 — success (including "no audit log" / "no entries").
+        2 — invalid arguments (e.g. unknown --decision value).
+
+    If the audit directory or today's file does not exist, the
+    command prints ``(no audit log)`` and exits 0 — this is the
+    expected state when ``settings.hooks_audit_log`` is False.
+    """
+    # Validate --decision against the canonical Decision literal.
+    decision = getattr(args, "decision", None)
+    if decision is not None and decision not in ("allow", "block", "modify"):
+        print(
+            f"[harness] hooks audit: --decision must be one of "
+            f"allow|block|modify, got {decision!r}",
+            file=sys.stderr,
+        )
+        return 2
+
+    project_root = Path(args.project_root).resolve() if args.project_root else Path.cwd()
+    if not project_root.is_dir():
+        print(
+            f"[harness] hooks audit: project_root {project_root} is not a directory",
+            file=sys.stderr,
+        )
+        return 2
+
+    audit_dir = _audit_dir_for(project_root)
+    audit_file = _audit_file_for(audit_dir)
+
+    if not audit_file.exists():
+        # No audit directory or today's file missing. This is the
+        # common case (audit is opt-in via settings.hooks_audit_log).
+        if args.json:
+            print(json.dumps({"entries": [], "count": 0, "file": str(audit_file)}))
+        else:
+            print("(no audit log)")
+        return 0
+
+    entries = read_audit_log(
+        audit_file,
+        tail=args.tail,
+        event=getattr(args, "event", None),
+        decision=decision,
+        session=getattr(args, "session", None),
+        since=getattr(args, "since", None),
+    )
+
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "entries": entries,
+                    "count": len(entries),
+                    "file": str(audit_file),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+    else:
+        _print_audit_table(entries, source=str(audit_file))
+    return 0
+
+
 __all__ = [
     "_cmd_hooks_list",
     "_cmd_hooks_show",
     "_cmd_hooks_status",
     "_cmd_hooks_dispatch",
+    "_cmd_hooks_audit",
+    "read_audit_log",
 ]

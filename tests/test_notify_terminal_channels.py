@@ -322,7 +322,8 @@ class TestDispatcher:
 
     @pytest.mark.asyncio
     async def test_handler_table_includes_three_channels(self) -> None:
-        assert set(_HANDLERS) == {"stdout", "webhook", "desktop"}
+        # Phase 4.6 v1.16.0: slack + teams added → 5 channels total.
+        assert set(_HANDLERS) == {"stdout", "webhook", "desktop", "slack", "teams"}
 
 
 # === 6. Settings: 4 new fields ===

@@ -1188,6 +1188,64 @@ class Settings(BaseSettings):
     hooks_notify_webhook_secret: str = Field(default="", description="Phase 4.3+: HMAC-SHA256 secret for X-Harness-Signature header (empty = no signature).")
     hooks_notify_webhook_timeout_s: float = Field(default=5.0, description="Phase 4.3+: webhook POST timeout in seconds.")
     hooks_notify_desktop_enabled: bool = Field(default=False, description="Phase 4.3+: enable desktop channel for Notification (opt-in — uses PowerShell msg/osascript/notify-send).")
+    # Phase 4.6 v1.16.0: Slack + Teams channels for Notification.
+    # Both are webhook-based (no HMAC — the webhook URL itself is the secret).
+    # URL is never logged; only the env var NAME is surfaced in error messages
+    # (mirrors the webhook_secret policy at config.py:228).
+    hooks_notify_slack_webhook_url: str = Field(
+        default="",
+        description=(
+            "Phase 4.6 v1.16.0: Slack incoming webhook URL "
+            "(e.g. ``https://hooks.slack.com/services/T.../B.../...``). "
+            "Empty = Slack channel disabled (no-op). The URL acts as the "
+            "secret — it is NEVER logged or echoed in error messages."
+        ),
+    )
+    hooks_notify_slack_channel: str = Field(
+        default="",
+        description=(
+            "Phase 4.6 v1.16.0: optional Slack channel override "
+            "(e.g. ``#harness-alerts`` or ``C012345``). Empty string = "
+            "use the webhook's default channel (configured in the Slack "
+            "app settings). Ignored when ``hooks_notify_slack_webhook_url`` "
+            "is empty."
+        ),
+    )
+    hooks_notify_slack_username: str = Field(
+        default="Solomon Harness",
+        description=(
+            "Phase 4.6 v1.16.0: bot display name for Slack messages. "
+            "Default ``Solomon Harness``. Override per-deployment via "
+            "``HARNESS_HOOKS_NOTIFY_SLACK_USERNAME``."
+        ),
+    )
+    hooks_notify_slack_timeout_s: float = Field(
+        default=5.0,
+        description=(
+            "Phase 4.6 v1.16.0: per-request timeout (seconds) for the "
+            "Slack webhook POST. Mirrors ``hooks_notify_webhook_timeout_s``. "
+            "Slack webhooks typically respond in <500ms; 5s is a generous "
+            "cap that tolerates slow corporate proxies."
+        ),
+    )
+    hooks_notify_teams_webhook_url: str = Field(
+        default="",
+        description=(
+            "Phase 4.6 v1.16.0: Microsoft Teams incoming webhook URL "
+            "(Office 365 connector, e.g. "
+            "``https://outlook.office.com/webhook/...``). Empty = Teams "
+            "channel disabled (no-op). The URL is the secret — NEVER "
+            "logged or echoed in error messages."
+        ),
+    )
+    hooks_notify_teams_timeout_s: float = Field(
+        default=5.0,
+        description=(
+            "Phase 4.6 v1.16.0: per-request timeout (seconds) for the "
+            "Teams webhook POST. Mirrors ``hooks_notify_slack_timeout_s``. "
+            "Default 5s (matches Slack)."
+        ),
+    )
     # Phase 4.3+ v1.12.0: WebSocket interactive transport for Elicitation.
     hooks_elicitation_ws_enabled: bool = Field(default=True, description="Phase 4.3+: enable ElicitationBroker + /api/v1/elicitation/ws endpoint (default True; disable for headless deployments).")
     hooks_elicitation_ws_timeout_s: float = Field(default=30.0, description="Phase 4.3+: how long to wait for a human answer before falling back to default_answer.")

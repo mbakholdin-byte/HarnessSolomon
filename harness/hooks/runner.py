@@ -27,6 +27,7 @@ from harness.hooks.context import (
     HookAggregate,
     HookContext,
     HookDecision,
+    validate_payload,
 )
 from harness.hooks.events import EventType
 from harness.hooks.filter_chain import matches_filter_chain
@@ -148,9 +149,26 @@ class HookRunner:
 
         Recursion guard: if ``context.recursion_depth`` exceeds
         ``max_recursion_depth``, short-circuits to ``allow``.
+
+        Phase 4.6 v1.16.0: the payload is validated against the
+        per-event Pydantic schema before dispatch. Validation is
+        fail-open — on a schema mismatch, the ORIGINAL payload is
+        used and a warning is logged. Hook dispatch is never broken
+        by a schema regression.
         """
         import time as _time
         from harness.observability import emit_hook_dispatch
+
+        # Phase 4.6 v1.16.0: advisory payload validation (fail-open).
+        # On validation error, validate_payload logs a warning and
+        # returns the original payload — we use that original.
+        validated_payload = validate_payload(
+            context.event, context.payload
+        )
+        if validated_payload is not context.payload:
+            # Validation succeeded and produced a (possibly normalised)
+            # dict — update the context for downstream hooks.
+            context = context.with_payload(validated_payload)
 
         _start = _time.monotonic()
         aggregate = await self._fire_impl(context)
