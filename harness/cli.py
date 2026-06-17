@@ -1660,6 +1660,10 @@ def _build_parser() -> argparse.ArgumentParser:
         _cmd_hooks_show as _cmd_hooks_show_impl,
         _cmd_hooks_status as _cmd_hooks_status_impl,
     )
+    # Phase 4.7 v1.17.0: live tail (--follow) variants.
+    from harness.cli_follow import (
+        cmd_hooks_audit_follow as _cmd_hooks_audit_follow_impl,
+    )
 
     def _add_hooks_common(p: argparse.ArgumentParser) -> None:
         p.add_argument(
@@ -1814,7 +1818,45 @@ def _build_parser() -> argparse.ArgumentParser:
             "'2026-06-17T12:00:00+00:00'."
         ),
     )
-    hooks_audit_p.set_defaults(func=_cmd_hooks_audit_impl)
+    # Phase 4.7 v1.17.0: live tail. When set, the command switches
+    # to the follow implementation and ignores the snapshot-only
+    # flags (``--tail``, ``--since`` are not applicable to a live
+    # stream). ``--filter`` and ``--json`` are still honoured.
+    hooks_audit_p.add_argument(
+        "--follow", action="store_true",
+        help=(
+            "Live tail: open today's audit file at EOF and print each "
+            "new entry as it is appended (Phase 4.7 v1.17.0). "
+            "Polls every 250ms. Ctrl+C to exit. "
+            "Combine with --filter REGEX (regex on the raw line) and "
+            "--json (echo NDJSON verbatim)."
+        ),
+    )
+    hooks_audit_p.add_argument(
+        "--filter", default=None, metavar="REGEX",
+        help=(
+            "Regex filter. In --follow mode: applied via re.search to "
+            "each raw audit line. In snapshot mode (Phase 4.7 v1.17.0): "
+            "applied via re.search to the JSON-serialised entry, AFTER "
+            "structured filters (--event/--decision/--session/--since). "
+            "Invalid regex exits 1."
+        ),
+    )
+    hooks_audit_p.add_argument(
+        "--max-bytes", type=int, default=0,
+        help=(
+            "(--follow only) Cap the audit file size in bytes; when "
+            "exceeded, the file is rotated to .1/.2/... (default 0 = "
+            "no rotation)."
+        ),
+    )
+
+    def _dispatch_hooks_audit(a: argparse.Namespace) -> int:
+        if getattr(a, "follow", False):
+            return _cmd_hooks_audit_follow_impl(a)
+        return _cmd_hooks_audit_impl(a)
+
+    hooks_audit_p.set_defaults(func=_dispatch_hooks_audit)
 
     # If no subcommand, default to "list" with the parent's flags.
     hooks_p.set_defaults(func=_cmd_hooks_list_impl)
@@ -1825,6 +1867,10 @@ def _build_parser() -> argparse.ArgumentParser:
         _cmd_observability_log as _cmd_observability_log_impl,
         _cmd_observability_metrics as _cmd_observability_metrics_impl,
         _cmd_observability_stats as _cmd_observability_stats_impl,
+    )
+    # Phase 4.7 v1.17.0: live metrics --follow (local snapshot diff).
+    from harness.cli_follow import (
+        cmd_observability_metrics_follow as _cmd_observability_metrics_follow_impl,
     )
 
     obs_p = sub.add_parser(
@@ -1890,7 +1936,33 @@ def _build_parser() -> argparse.ArgumentParser:
         "--timeout-s", type=float, default=5.0,
         help="HTTP timeout in seconds (default 5).",
     )
-    obs_metrics_p.set_defaults(func=_cmd_observability_metrics_impl)
+    # Phase 4.7 v1.17.0: live tail of in-process metrics. Switches to
+    # the local snapshot-diff implementation (no HTTP scrape). Useful
+    # for observing counter changes in a long-lived CLI process or
+    # when the server is not reachable.
+    obs_metrics_p.add_argument(
+        "--follow", action="store_true",
+        help=(
+            "Live tail: poll the in-process PrometheusMetrics.snapshot() "
+            "every --interval-ms and print only changed counters/gauges "
+            "(Phase 4.7 v1.17.0). No HTTP scrape. Ctrl+C to exit."
+        ),
+    )
+    obs_metrics_p.add_argument(
+        "--interval-ms", type=int, default=1000,
+        help="(--follow only) Polling interval in ms (default 1000).",
+    )
+    obs_metrics_p.add_argument(
+        "--json", action="store_true",
+        help="(--follow only) Print each diff as a JSON object per line.",
+    )
+
+    def _dispatch_observability_metrics(a: argparse.Namespace) -> int:
+        if getattr(a, "follow", False):
+            return _cmd_observability_metrics_follow_impl(a)
+        return _cmd_observability_metrics_impl(a)
+
+    obs_metrics_p.set_defaults(func=_dispatch_observability_metrics)
 
     obs_health_p = obs_sub.add_parser(
         "health",
@@ -1928,6 +2000,16 @@ def _build_parser() -> argparse.ArgumentParser:
     obs_stats_p.add_argument(
         "--json", action="store_true",
         help="Print snapshot as JSON.",
+    )
+    obs_stats_p.add_argument(
+        "--diff", nargs=2, metavar=("BEFORE", "AFTER"), default=None,
+        help=(
+            "Phase 4.7 v1.17.0: compare two JSON snapshots and print "
+            "the per-metric delta. Each argument is a path to a file "
+            "produced by `harness observability stats --json`. Exit 0 "
+            "if no changes, exit 2 if any delta, exit 1 on read/parse "
+            "error."
+        ),
     )
     obs_stats_p.set_defaults(func=_cmd_observability_stats_impl)
     # If no subcommand, default to "log" (most common entry point).
