@@ -1,5 +1,100 @@
 # Changelog — Solomon Harness
 
+## Phase 4.8 v1.18.0 — ElicitationDecision history + notify retry/DLQ + hook rate limiter/circuit breaker (2026-06-17) — Phase 4 = 6/12 step
+
+**Phase 4.8 v1.18.0 — 4 new files / 7 modified files / +58 tests / 2283 total tests / 0 new required deps**
+
+Phase 4.7 закрыл observability read path + PermissionRequest symmetry. v1.18.0 добавляет persistence для Elicitation, retry/DLQ для Notification, и defensive layer (rate limit + circuit breaker) для hook dispatch.
+
+### Что закрыто
+
+**ElicitationDecision history (`harness/elicitation.py` + `harness/server/routes/elicitation_history.py` + `harness/cli_elicitation.py` NEW)**:
+- SQLite таблица `elicitation_decisions` в `data/audit/agent-jobs.db` (reuse existing DB, WAL mode).
+- 12 колонок: `decision_id` (UUID PK), `session_id`, `request_id`, `question_id`, `question_preview` (200 chars PII-safe), `options_json`, `default_answer`, `decision` (pending/answered/timed_out), `answer`, `source` (ws/poll/timeout), `latency_ms`, `ts`.
+- Index `idx_elicitation_session_ts(session_id, ts DESC)`.
+- `ElicitationDecisionStore` — sync `sqlite3` + `threading.Lock` + `check_same_thread=False`. **aiosqlite NOT required** (опциональный в `[memory]` extra, не влияет на default install).
+- Wire в `ElicitationBroker`:
+  - `publish()` → record `decision="pending"`.
+  - `wait()` success → record `decision="answered"`, `source="ws"|"poll"`, `latency_ms=elapsed`.
+  - `wait()` timeout → record `decision="timed_out"`, `source="timeout"`, `latency_ms=timeout_s*1000`.
+- **Best-effort:** SQLite errors logged, broker продолжает работать.
+- API: `GET /api/v1/elicitation/history?session=S&limit=N` → JSON array (default limit=100, max=1000).
+- CLI: `harness elicitation history [--session S] [--limit N] [--json] [--project-root P]`.
+- 15 tests passed.
+
+**Notify retry + DLQ (`harness/hooks/builtin/notify_terminal.py`)**:
+- 4 new settings: `hooks_notify_max_retries=3`, `hooks_notify_retry_initial_delay_ms=100`, `hooks_notify_retry_max_delay_ms=5000`, `hooks_notify_dlq_enabled=True`.
+- Per-channel exponential backoff: transient errors (5xx, timeout, OSError) → retry; permanent errors (4xx, ValueError) → DLQ immediately; unknown errors → conservative (transient).
+- DLQ: SQLite таблица `notify_dlq` в `data/audit/agent-jobs.db` (reuse existing DB). 7 колонок: `dlq_id` (autoincrement PK), `ts`, `session_id`, `severity`, `channel`, `payload_json`, `last_error`, `attempts`, `terminal` (1 если 4xx/permanent, 0 если exhausted retries).
+- New observability counter `notify_dlq_total{severity, channel, terminal}` — emit'ится ВСЕГДА (даже при `dlq_enabled=False`).
+- Per-channel isolation через `asyncio.gather(return_exceptions=True)` — retry одного канала НЕ блокирует другие.
+- **Refactor:** `_deliver_*` (raw, raise `ChannelError`) + legacy `_handle_*` (fail-open wrappers). 50 existing tests не сломаны.
+- 25 tests passed (выше плана 12 — покрыли edge cases: per-channel isolation, counter emit при dlq disabled, retry exhaustion timing).
+
+**Hook rate limiter + circuit breaker (`harness/hooks/rate_limit.py` NEW ~280 LoC)**:
+- `TokenBucket` — capacity + refill_per_sec. `consume(n) → bool` для атомарного drain.
+- `CircuitBreaker` — states `closed | open | half_open`. Threshold failures → open, cooldown_s → half_open, half-open probe (sentinel) → closed (success) или open (failure).
+- `HookRateLimiter` + `HookCircuitBreaker` — per-hook_id, thread-safe (`threading.Lock`).
+- 6 new settings: `hooks_rate_limit_capacity=60`, `hooks_rate_limit_refill_per_sec=1.0`, `hooks_rate_limit_enabled=True`, `hooks_circuit_breaker_threshold=5`, `hooks_circuit_breaker_cooldown_s=60.0`, `hooks_circuit_breaker_enabled=True`.
+- Wire в `harness/hooks/runner.py:_dispatch_one`:
+  - `rate_limiter.check → circuit_breaker.check → skip returns allow+error marker` (НЕ блокирует остальные hooks).
+  - After dispatch: `record_failure` / `record_success`.
+- 2 new observability counters: `hook_rate_limited_total{hook_id}`, `hook_circuit_skip_total{hook_id, state}`.
+- 18 tests passed.
+
+### Tests
+
+**+58 net new tests, 2283 total (was 2225), 2 skipped.**
+
+Breakdown:
+- `tests/test_elicitation_history.py` — 15 tests
+- `tests/test_notify_retry_dlq.py` — 25 tests
+- `tests/test_hook_rate_limit_circuit.py` — 18 tests
+
+Full suite: 2281 passed + 2 skipped + 2 pre-existing flakes (test_l2_retrieval test order dependency, test_elicitation_notification Settings mock race) — НЕ регрессии.
+
+### Architecture notes
+
+- **Why sync sqlite3 вместо aiosqlite:** aiosqlite = new required dep, и broker уже async (но record insert — fire-and-forget, не блокирует hot path). Sync sqlite3 с `check_same_thread=False` sufficient, zero new deps. Можно мигрировать на aiosqlite если появится demand для concurrent history queries.
+- **Why `_deliver_*` + `_handle_*` split в notify_terminal:** Phase 4.6 ввёл `_handle_*` как fail-open wrappers (errors swallowed). Retry decorator требует RAISE для решения о retry/transient. Split позволяет existing tests на fail-open продолжать работать, retry tests — на raw layer.
+- **Why half-open probe через sentinel (не lock-step):** Probe нужен sequential (один request в half_open, success → closed, failure → open). Sentinel pattern предотвращает race conditions: первая попытка после cooldown берёт sentinel, остальные ждут результата. Lock-step с mutex был бы deadlock-prone в multi-event-loop setups.
+- **Why rate limit + circuit breaker compose (НЕ mutual exclusive):** Rate limit защищает от случайного flood (короткие spikes). Circuit breaker защищает от persistent broken hook (длинные outages). Нужны оба — они решают разные failure modes.
+- **Why DLQ counter emit'ится при `dlq_enabled=False`:** Метрика ценна для observability даже без storage. Operator может видеть "у нас 12 DLQ entries за час" → принять решение включить storage. emit без INSERT = cheap (in-memory counter increment).
+- **Why reuse `data/audit/agent-jobs.db`:** Existing DB уже имеет WAL mode + aiosqlite setup (если в `[memory]` extra). Не плодим новые .db файлов, упрощаем backup/restore.
+
+### Trust boundary (preserved)
+
+AST-enforced на 30 файлах (`harness/observability/*` + `harness/hooks/*`):
+- 0 violations
+- `harness/hooks/rate_limit.py` — stdlib + dataclasses + threading only
+- `harness/elicitation.py` — stdlib + asyncio + sqlite3 + dataclasses (расширение НЕ нарушает hooks trust boundary, файл не в `harness/hooks/`)
+- `harness/server/routes/elicitation_history.py` — FastAPI + harness.elicitation only
+
+### Files
+
+NEW (~680 LoC production + ~1100 LoC tests):
+- `harness/hooks/rate_limit.py` (~280 LoC)
+- `harness/server/routes/elicitation_history.py` (~120 LoC)
+- `harness/cli_elicitation.py` (~280 LoC)
+- `tests/test_elicitation_history.py` (~350 LoC)
+- `tests/test_notify_retry_dlq.py` (~480 LoC)
+- `tests/test_hook_rate_limit_circuit.py` (~400 LoC)
+
+MODIFIED:
+- `harness/elicitation.py` — `ElicitationDecisionRecord`, `ElicitationDecisionStore`, wire в broker
+- `harness/hooks/builtin/notify_terminal.py` — retry loop + DLQ + `_deliver_*/_handle_*` split
+- `harness/hooks/runner.py` — rate_limit + circuit_breaker wire в `_dispatch_one`
+- `harness/observability/metrics.py` — 3 new counters (`notify_dlq_total`, `hook_rate_limited_total`, `hook_circuit_skip_total`)
+- `harness/observability/emit.py` — 3 new emit helpers
+- `harness/observability/__init__.py` — re-exports
+- `harness/cli.py` — `elicitation` subparser
+- `harness/server/app.py` — register history route
+- `harness/config.py` — 10 new settings
+- `harness/__init__.py` (1.17.0 → 1.18.0)
+- `harness/server/app.py` (FastAPI version 1.17.0 → 1.18.0)
+- `pyproject.toml` (version 1.17.0 → 1.18.0)
+- `docs/CHANGELOG.md` (+v1.18.0 section)
+
 ## Phase 4.7 v1.17.0 — PermissionRequest в 5 file tools + live tail + stats diff + audit filter (2026-06-17) — Phase 4 = 5/12 step
 
 **Phase 4.7 v1.17.0 — 4 new files / 7 modified files / +66 tests / 2225 total tests / 0 new deps**
