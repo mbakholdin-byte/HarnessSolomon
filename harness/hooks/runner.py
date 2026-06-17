@@ -129,6 +129,8 @@ class HookRunner:
         global_filter: str = "",
         llm_router: Any = None,
         audit_sink: Any = None,
+        rate_limiter: Any = None,
+        circuit_breaker: Any = None,
     ) -> None:
         self._registry = registry
         self._default_timeout_ms = default_timeout_ms
@@ -140,6 +142,12 @@ class HookRunner:
         self._llm_router = llm_router
         # Optional audit sink (DI; defaults to None = no audit).
         self._audit_sink = audit_sink
+        # Phase 4.8 v1.18.0: per-hook rate limiter + circuit breaker.
+        # Injected via DI (from Settings) to keep the trust boundary:
+        # runner.py must not import harness.config at module load. If
+        # None, the defences are disabled (all dispatches allowed).
+        self._rate_limiter = rate_limiter
+        self._circuit_breaker = circuit_breaker
 
     async def fire(self, context: HookContext) -> HookAggregate:
         """Dispatch all hooks for ``context.event``.
@@ -291,46 +299,108 @@ class HookRunner:
         spec: HookSpec,
         context: HookContext,
     ) -> HookDecision:
-        """Dispatch a single hook by transport (Step 3: all 4)."""
+        """Dispatch a single hook by transport (Step 3: all 4).
+
+        Phase 4.8 v1.18.0: per-hook rate limiter + circuit breaker
+        are checked BEFORE the transport fires. A skip does NOT
+        abort the whole dispatch — the runner returns an
+        ``allow`` decision with an ``error`` marker so the aggregate
+        proceeds normally for the remaining hooks.
+        """
+        # === Phase 4.8 v1.18.0: pre-dispatch defences ===
+        if self._rate_limiter is not None:
+            try:
+                if not self._rate_limiter.check(spec.hook_id):
+                    try:
+                        from harness.observability import emit_hook_rate_limited
+                        emit_hook_rate_limited(spec.hook_id)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    return HookDecision(
+                        decision="allow",
+                        hook_id=spec.hook_id,
+                        error="rate_limited",
+                    )
+            except Exception as e:  # noqa: BLE001 — fail-open
+                logger.debug(
+                    "rate_limiter.check(%s) raised %s: %s — allowing",
+                    spec.hook_id, type(e).__name__, e,
+                )
+
+        if self._circuit_breaker is not None:
+            try:
+                decision_cb, reason = self._circuit_breaker.check(spec.hook_id)
+                if decision_cb == "skip":
+                    try:
+                        from harness.observability import emit_hook_circuit_skip
+                        emit_hook_circuit_skip(spec.hook_id, reason)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    return HookDecision(
+                        decision="allow",
+                        hook_id=spec.hook_id,
+                        error=f"circuit_{reason}",
+                    )
+            except Exception as e:  # noqa: BLE001 — fail-open
+                logger.debug(
+                    "circuit_breaker.check(%s) raised %s: %s — allowing",
+                    spec.hook_id, type(e).__name__, e,
+                )
+
+        # === Transport dispatch ===
         timeout = spec.timeout_ms or self._default_timeout_ms
         if spec.transport == "builtin":
-            return await _invoke_builtin(spec, context, timeout_ms=timeout)
-        if spec.transport == "subprocess":
+            result = await _invoke_builtin(spec, context, timeout_ms=timeout)
+        elif spec.transport == "subprocess":
             from harness.hooks.subprocess import invoke_subprocess_hook
-
-            return await invoke_subprocess_hook(
+            result = await invoke_subprocess_hook(
                 spec.script_path, context, timeout_ms=timeout
             )
-        if spec.transport == "http":
+        elif spec.transport == "http":
             from harness.hooks.http import invoke_http_hook
-
-            return await invoke_http_hook(
+            result = await invoke_http_hook(
                 spec.url,
                 context,
                 timeout_ms=timeout,
                 headers=spec.headers,
             )
-        if spec.transport == "llm":
+        elif spec.transport == "llm":
             if self._llm_router is None:
-                return HookDecision(
+                result = HookDecision(
                     decision="allow",
                     hook_id=spec.hook_id,
                     error="LLM hook requested but runner.llm_router is None",
                 )
-            from harness.hooks.llm_hook import LLMHook
-
-            hook = LLMHook(
-                router=self._llm_router,
-                model=spec.model,
-                prompt=spec.prompt,
-                timeout_ms=timeout,
+            else:
+                from harness.hooks.llm_hook import LLMHook
+                hook = LLMHook(
+                    router=self._llm_router,
+                    model=spec.model,
+                    prompt=spec.prompt,
+                    timeout_ms=timeout,
+                )
+                result = await hook(context)
+        else:
+            result = HookDecision(
+                decision="allow",
+                hook_id=spec.hook_id,
+                error=f"unknown transport {spec.transport!r}",
             )
-            return await hook(context)
-        return HookDecision(
-            decision="allow",
-            hook_id=spec.hook_id,
-            error=f"unknown transport {spec.transport!r}",
-        )
+
+        # === Phase 4.8 v1.18.0: post-dispatch circuit-breaker feedback ===
+        if self._circuit_breaker is not None:
+            try:
+                if result.error:
+                    self._circuit_breaker.record_failure(spec.hook_id)
+                else:
+                    self._circuit_breaker.record_success(spec.hook_id)
+            except Exception as e:  # noqa: BLE001 — fail-open
+                logger.debug(
+                    "circuit_breaker.record_*(%s) raised %s: %s",
+                    spec.hook_id, type(e).__name__, e,
+                )
+
+        return result
 
 
 __all__ = ["HookRunner", "_invoke_builtin", "safe_fire"]
@@ -365,8 +435,32 @@ def get_global_hook_runner() -> "HookRunner":
     """
     global _global_runner
     if _global_runner is None:
+        from harness.config import Settings
+        from harness.hooks.rate_limit import HookCircuitBreaker, HookRateLimiter
         from harness.hooks.registry import get_registry
-        _global_runner = HookRunner(get_registry(), default_timeout_ms=3000)
+        s = Settings()
+        rate_limiter = (
+            HookRateLimiter(
+                capacity=s.hooks_rate_limit_capacity,
+                refill_per_sec=s.hooks_rate_limit_refill_per_sec,
+            )
+            if s.hooks_rate_limit_enabled
+            else None
+        )
+        circuit_breaker = (
+            HookCircuitBreaker(
+                threshold=s.hooks_circuit_breaker_threshold,
+                cooldown_s=s.hooks_circuit_breaker_cooldown_s,
+            )
+            if s.hooks_circuit_breaker_enabled
+            else None
+        )
+        _global_runner = HookRunner(
+            get_registry(),
+            default_timeout_ms=3000,
+            rate_limiter=rate_limiter,
+            circuit_breaker=circuit_breaker,
+        )
     return _global_runner
 
 
