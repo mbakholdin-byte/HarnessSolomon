@@ -527,6 +527,127 @@ def _cmd_agents(args: argparse.Namespace) -> int:
     return 2
 
 
+# === Phase 4.8 v1.18.0: ``harness elicitation`` subcommand ===
+
+def _cmd_elicitation_history(args: argparse.Namespace) -> int:
+    """``harness elicitation history`` — read the decision log.
+
+    Reads directly from the SQLite file (no HTTP), so the operator can
+    inspect state even when the server is down. Mirrors the
+    ``harness context read`` / ``harness agents jobs`` pattern.
+
+    Exit codes:
+        0 — success (may print 0 rows)
+        1 — store open / query error
+        2 — invalid arguments (handled by argparse before we get here)
+    """
+    import json as _json
+
+    from harness.config import Settings
+    from harness.elicitation import ElicitationDecisionStore
+
+    # Resolve the DB path. ``--project-root`` overrides settings, which
+    # in turn override the C:/MyAI default.
+    if args.project_root is not None:
+        # The settings object caches on construction; rather than fight
+        # that, we just re-resolve the default relative path under the
+        # operator-supplied project root.
+        project_root = Path(args.project_root).resolve()
+        db_path = project_root / "data" / "agent-jobs.db"
+    else:
+        db_path = Settings().db_path.parent / "agent-jobs.db"
+
+    if not db_path.exists():
+        # No DB yet — the broker hasn't recorded anything. Print a
+        # friendly message and exit 0 (matches the "no history" case).
+        if args.json:
+            print("[]")
+        else:
+            print("(no decisions)")
+        return 0
+
+    try:
+        store = ElicitationDecisionStore(db_path)
+        records = store.query_history(
+            session_id=args.session,
+            limit=args.limit,
+        )
+        store.close()
+    except Exception as exc:  # noqa: BLE001 — surface to operator
+        print(
+            f"error: cannot read elicitation history from {db_path}: "
+            f"{type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+        return 1
+
+    if not records:
+        if args.json:
+            print("[]")
+        else:
+            print("(no decisions)")
+        return 0
+
+    if args.json:
+        out = [
+            {
+                "decision_id": r.decision_id,
+                "session_id": r.session_id,
+                "request_id": r.request_id,
+                "question_id": r.question_id,
+                "question_preview": r.question_preview,
+                "options": list(r.options or []),
+                "default_answer": r.default_answer,
+                "decision": r.decision,
+                "answer": r.answer,
+                "source": r.source,
+                "latency_ms": r.latency_ms,
+                "ts": r.ts,
+            }
+            for r in records
+        ]
+        print(_json.dumps(out, ensure_ascii=False, indent=2))
+        return 0
+
+    # Pretty table. Columns: ts | session | decision | answer | source | latency_ms
+    # ``ts`` is rendered as ISO-8601 UTC for human consumption.
+    import datetime as _dt
+
+    print(
+        f"{'ts':24s}  {'session':16s}  {'decision':10s}  "
+        f"{'answer':14s}  {'source':8s}  {'latency_ms':>10s}"
+    )
+    print("-" * 92)
+    for r in records:
+        try:
+            ts_iso = _dt.datetime.fromtimestamp(
+                r.ts, tz=_dt.timezone.utc,
+            ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        except (OSError, ValueError, OverflowError):
+            ts_iso = f"{r.ts:.3f}"
+        sess = (r.session_id or "")[:16]
+        decision = r.decision[:10]
+        answer = (r.answer or "")[:14]
+        source = r.source or "-"
+        print(
+            f"{ts_iso:24s}  {sess:16s}  {decision:10s}  "
+            f"{answer:14s}  {source:8s}  {int(r.latency_ms):>10d}"
+        )
+    return 0
+
+
+def _cmd_elicitation(args: argparse.Namespace) -> int:
+    """Dispatcher for the ``elicitation`` subcommand (Phase 4.8 v1.18.0)."""
+    if args.elicitation_command == "history":
+        return _cmd_elicitation_history(args)
+    print(
+        "error: 'harness elicitation' requires a subcommand "
+        "(history). See `harness elicitation --help`.",
+        file=sys.stderr,
+    )
+    return 2
+
+
 def _cmd_agents_split_plan(args: argparse.Namespace) -> int:
     """Phase 2.4: preview a split plan without enqueuing.
 
@@ -1426,6 +1547,51 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     agents.set_defaults(func=_cmd_agents)
+
+    # Phase 4.8 v1.18.0: ``elicitation`` subcommand — decision history.
+    # Reads directly from ``agent-jobs.db`` so the operator can inspect
+    # state even when the server is down.
+    elicitation_p = sub.add_parser(
+        "elicitation",
+        help=(
+            "Inspect the Elicitation decision log (Phase 4.8 v1.18.0). "
+            "Reads directly from the agent-jobs.db SQLite file. "
+            "See `harness elicitation --help`."
+        ),
+    )
+    elicitation_sub = elicitation_p.add_subparsers(dest="elicitation_command")
+
+    elicitation_history_p = elicitation_sub.add_parser(
+        "history",
+        help=(
+            "List recent Elicitation decisions (publish / answer / timeout). "
+            "Newest first. Filter by --session, cap with --limit."
+        ),
+    )
+    elicitation_history_p.add_argument(
+        "--session", default=None,
+        help="Filter by session_id (exact match).",
+    )
+    elicitation_history_p.add_argument(
+        "--limit", type=int, default=100,
+        help="Max rows to show (default 100).",
+    )
+    elicitation_history_p.add_argument(
+        "--json", action="store_true",
+        help="Print as a JSON array (machine-readable).",
+    )
+    elicitation_history_p.add_argument(
+        "--project-root", default=None,
+        help=(
+            "Project root directory (default: settings.project_root). "
+            "The CLI looks for ``data/agent-jobs.db`` under this root."
+        ),
+    )
+    elicitation_history_p.set_defaults(func=_cmd_elicitation_history)
+    # If no subcommand, default to "history" with the parent's flags.
+    elicitation_p.set_defaults(
+        func=_cmd_elicitation, elicitation_command="history",
+    )
 
     # Phase 3 v1.2.0: scratchpad inspector. Reads directly from
     # ``agent-jobs.db`` (no HTTP) so the operator can inspect state

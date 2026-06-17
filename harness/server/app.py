@@ -552,7 +552,7 @@ def create_app() -> FastAPI:
     """Build FastAPI app with middleware and routers."""
     app = FastAPI(
         title="Solomon Harness",
-        version="1.17.0",
+        version="1.18.0",
         description=(
             "Open-source agentic shell — Web MVP (Phase 0) + "
             "sub-agent system (Phase 2.0+2.1) + GitHub PR integration (Phase 2.2) "
@@ -653,6 +653,22 @@ def create_app() -> FastAPI:
         f"{'enabled' if settings.hooks_elicitation_longpoll_enabled else 'disabled'} "
         f"(timeout={settings.hooks_elicitation_longpoll_timeout_s}s, "
         f"interval={settings.hooks_elicitation_longpoll_interval_s}s)"
+    )
+    # Phase 4.8 v1.18.0: Elicitation decision history endpoint.
+    # Read-only view over the shared ``agent-jobs.db`` SQLite file. No
+    # enable flag — the table is created lazily by
+    # ElicitationDecisionStore on first open and the endpoint returns
+    # an empty array when no decisions have been recorded yet.
+    from harness.server.routes.elicitation_history import (
+        router as elicitation_history_router,
+    )
+    app.state.elicitation_decision_db_path = (
+        settings.db_path.parent / "agent-jobs.db"
+    )
+    app.include_router(
+        elicitation_history_router,
+        prefix="/api/v1/elicitation",
+        tags=["elicitation-history"],
     )
     # Phase 2.2: merge-queue HTTP API. Phase 1.6: routes now require
     # ``agents.read`` via ``Depends(require_scope(Scope.AGENTS_READ))``.
