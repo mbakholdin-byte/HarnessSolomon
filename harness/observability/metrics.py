@@ -102,6 +102,11 @@ class PrometheusMetrics:
             "webhook_inbound_total",
             "elicitation_total",
             "notification_total",
+            # Phase 4.8 v1.18.0: hook rate limiter + circuit breaker.
+            "hook_rate_limited_total",
+            "hook_circuit_skip_total",
+            # Phase 4.8 v1.18.0: Notification deadletter queue.
+            "notify_dlq_total",
             "active_sessions", "last_compact_age_seconds",
         ):
             setattr(self, name, _NoOpMetric())
@@ -229,6 +234,31 @@ class PrometheusMetrics:
             f"{n}_notification_total",
             "Total Notification hook dispatches (fire-and-forget push)",
             ["severity", "channel"],
+            registry=self._registry,
+        )
+        # Phase 4.8 v1.18.0: per-hook rate limiter + circuit breaker.
+        self.hook_rate_limited_total = Counter(
+            f"{n}_hook_rate_limited_total",
+            "Total hook dispatches skipped by rate limiter",
+            ["hook_id"],
+            registry=self._registry,
+        )
+        self.hook_circuit_skip_total = Counter(
+            f"{n}_hook_circuit_skip_total",
+            "Total hook dispatches skipped by circuit breaker",
+            ["hook_id", "state"],
+            registry=self._registry,
+        )
+        # Phase 4.8 v1.18.0: deadletter queue counter for failed
+        # notifications. Labeled by (severity, channel, terminal).
+        # ``terminal="true"`` means the payload was persisted to the
+        # SQLite DLQ after exhausting retries; ``terminal="false"``
+        # means a permanent error short-circuited to the DLQ without
+        # any retry (e.g. HTTP 4xx, ValueError).
+        self.notify_dlq_total = Counter(
+            f"{n}_notify_dlq_total",
+            "Total Notification deadletter entries (retries exhausted or permanent error)",
+            ["severity", "channel", "terminal"],
             registry=self._registry,
         )
         # Sessions

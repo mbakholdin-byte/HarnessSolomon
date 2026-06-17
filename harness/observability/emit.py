@@ -552,3 +552,70 @@ def emit_notification_dispatched(
             request_id=request_id,
         )
     )
+
+
+def emit_hook_rate_limited(hook_id: str) -> None:
+    """Emit a rate-limit skip metric (Phase 4.8 v1.18.0).
+
+    Counter ``hook_rate_limited_total`` is labeled by ``hook_id``.
+    No JSONL event — rate-limit skips are high-frequency and would
+    flood the audit log; the Prometheus counter is sufficient for
+    alerting (e.g. "hook X is consistently throttled").
+    """
+    obs = get_observability()
+    if not obs.settings.observability_prometheus_enabled:
+        return
+    obs.metric_inc("hook_rate_limited_total", {"hook_id": hook_id})
+
+
+def emit_hook_circuit_skip(hook_id: str, state: str) -> None:
+    """Emit a circuit-breaker skip metric (Phase 4.8 v1.18.0).
+
+    Counter ``hook_circuit_skip_total`` is labeled by
+    ``(hook_id, state)`` where state ∈ {``circuit_open``, ``half_open``}.
+    A consistently growing ``circuit_open`` counter indicates a
+    persistently broken hook; ``half_open`` spikes indicate the
+    breaker is probing but the hook is still failing.
+    """
+    obs = get_observability()
+    if not obs.settings.observability_prometheus_enabled:
+        return
+    obs.metric_inc(
+        "hook_circuit_skip_total",
+        {"hook_id": hook_id, "state": state},
+    )
+
+
+def emit_notify_dlq(
+    severity: str,
+    channel: str,
+    terminal: bool,
+    *,
+    attempts: int = 0,
+    last_error: str = "",
+    request_id: str = "",
+) -> None:
+    """Emit a Notification deadletter entry (Phase 4.8 v1.18.0).
+
+    Counter ``notify_dlq_total`` is labeled by ``(severity, channel,
+    terminal)``. ``terminal=True`` means the payload exhausted all
+    retries before being persisted; ``terminal=False`` means a
+    permanent error (HTTP 4xx, ValueError) short-circuited to the DLQ
+    without any retry.
+
+    The counter is ALWAYS emitted when this function is called, even
+    when the SQLite DLQ store is disabled (``hooks_notify_dlq_enabled
+    = False``) — the metric is the operator's only signal that a
+    notification was lost in that mode.
+    """
+    obs = get_observability()
+    if not obs.settings.observability_prometheus_enabled:
+        return
+    obs.metric_inc(
+        "notify_dlq_total",
+        {
+            "severity": severity,
+            "channel": channel,
+            "terminal": "true" if terminal else "false",
+        },
+    )

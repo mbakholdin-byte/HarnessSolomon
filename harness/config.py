@@ -1113,6 +1113,70 @@ class Settings(BaseSettings):
         ),
     )
 
+    # === Phase 4.8 v1.18.0: Per-hook rate limiter + circuit breaker ===
+    # Defends against hook-induced DoS. See ``harness/hooks/rate_limit.py``.
+    # Rate limiter: token bucket per hook_id (burst capacity + sustained
+    # refill). Circuit breaker: opens after N consecutive failures, half-
+    # opens after a cooldown for a single probe call.
+    hooks_rate_limit_capacity: float = Field(
+        default=60.0,
+        ge=0.0,
+        description=(
+            "Phase 4.8 v1.18.0: token bucket burst capacity per hook. "
+            "Each ``consume()`` decrements by 1; refill is lazy. Default "
+            "60 — a hook may burst up to 60 dispatches, then sustain "
+            "``hooks_rate_limit_refill_per_sec`` per second. Set to 0 to "
+            "deny ALL dispatches (kill switch)."
+        ),
+    )
+    hooks_rate_limit_refill_per_sec: float = Field(
+        default=1.0,
+        ge=0.0,
+        description=(
+            "Phase 4.8 v1.18.0: sustained refill rate (tokens/sec) for "
+            "each hook's token bucket. Default 1.0 — one dispatch per "
+            "second sustained. Set to 0 to disable refill (burst only, "
+            "then hard stop until the process restarts)."
+        ),
+    )
+    hooks_rate_limit_enabled: bool = Field(
+        default=True,
+        description=(
+            "Phase 4.8 v1.18.0: master switch for per-hook rate limiting. "
+            "When False, ``HookRateLimiter.check()`` always returns True "
+            "(no tokens consumed). Default True."
+        ),
+    )
+    hooks_circuit_breaker_threshold: int = Field(
+        default=5,
+        ge=1,
+        description=(
+            "Phase 4.8 v1.18.0: number of consecutive failures before a "
+            "hook's circuit opens. Default 5 — tolerates transient errors "
+            "but trips on a genuinely broken hook. Once open, all "
+            "dispatches for that hook are skipped until the cooldown "
+            "elapses, then a single probe call is allowed (half-open)."
+        ),
+    )
+    hooks_circuit_breaker_cooldown_s: float = Field(
+        default=60.0,
+        gt=0.0,
+        description=(
+            "Phase 4.8 v1.18.0: seconds the circuit stays open before "
+            "transitioning to half-open. Default 60.0 — one probe per "
+            "minute for a broken hook. Lower for faster recovery (at the "
+            "cost of more probe traffic to the failing hook)."
+        ),
+    )
+    hooks_circuit_breaker_enabled: bool = Field(
+        default=True,
+        description=(
+            "Phase 4.8 v1.18.0: master switch for per-hook circuit "
+            "breaking. When False, ``HookCircuitBreaker.check()`` always "
+            "returns allow (failures are not recorded). Default True."
+        ),
+    )
+
     # === Phase 4.2: Hot-reload ===
     hot_reload_enabled: bool = Field(
         default=True,
@@ -1244,6 +1308,60 @@ class Settings(BaseSettings):
             "Phase 4.6 v1.16.0: per-request timeout (seconds) for the "
             "Teams webhook POST. Mirrors ``hooks_notify_slack_timeout_s``. "
             "Default 5s (matches Slack)."
+        ),
+    )
+    # Phase 4.8 v1.18.0: per-channel retry + DLQ for Notification fanout.
+    # Previously a transient HTTP 5xx / network blip silently dropped the
+    # notification. Now each channel is retried with exponential backoff;
+    # on exhaustion (or permanent error) the payload is persisted to a
+    # SQLite deadletter queue (``notify_dlq`` table in ``agent-jobs.db``)
+    # so an operator can inspect / replay lost notifications.
+    hooks_notify_max_retries: int = Field(
+        default=3,
+        ge=0,
+        le=20,
+        description=(
+            "Phase 4.8 v1.18.0: maximum retry attempts per channel "
+            "before the payload is moved to the deadletter queue. "
+            "``0`` disables retry entirely (a single attempt — first "
+            "transient error goes straight to the DLQ). Default 3 "
+            "gives up to 4 attempts total (initial + 3 retries)."
+        ),
+    )
+    hooks_notify_retry_initial_delay_ms: int = Field(
+        default=100,
+        ge=0,
+        le=60000,
+        description=(
+            "Phase 4.8 v1.18.0: initial backoff (milliseconds) before "
+            "the first retry. Subsequent retries double this value up "
+            "to ``hooks_notify_retry_max_delay_ms``. Default 100ms — "
+            "long enough to ride out a brief connection blip, short "
+            "enough to not stall the Notification fanout (Notification "
+            "is fire-and-forget and runs in a background task)."
+        ),
+    )
+    hooks_notify_retry_max_delay_ms: int = Field(
+        default=5000,
+        ge=1,
+        le=300000,
+        description=(
+            "Phase 4.8 v1.18.0: cap on the per-retry backoff. The "
+            "exponential schedule ``initial * 2^attempt`` is capped at "
+            "this value. Default 5000ms (5s). With ``initial=100`` and "
+            "``max=5000`` the sequence is 100, 200, 400, 800, 1600, "
+            "3200, 5000, 5000, ... (capped)."
+        ),
+    )
+    hooks_notify_dlq_enabled: bool = Field(
+        default=True,
+        description=(
+            "Phase 4.8 v1.18.0: when True, failed notifications are "
+            "persisted to the ``notify_dlq`` SQLite table in "
+            "``agent-jobs.db`` so an operator can inspect / replay "
+            "them. When False, failed notifications are dropped "
+            "(v1.17.0 behaviour — only the observability counter "
+            "``notify_dlq_total`` is incremented). Default True."
         ),
     )
     # Phase 4.3+ v1.12.0: WebSocket interactive transport for Elicitation.

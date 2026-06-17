@@ -21,7 +21,9 @@ from harness.observability.emit import (
     ObservabilityHandle,
     emit_compaction,
     emit_elicitation_response,
+    emit_hook_circuit_skip,
     emit_hook_dispatch,
+    emit_hook_rate_limited,
     emit_http_request,
     emit_llm_call,
     emit_merge_queue_event,
@@ -70,4 +72,7 @@ __all__ = [
     "emit_outbound_delivery",
     "emit_privacy_decision",
     "emit_webhook_inbound",
+    # Phase 4.8 v1.18.0: hook rate limiter + circuit breaker metrics
+    "emit_hook_rate_limited",
+    "emit_hook_circuit_skip",
 ]
