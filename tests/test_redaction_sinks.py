@@ -194,9 +194,18 @@ class TestReadFileRedaction:
     async def test_read_file_redacts_dotenv(
         self, tmp_path: Any,
     ) -> None:
+        """read_file redacts embedded secrets even in an ordinary
+        text file (Phase 4.7 v1.17.0: ``.env`` is now hard-denied
+        at the PermissionRequest layer, so this test uses a plain
+        ``config.txt`` with the same secret content to verify the
+        redaction sink itself still fires for ALLOWED reads).
+        """
         from harness.server.agent.runtime import ToolRuntime
 
-        env_file = tmp_path / ".env"
+        # Phase 4.7: ``.env`` itself is denied by the path denylist
+        # before redaction runs. Use a clean filename with the SAME
+        # sensitive content to keep the redaction assertion valid.
+        env_file = tmp_path / "config.txt"
         env_file.write_text(
             "DB_PASSWORD=hunter2hunter2hunter2\n"
             "GH_TOKEN=ghp_abc123def456ghi789jkl012mno345pqr678\n",

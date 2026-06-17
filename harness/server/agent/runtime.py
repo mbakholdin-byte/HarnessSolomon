@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import shutil
 import time
 from pathlib import Path
@@ -68,6 +69,68 @@ DEFAULT_BASH_TIMEOUT = 30  # seconds
 MIN_BASH_TIMEOUT = 1
 MAX_BASH_TIMEOUT = 300
 DEFAULT_GREP_TIMEOUT = 30
+
+
+# === Phase 4.7 v1.17.0: Path-based denylist patterns ===
+#
+# Patterns cover sensitive / noisy file classes that file tools should
+# not touch by default. The denylist feeds ``initial_decision`` into
+# ``_resolve_permission_via_hook`` — a hook CAN still override (allow
+# or deny) via the ``PermissionRequest`` event.
+#
+# Patterns are matched against the raw user-supplied path string
+# (repo-relative POSIX or absolute). We search the whole string, not
+# just the suffix, so directory-based rules (``secrets/``,
+# ``__pycache__/``) work regardless of nesting depth.
+
+#: Patterns shared by both read and write tools. Anything sensitive
+#: that should never be silently read is listed here.
+_READ_DENYLIST_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"__pycache__[/\\]"), "__pycache__/"),
+    (re.compile(r"\.git[/\\]"), ".git/"),
+    (re.compile(r"\.env$", re.IGNORECASE), ".env"),
+    (re.compile(r"\.key$", re.IGNORECASE), ".key"),
+    (re.compile(r"\.pem$", re.IGNORECASE), ".pem"),
+    (re.compile(r"secrets[/\\]"), "secrets/"),
+    (re.compile(r"node_modules[/\\]"), "node_modules/"),
+)
+
+#: Write-side denylist: everything in the read denylist PLUS binary
+#: extensions that have no business being written by an LLM.
+_WRITE_DENYLIST_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    *_READ_DENYLIST_PATTERNS,
+    (re.compile(r"\.exe$", re.IGNORECASE), ".exe"),
+    (re.compile(r"\.dll$", re.IGNORECASE), ".dll"),
+    (re.compile(r"\.so$", re.IGNORECASE), ".so"),
+)
+
+
+def _match_read_denylist(path: str) -> str | None:
+    """Return the matched label if ``path`` is in the read denylist.
+
+    Phase 4.7 v1.17.0. Returns ``None`` when the path is clean. The
+    returned label is the human-readable pattern (``".env"``,
+    ``"secrets/"`` etc.) — it is surfaced in the ``denied_reason``
+    field of the ``PermissionRequest`` payload and in tool error
+    messages.
+    """
+    for pattern, label in _READ_DENYLIST_PATTERNS:
+        if pattern.search(path):
+            return label
+    return None
+
+
+def _match_write_denylist(path: str) -> str | None:
+    """Return the matched label if ``path`` is in the write denylist.
+
+    Phase 4.7 v1.17.0. The write denylist is a superset of the read
+    denylist (see ``_WRITE_DENYLIST_PATTERNS``). Returns ``None``
+    when the path is clean.
+    """
+    for pattern, label in _WRITE_DENYLIST_PATTERNS:
+        if pattern.search(path):
+            return label
+    return None
 
 
 class ToolRuntime:
@@ -333,6 +396,34 @@ class ToolRuntime:
         if not isinstance(path_str, str) or not path_str:
             return ToolResult(ok=False, error="read_file: 'path' is required")
 
+        # Phase 4.7 v1.17.0: PermissionRequest wiring. Compute the
+        # initial decision from the path denylist and fire the hook
+        # BEFORE any I/O (privacy-zone check, file existence). A hook
+        # may override the denylist (allow on match) or block a
+        # clean path.
+        denied_label = _match_read_denylist(path_str)
+        initial_decision = "deny" if denied_label is not None else "allow"
+        denied_reason = (
+            f"path matches denylist pattern {denied_label!r}"
+            if denied_label is not None
+            else ""
+        )
+        final_decision = await self._resolve_permission_via_hook(
+            tool_name="read_file",
+            arguments=args,
+            initial_decision=initial_decision,
+            denied_reason=denied_reason,
+        )
+        if final_decision == "deny":
+            return ToolResult(
+                ok=False,
+                error=(
+                    f"denied: {denied_reason}"
+                    if denied_reason
+                    else "denied: blocked by PermissionRequest hook"
+                ),
+            )
+
         resolved = resolve_safe_path(path_str, self.project_root)
         if resolved is None:
             return ToolResult(
@@ -376,6 +467,32 @@ class ToolRuntime:
         if not isinstance(new_string, str):
             return ToolResult(ok=False, error="edit_file: 'new_string' must be a string")
 
+        # Phase 4.7 v1.17.0: PermissionRequest wiring (write path).
+        # Edit mutates files → use the write denylist (superset of
+        # read). Hook may override before any I/O.
+        denied_label = _match_write_denylist(path_str)
+        initial_decision = "deny" if denied_label is not None else "allow"
+        denied_reason = (
+            f"path matches denylist pattern {denied_label!r}"
+            if denied_label is not None
+            else ""
+        )
+        final_decision = await self._resolve_permission_via_hook(
+            tool_name="edit_file",
+            arguments=args,
+            initial_decision=initial_decision,
+            denied_reason=denied_reason,
+        )
+        if final_decision == "deny":
+            return ToolResult(
+                ok=False,
+                error=(
+                    f"denied: {denied_reason}"
+                    if denied_reason
+                    else "denied: blocked by PermissionRequest hook"
+                ),
+            )
+
         resolved = resolve_safe_path(path_str, self.project_root)
         if resolved is None:
             return ToolResult(
@@ -408,6 +525,32 @@ class ToolRuntime:
             return ToolResult(ok=False, error="write_file: 'path' is required")
         if not isinstance(content, str):
             return ToolResult(ok=False, error="write_file: 'content' must be a string")
+
+        # Phase 4.7 v1.17.0: PermissionRequest wiring (write path).
+        # Same denylist + hook contract as edit_file. Hook may
+        # override before any I/O.
+        denied_label = _match_write_denylist(path_str)
+        initial_decision = "deny" if denied_label is not None else "allow"
+        denied_reason = (
+            f"path matches denylist pattern {denied_label!r}"
+            if denied_label is not None
+            else ""
+        )
+        final_decision = await self._resolve_permission_via_hook(
+            tool_name="write_file",
+            arguments=args,
+            initial_decision=initial_decision,
+            denied_reason=denied_reason,
+        )
+        if final_decision == "deny":
+            return ToolResult(
+                ok=False,
+                error=(
+                    f"denied: {denied_reason}"
+                    if denied_reason
+                    else "denied: blocked by PermissionRequest hook"
+                ),
+            )
 
         resolved = resolve_safe_path(path_str, self.project_root)
         if resolved is None:
@@ -630,6 +773,37 @@ class ToolRuntime:
                 error=f"grep: 'timeout' must be an int in [{MIN_BASH_TIMEOUT}, {MAX_BASH_TIMEOUT}]",
             )
 
+        # Phase 4.7 v1.17.0: PermissionRequest wiring. Use the read
+        # denylist on the optional path argument. A search rooted in
+        # a sensitive tree (``secrets/``, ``__pycache__/``) is
+        # denied by default. When ``path`` is absent (search the
+        # whole project root) the denylist cannot apply per-call —
+        # we default to ``allow`` and rely on the privacy-zone
+        # filter for the enumeration path.
+        grep_path_for_deny = path_str if isinstance(path_str, str) else ""
+        denied_label = _match_read_denylist(grep_path_for_deny)
+        initial_decision = "deny" if denied_label is not None else "allow"
+        denied_reason = (
+            f"path matches denylist pattern {denied_label!r}"
+            if denied_label is not None
+            else ""
+        )
+        final_decision = await self._resolve_permission_via_hook(
+            tool_name="grep",
+            arguments=args,
+            initial_decision=initial_decision,
+            denied_reason=denied_reason,
+        )
+        if final_decision == "deny":
+            return ToolResult(
+                ok=False,
+                error=(
+                    f"denied: {denied_reason}"
+                    if denied_reason
+                    else "denied: blocked by PermissionRequest hook"
+                ),
+            )
+
         # Resolve path. If absent, use project_root.
         if path_str is None or path_str == "":
             base = self.project_root
@@ -708,6 +882,35 @@ class ToolRuntime:
         path_str = args.get("path")
         if not isinstance(pattern, str) or not pattern:
             return ToolResult(ok=False, error="glob: 'pattern' is required")
+
+        # Phase 4.7 v1.17.0: PermissionRequest wiring. Use the read
+        # denylist on the optional path argument. Globbing a
+        # sensitive tree would enumerate its contents to the LLM —
+        # denied by default. When ``path`` is absent we default to
+        # ``allow`` (the privacy-zone filter still runs per-file).
+        glob_path_for_deny = path_str if isinstance(path_str, str) else ""
+        denied_label = _match_read_denylist(glob_path_for_deny)
+        initial_decision = "deny" if denied_label is not None else "allow"
+        denied_reason = (
+            f"path matches denylist pattern {denied_label!r}"
+            if denied_label is not None
+            else ""
+        )
+        final_decision = await self._resolve_permission_via_hook(
+            tool_name="glob",
+            arguments=args,
+            initial_decision=initial_decision,
+            denied_reason=denied_reason,
+        )
+        if final_decision == "deny":
+            return ToolResult(
+                ok=False,
+                error=(
+                    f"denied: {denied_reason}"
+                    if denied_reason
+                    else "denied: blocked by PermissionRequest hook"
+                ),
+            )
 
         if path_str is None or path_str == "":
             base = self.project_root
