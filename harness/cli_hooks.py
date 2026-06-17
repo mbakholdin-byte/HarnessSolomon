@@ -601,6 +601,7 @@ def read_audit_log(
     decision: str | None = None,
     session: str | None = None,
     since: str | None = None,
+    filter_pattern: str | None = None,
 ) -> list[dict[str, Any]]:
     """Parse an NDJSON audit log and apply filters.
 
@@ -620,6 +621,14 @@ def read_audit_log(
         since: ISO-8601 timestamp; keep only entries whose ``ts``
             is ``>= since``. Parsed loosely (a trailing ``Z`` is
             accepted; naive datetimes are treated as UTC).
+        filter_pattern: Phase 4.7 v1.17.0. If set, a regex applied
+            via ``re.search`` to the JSON-serialised entry (the
+            same ``json.dumps`` representation used on disk). The
+            regex runs AFTER the structured filters above (AND
+            semantics). The caller is responsible for validating
+            the regex — an invalid pattern raises ``re.error``
+            here (which the CLI maps to exit 1 with a clear
+            message).
 
     Returns:
         A list of dicts in file order (oldest first). Each dict is
@@ -634,6 +643,13 @@ def read_audit_log(
         text = path.read_text(encoding="utf-8")
     except OSError:
         return []
+
+    # Compile the regex filter once (if provided). An invalid
+    # pattern propagates as ``re.error`` — the CLI handler
+    # catches it and exits 1.
+    filter_regex: re.Pattern[str] | None = None
+    if filter_pattern:
+        filter_regex = re.compile(filter_pattern)
 
     # Parse the ``since`` filter once (loose ISO-8601).
     since_dt: datetime | None = None
@@ -695,6 +711,17 @@ def read_audit_log(
                         continue
             else:
                 # No usable timestamp — drop.
+                continue
+
+        # Phase 4.7 v1.17.0: regex filter. ``re.search`` on the
+        # JSON-serialised entry (compact, no whitespace changes
+        # between runs — ``json.dumps`` is deterministic for our
+        # schema). The regex sees the full entry including the
+        # ``aggregate`` payload, so operators can match on hook
+        # ids, decisions, tool names, etc.
+        if filter_regex is not None:
+            serialised = json.dumps(entry, ensure_ascii=False, sort_keys=True)
+            if not filter_regex.search(serialised):
                 continue
 
         out.append(entry)
@@ -777,6 +804,7 @@ def _cmd_hooks_audit(args: argparse.Namespace) -> int:
 
     Exit codes:
         0 — success (including "no audit log" / "no entries").
+        1 — invalid ``--filter`` regex (Phase 4.7 v1.17.0).
         2 — invalid arguments (e.g. unknown --decision value).
 
     If the audit directory or today's file does not exist, the
@@ -792,6 +820,22 @@ def _cmd_hooks_audit(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 2
+
+    # Phase 4.7 v1.17.0: validate --filter regex BEFORE touching
+    # the audit file. An invalid pattern exits 1 with a clear
+    # message; this distinguishes "bad CLI input" from "file
+    # read error" (which we also map to 1, but via a different
+    # path).
+    filter_pattern = getattr(args, "filter", None)
+    if filter_pattern:
+        try:
+            re.compile(filter_pattern)
+        except re.error as exc:
+            print(
+                f"[harness] hooks audit: invalid --filter regex: {exc}",
+                file=sys.stderr,
+            )
+            return 1
 
     project_root = Path(args.project_root).resolve() if args.project_root else Path.cwd()
     if not project_root.is_dir():
@@ -820,6 +864,7 @@ def _cmd_hooks_audit(args: argparse.Namespace) -> int:
         decision=decision,
         session=getattr(args, "session", None),
         since=getattr(args, "since", None),
+        filter_pattern=filter_pattern,
     )
 
     if args.json:

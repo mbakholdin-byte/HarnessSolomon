@@ -355,7 +355,23 @@ def _cmd_observability_stats(args: argparse.Namespace) -> int:
     fresh, so the snapshot will be empty unless counters have
     been incremented in this very process. For live server
     counters use ``harness observability metrics`` instead.
+
+    Phase 4.7 v1.17.0: ``--diff BEFORE.json AFTER.json`` mode
+    compares two JSON snapshots (each produced by
+    ``observability stats --json``) and prints the per-metric
+    delta. Exit codes in diff mode:
+        0 — no changes (identical BEFORE / AFTER).
+        1 — file-not-found OR invalid JSON.
+        2 — at least one metric differs (counter changed,
+            new metric appeared, metric removed).
     """
+    diff_files = getattr(args, "diff", None)
+    if diff_files:
+        return _run_stats_diff(
+            Path(diff_files[0]), Path(diff_files[1]),
+            json_output=bool(getattr(args, "json", False)),
+        )
+
     from harness.observability import get_observability
 
     obs = get_observability()
@@ -412,9 +428,201 @@ def _cmd_observability_stats(args: argparse.Namespace) -> int:
     return 0
 
 
+def _load_snapshot(path: Path) -> dict[str, dict[str, float]]:
+    """Load a metrics snapshot from a JSON file.
+
+    Accepts two formats:
+
+      1. ``{"metrics": {name: {labels_key: value}}}`` — the layout
+         produced by ``harness observability stats --json`` (we
+         ignore the surrounding ``count`` / ``note`` fields).
+      2. ``{name: {labels_key: value}}`` — a bare metrics dict
+         (useful when snapshots are produced by another tool).
+
+    Raises ``OSError`` if the file is missing, ``json.JSONDecodeError``
+    if the file is not valid JSON, ``ValueError`` if the structure
+    does not match either shape. The caller maps these to exit 1.
+    """
+    text = path.read_text(encoding="utf-8")
+    data = json.loads(text)
+    if not isinstance(data, dict):
+        raise ValueError(
+            f"expected a JSON object at top level, got {type(data).__name__}"
+        )
+    if "metrics" in data and isinstance(data["metrics"], dict):
+        metrics = data["metrics"]
+    else:
+        metrics = data
+    # Normalise: every value must be a dict[str, float/int].
+    out: dict[str, dict[str, float]] = {}
+    for name, labelmap in metrics.items():
+        if not isinstance(labelmap, dict):
+            raise ValueError(
+                f"metric {name!r}: expected a label->value map, "
+                f"got {type(labelmap).__name__}"
+            )
+        sub: dict[str, float] = {}
+        for label_key, value in labelmap.items():
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(
+                    f"metric {name!r} label {label_key!r}: expected a "
+                    f"number, got {type(value).__name__}"
+                )
+            sub[str(label_key)] = float(value)
+        out[str(name)] = sub
+    return out
+
+
+def _run_stats_diff(
+    before_path: Path, after_path: Path, *, json_output: bool,
+) -> int:
+    """Phase 4.7 v1.17.0: compute per-metric deltas.
+
+    Reads two snapshots (each from ``observability stats --json``
+    or a compatible bare-metrics JSON file), and for each
+    (metric, label-set) pair computes ``Δ = AFTER − BEFORE``.
+
+    - Pairs present in both: ``Δ = after − before``.
+    - Pairs only in AFTER: marked ``NEW`` with ``+after``.
+    - Pairs only in BEFORE: marked ``REMOVED`` with ``-before``.
+
+    Returns:
+        0 — no differences.
+        1 — file-not-found or invalid JSON.
+        2 — at least one delta (changed / new / removed).
+    """
+    # --- Load both snapshots (exit 1 on any read/parse failure). ---
+    try:
+        before = _load_snapshot(before_path)
+    except FileNotFoundError:
+        print(
+            f"[harness] observability stats --diff: BEFORE file not found: "
+            f"{before_path}",
+            file=sys.stderr,
+        )
+        return 1
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        print(
+            f"[harness] observability stats --diff: cannot parse BEFORE "
+            f"({before_path}): {exc}",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        after = _load_snapshot(after_path)
+    except FileNotFoundError:
+        print(
+            f"[harness] observability stats --diff: AFTER file not found: "
+            f"{after_path}",
+            file=sys.stderr,
+        )
+        return 1
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        print(
+            f"[harness] observability stats --diff: cannot parse AFTER "
+            f"({after_path}): {exc}",
+            file=sys.stderr,
+        )
+        return 1
+
+    # --- Compute deltas. ---
+    # Key = (metric_name, label_key). We build a single flat dict
+    # per side so new/removed pairs surface regardless of which
+    # metric dict they live under.
+    before_flat: dict[tuple[str, str], float] = {}
+    for name, labelmap in before.items():
+        for lk, value in labelmap.items():
+            before_flat[(name, lk)] = value
+    after_flat: dict[tuple[str, str], float] = {}
+    for name, labelmap in after.items():
+        for lk, value in labelmap.items():
+            after_flat[(name, lk)] = value
+
+    all_keys = sorted(set(before_flat) | set(after_flat))
+    rows: list[dict[str, Any]] = []
+    for key in all_keys:
+        name, label_key = key
+        in_before = key in before_flat
+        in_after = key in after_flat
+        if in_before and in_after:
+            b = before_flat[key]
+            a = after_flat[key]
+            delta = a - b
+            if delta == 0:
+                continue  # no change — skip
+            rows.append({
+                "metric": name,
+                "labels": label_key,
+                "before": b,
+                "after": a,
+                "delta": delta,
+                "status": "CHANGED",
+            })
+        elif in_after:
+            a = after_flat[key]
+            rows.append({
+                "metric": name,
+                "labels": label_key,
+                "before": None,
+                "after": a,
+                "delta": a,
+                "status": "NEW",
+            })
+        else:  # in_before only
+            b = before_flat[key]
+            rows.append({
+                "metric": name,
+                "labels": label_key,
+                "before": b,
+                "after": None,
+                "delta": -b,
+                "status": "REMOVED",
+            })
+
+    has_delta = bool(rows)
+
+    if json_output:
+        # NDJSON: one record per delta row (makes streaming parses
+        # trivial for downstream tools). An extra summary record
+        # is NOT appended to keep the stream uniform.
+        for r in rows:
+            print(json.dumps(r, ensure_ascii=False))
+    else:
+        if not rows:
+            print("(no metric changes)")
+        else:
+            print(
+                f"{'metric':36s}  {'labels':28s}  "
+                f"{'status':8s}  {'delta':>14s}"
+            )
+            print("-" * 94)
+            for r in rows:
+                delta_s: str
+                if r["status"] == "NEW":
+                    delta_s = f"+{r['delta']:g}"
+                elif r["status"] == "REMOVED":
+                    delta_s = f"{r['delta']:g}"
+                else:
+                    d = r["delta"]
+                    delta_s = f"{d:+g}"
+                labels_short = r["labels"]
+                if len(labels_short) > 28:
+                    labels_short = labels_short[:25] + "..."
+                name_short = r["metric"]
+                if len(name_short) > 36:
+                    name_short = name_short[:33] + "..."
+                print(
+                    f"{name_short:36s}  {labels_short:28s}  "
+                    f"{r['status']:8s}  {delta_s:>14s}"
+                )
+
+    return 2 if has_delta else 0
+
+
 __all__ = [
     "_cmd_observability_log",
     "_cmd_observability_metrics",
     "_cmd_observability_health",
     "_cmd_observability_stats",
+    "_run_stats_diff",
 ]
