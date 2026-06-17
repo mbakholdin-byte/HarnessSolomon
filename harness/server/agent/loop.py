@@ -41,6 +41,11 @@ from harness.server.llm.router import LLMRouter, StreamEvent
 if TYPE_CHECKING:
     from harness.context.compaction import ContextCompactor
 from harness.redaction import redact_dict
+# Phase 4.4+ v1.14.0: Stop hook fires at AgentLoop exit.
+# Lazy import — keep the existing trust boundary: harness.hooks.*
+# is stdlib-only, importing it eagerly is safe (it doesn't import
+# harness.agents or harness.server).
+from harness.hooks.runner import safe_fire
 
 logger = logging.getLogger(__name__)
 
@@ -424,6 +429,28 @@ class AgentLoop:
 
         # Always close with done so the client can finalise.
         _ = last_event  # silence linters; useful for future hooks
+        # Phase 4.4+ v1.14.0: Stop hook. Best-effort — the loop has
+        # already exited, so ``block`` is logged-only (we cannot
+        # un-yield events that have already been sent to the
+        # client). Per docs/hooks.md, payload = reason, final_message,
+        # iterations; we add agent_id as a sibling.
+        try:
+            _sid = getattr(self.runtime, "_session_id", "") or ""
+            _aid = getattr(self.runtime, "_agent_id", "") or ""
+        except Exception:  # noqa: BLE001
+            _sid, _aid = "", ""
+        await safe_fire(
+            "Stop",
+            session_id=_sid,
+            agent_id=_aid,
+            payload={
+                "reason": "completed" if last_event is None or last_event.type != "error"
+                          else "error",
+                "final_message": (last_event.content[:200] if last_event and last_event.content else ""),
+                "iterations": 0,  # AgentLoop doesn't track iteration count
+                "agent_id": _aid,
+            },
+        )
         yield StreamEvent(type="done")
 
     # --- internal helpers ---

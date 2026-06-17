@@ -23,6 +23,10 @@ from typing import Any, AsyncIterator, Callable
 from harness.agents.spec import AgentSpec
 from harness.agents.worktree import WorktreeInfo, WorktreeSession
 from harness.config import settings
+# Phase 4.4+ v1.14.0: SubagentStart/SubagentStop hook emissions.
+# Lazy-safe: the runner is imported by harness.cli and tests that
+# may not have the hooks framework initialized.
+from harness.hooks.runner import safe_fire
 from harness.redaction import redact
 from harness.server.agent.loop import AgentLoop, DEFAULT_MAX_ITERATIONS
 from harness.server.agent.prompts import build_system_prompt
@@ -383,6 +387,20 @@ class AgentRunner:
         model_override: str | None = None,
         session_id: str | None = None,
     ) -> RunResult:
+        # Phase 4.4+ v1.14.0: SubagentStart — fires before any work.
+        # ``block`` is respected (returns early with allow-result);
+        # ``modify`` is currently logged-only (no payload mutation).
+        await safe_fire(
+            "SubagentStart",
+            session_id=session_id or "",
+            agent_id=spec.name,
+            payload={
+                "agent_name": spec.name,
+                "model": model_override or spec.model,
+                "prompt_preview": prompt[:200],
+                "iterations_max": spec.max_iterations,
+            },
+        )
         # Phase 3 v1.2.0: build a per-(spec, session) scratchpad if the
         # runner was configured with a factory. Fail-open — a broken
         # factory or init must never break the chat loop.
@@ -505,6 +523,23 @@ class AgentRunner:
         except Exception as e:
             error = f"{type(e).__name__}: {e}"
             logger.exception("sub-agent %r failed", spec.name)
+
+        # Phase 4.4+ v1.14.0: SubagentStop. Best-effort — block cannot
+        # un-run a subagent, but the result IS observable. We fire
+        # AFTER setting ``error`` so the payload reflects final state.
+        await safe_fire(
+            "SubagentStop",
+            session_id=session_id or "",
+            agent_id=spec.name,
+            payload={
+                "agent_name": spec.name,
+                "status": "error" if error else "ok",
+                "iterations": iterations,
+                "denied_tool_calls": denied_count,
+                "cost_usd": total_cost,
+                "error": error[:200] if error else "",
+            },
+        )
 
         return RunResult(
             spec=spec, worktree=wt, final_text=last_text,

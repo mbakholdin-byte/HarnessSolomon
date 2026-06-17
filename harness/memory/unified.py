@@ -21,10 +21,13 @@ separate, hand-curated store, not a mirror of semantic memory.
 """
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import logging
 from pathlib import Path
 from typing import Any
 
+from harness.hooks.runner import safe_fire  # Phase 4.4+ v1.14.0: OnMemoryWrite hook
 from harness.memory.adapters.file import FileAdapter
 from harness.memory.adapters.hmem import HmemAdapter
 from harness.memory.adapters.hybrid import HybridAdapter
@@ -197,6 +200,20 @@ class UnifiedMemory:
                 ProvenanceEntry(layer="L_meta", source="unified", id=self.agent_id)
             )
 
+        # Phase 4.4+ v1.14.0: OnMemoryWrite hook (post-redaction, pre-persist)
+        # Per review #8: payload uses key_hash, NOT key in clear — PII risk.
+        _key_hash = hashlib.sha256(memory.id.encode()).hexdigest()[:16]
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(safe_fire("OnMemoryWrite", payload={
+                "layer": memory.layer,
+                "key_hash": _key_hash,
+                "scope": memory.metadata.get("agent_id", ""),
+                "size_bytes": len(memory.content.encode("utf-8")),
+            }))
+        except RuntimeError:
+            pass  # no event loop (tests, CLI)
+
         if memory.layer == L1_OVERRIDE_TARGET:
             self._safe_write(self.hmem, memory)
             return
@@ -208,7 +225,6 @@ class UnifiedMemory:
         # the write (the BM25 path will still find the memory).
         if self.embedder is not None:
             try:
-                import asyncio
                 vec = asyncio.run(
                     self.embedder.embed_documents([memory.content])
                 )
@@ -369,7 +385,6 @@ class UnifiedMemory:
             corpus=all_mems, embedder=self.embedder,
         )
         # ``DenseRetriever.retrieve`` is async; we run it inline.
-        import asyncio
         return asyncio.run(retriever.retrieve(query, k=k))
 
     # --- recent ---

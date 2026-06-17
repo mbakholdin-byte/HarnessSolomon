@@ -27,6 +27,8 @@ from pydantic import BaseModel, Field
 
 from harness.agents.spec import AgentSpec
 from harness.config import settings
+# Phase 4.4+ v1.14.0: OnRoutingDecision hook fires after classify().
+from harness.hooks.runner import safe_fire
 from harness.server.llm.router import CompletionResult, LLMRouter
 
 logger = logging.getLogger(__name__)
@@ -139,12 +141,21 @@ class LLMRouterClassifier:
             )
         except Exception as e:
             logger.warning("router LLM call failed: %s; falling back", e)
-            return RouterDecision(
+            decision = RouterDecision(
                 agent=_first_available(specs), fallback=True,
                 confidence=0.0, raw_response=str(e),
             )
+            await self._fire_routing_hook(decision, used_model, task, "llm_error")
+            return decision
 
-        return self._parse(response, specs)
+        result = await self._parse(response, specs, task=task, used_model=used_model)
+        trigger = "fallback_exhausted" if result.fallback else "user_prompt"
+        if result.confidence < 0.5 and not result.fallback:
+            trigger = "low_confidence"
+        await self._fire_routing_hook(
+            result, used_model or settings.subagent_default_model, task, trigger,
+        )
+        return result
 
     # --- helpers ---
 
@@ -160,12 +171,21 @@ class LLMRouterClassifier:
         return "\n".join(lines)
 
     @staticmethod
-    def _parse(response: CompletionResult, specs: Sequence[AgentSpec]) -> RouterDecision:
+    async def _parse(
+        response: CompletionResult,
+        specs: Sequence[AgentSpec],
+        *,
+        task: str = "",
+        used_model: str = "",
+    ) -> RouterDecision:
         """Extract ``(agent, confidence)`` from the LLM response.
 
         Tries the strict JSON form first, then a bare ``agent: <name>``
         line, and finally falls back to the first candidate in
         :data:`_FALLBACK_ORDER`.
+
+        ``task`` and ``used_model`` are passed through for hook metadata
+        (fired by the caller — ``classify()``).
         """
         content = (response.content or "").strip()
         raw = content
@@ -178,9 +198,11 @@ class LLMRouterClassifier:
                 name = str(data.get("agent", "")).strip()
                 conf = float(data.get("confidence", 1.0))
                 if name in {s.name for s in specs}:
-                    return RouterDecision(
+                    decision = RouterDecision(
                         agent=name, confidence=conf, fallback=False, raw_response=raw,
                     )
+                    # NOTE: trigger = "user_prompt"; hook fired by classify()
+                    return decision
             except (json.JSONDecodeError, ValueError, TypeError):
                 pass  # fall through
 
@@ -204,6 +226,43 @@ class LLMRouterClassifier:
         return RouterDecision(
             agent=specs[0].name, confidence=0.0, fallback=True, raw_response=raw,
         )
+
+    async def _fire_routing_hook(
+        self,
+        decision: "RouterDecision",
+        model: str,
+        task: str,
+        trigger: str,
+    ) -> None:
+        """Phase 4.4+ v1.14.0: fire OnRoutingDecision hook.
+
+        ``trigger`` is one of:
+          - "user_prompt" — top-level user task classification
+          - "l2_curator" — L2 scratchpad search
+          - "l2_promote" — L2 promotion to L1
+          - "fallback_exhausted" — all fallbacks exhausted
+          - "low_confidence" — LLM confidence below threshold
+
+        Block semantics: an OnRoutingDecision block is currently
+        logged-only (we return the same decision; full re-route
+        behavior is a Phase 4.5 concern).
+        """
+        try:
+            await safe_fire(
+                "OnRoutingDecision",
+                session_id="",
+                agent_id=decision.agent,
+                payload={
+                    "chosen_agent": decision.agent,
+                    "confidence": decision.confidence,
+                    "fallback": decision.fallback,
+                    "model": model,
+                    "trigger": trigger,
+                    "task_preview": task[:200] if task else "",
+                },
+            )
+        except Exception:  # noqa: BLE001 — hooks must never break routing
+            pass
 
 
 def _first_available(specs: Sequence[AgentSpec]) -> str:

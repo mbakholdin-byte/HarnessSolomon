@@ -29,6 +29,7 @@ from typing import Any
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from harness.config import settings
+from harness.hooks.runner import safe_fire  # Phase 4.4+ v1.14.0: UserPromptSubmit hook
 from harness.server.agent.loop import AgentLoop
 from harness.server.agent.runtime import ToolRuntime
 from harness.server.agent.session import ChatSession
@@ -197,6 +198,21 @@ async def chat_ws(websocket: WebSocket, session_id: str, model: str) -> None:
                 if not isinstance(content, str):
                     await websocket.send_json(
                         {"type": "error", "content": "'content' must be a string"}
+                    )
+                    continue
+
+                # Phase 4.4+ v1.14.0: UserPromptSubmit hook — block semantics respected
+                _decision = await safe_fire(
+                    "UserPromptSubmit",
+                    session_id=session_id,
+                    payload={
+                        "prompt_preview": content[:200],
+                        "session_id": session_id,
+                    },
+                )
+                if _decision == "block":
+                    await websocket.send_json(
+                        {"type": "blocked", "reason": "UserPromptSubmit hook blocked the prompt"}
                     )
                     continue
 

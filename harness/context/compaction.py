@@ -55,6 +55,12 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 from harness.config import Settings
 from harness.context.prompts import SUMMARY_SYSTEM_PROMPT
+# Phase 4.4+ v1.14.0: PreCompact + OnCompaction hook emissions.
+# Compaction is a write-side effect — hooks observe the source/target
+# token counts and may add to the L2 scratchpad. ``block`` is logged
+# only (cannot abort an in-flight compaction; that would break
+# context-window safety).
+from harness.hooks.runner import safe_fire
 from harness.observability import emit_compaction as _emit_compaction
 from harness.server.llm.router import LLMRouter
 
@@ -296,6 +302,26 @@ class ContextCompactor:
         """
         if not self._settings.compaction_enabled or not messages:
             return messages
+        # Phase 4.4+ v1.14.0: PreCompact hook. Fires once per
+        # maybe_compact call (regardless of whether the threshold is
+        # crossed — hooks observe intent). ``block`` is logged-only
+        # (we cannot un-trigger the trigger decision).
+        try:
+            _source_tokens = sum(
+                len(str(m.get("content", ""))) for m in messages
+            ) // 4  # rough estimate
+        except Exception:  # noqa: BLE001
+            _source_tokens = 0
+        await safe_fire(
+            "PreCompact",
+            session_id=session_id or self._session_id or "",
+            agent_id="",
+            payload={
+                "source_tokens": _source_tokens,
+                "message_count": len(messages),
+                "mode": "auto",
+            },
+        )
         # Phase 3 v1.5.0: time/turn/hybrid trigger fires BEFORE the
         # token threshold check (Plan agent BLOCKER B3, B8). The
         # trigger is consulted only when:
@@ -339,6 +365,14 @@ class ContextCompactor:
                             "compactor: idle_trigger.mark_compacted failed: %s",
                             exc,
                         )
+                    # Phase 4.4+ v1.14.0: OnCompaction hook (idle path).
+                    await self._emit_on_compaction(
+                        compacted,
+                        source_tokens=tokens,
+                        cache_hit=False,
+                        mode="idle_trigger",
+                        session_id=effective_session_id or "",
+                    )
                     return compacted
             except Exception as exc:  # noqa: BLE001 — fail-open
                 logger.warning(
@@ -459,7 +493,54 @@ class ContextCompactor:
                 logger.warning(
                     "compactor: idle_trigger.mark_compacted failed: %s", exc,
                 )
+        # Phase 4.4+ v1.14.0: OnCompaction hook (slow-path call site).
+        # The slow path always runs on cache-miss by construction
+        # (the cache hit branch returned ``rebuilt`` above at line
+        # 458 or 466). So cache_hit=False here.
+        await self._emit_on_compaction(
+            compacted,
+            source_tokens=tokens,
+            cache_hit=False,
+            mode="auto",
+            session_id=effective_session_id or "",
+        )
         return compacted
+
+    async def _emit_on_compaction(
+        self,
+        compacted: list[dict[str, Any]],
+        *,
+        source_tokens: int,
+        cache_hit: bool,
+        mode: str,
+        session_id: str,
+    ) -> None:
+        """Phase 4.4+ v1.14.0: fire OnCompaction hook (helper).
+
+        Honors ``hooks_on_compaction_skip_cache_hit`` setting (default
+        ON — only fires for cache-miss, not cache-hit). Block is
+        logged-only (data loss would occur if we dropped the
+        summary). All exceptions swallowed — hooks must never break
+        compaction.
+        """
+        try:
+            if not self._settings.hooks_on_compaction_skip_cache_hit or not cache_hit:
+                compacted_tokens = sum(
+                    len(str(m.get("content", ""))) for m in compacted
+                ) // 4
+                await safe_fire(
+                    "OnCompaction",
+                    session_id=session_id,
+                    agent_id="",
+                    payload={
+                        "source_tokens": source_tokens,
+                        "compacted_tokens": compacted_tokens,
+                        "cache_hit": cache_hit,
+                        "mode": mode,
+                    },
+                )
+        except Exception:  # noqa: BLE001 — hooks must never break compaction
+            pass
 
     async def _run_slow_path(
         self,
@@ -794,6 +875,16 @@ class ContextCompactor:
             )
         except Exception:  # noqa: BLE001
             logger.debug("emit_compaction failed", exc_info=True)
+        # Phase 4.4+ v1.14.0: OnCompaction hook (force_compact path).
+        # cache_hit=False here (the cache hit branch returned above
+        # at the cache_lookup True branch).
+        await self._emit_on_compaction(
+            compacted,
+            source_tokens=tokens,
+            cache_hit=False,
+            mode=_obs_mode,
+            session_id=_obs_session_id,
+        )
         return CompactResult(
             original_tokens=tokens,
             compacted_tokens=compacted_tokens,

@@ -1,5 +1,57 @@
 # Changelog — Solomon Harness
 
+## Phase 4.4+ v1.14.0 — wire 11 remaining hook events in production (2026-06-17) — Phase 4 = 2/12 step
+
+**Phase 4.4+ v1.14.0 — 0 new files / 9 modified files / +15 tests / 2072 total tests / 0 new deps**
+
+Phase 4.4 v1.13.0 closed the hooks inspection story (`harness hooks` CLI). v1.14.0 wires
+the remaining 11 hook events into production so observability sees the full lifecycle
+of every chat / sub-agent / compaction / routing / memory operation.
+
+### Что закрыто
+
+**`harness/hooks/runner.py` — process-level singleton + safe_fire helper:**
+- `get_global_hook_runner()` — lazy singleton, bound to the same registry as `app.state.hook_runner`
+- `set_global_hook_runner(runner | None)` — DI from `app.state` in lifespan, or reset for tests
+- `safe_fire(event, ...)` — fail-open wrapper around `runner.fire()`. All exceptions swallowed, returns `"allow"` on any failure. Used by ALL 11 production emission points.
+
+**`harness/server/app.py` (lifespan) — `SessionStart` + `SessionEnd`:**
+- Process-level (NOT per-session — server boot/shutdown), `session_id="server-boot"`.
+- DI wires `app.state.hook_runner` + `set_global_hook_runner(server_runner)` so the singleton uses the SAME registry as the DI runner.
+- `SessionEnd` is best-effort (fires before final cleanup).
+
+**`harness/server/agent/loop.py` — `Stop`:**
+- Fires before `yield StreamEvent(type="done")`. Payload: `{reason, final_message, iterations, agent_id}`.
+- session_id / agent_id via `getattr(self.runtime, "_session_id", "")`.
+
+**`harness/agents/runner.py` — `SubagentStart` + `SubagentStop`:**
+- `SubagentStart` at start of `_drive()`. Payload: `{agent_name, model, prompt_preview, iterations_max}`.
+- `SubagentStop` before `return RunResult(...)`. Payload: `{agent_name, status, iterations, denied_tool_calls, cost_usd, error}`.
+- `block` IS respected on `SubagentStart` (returns early).
+
+**`harness/context/compaction.py` — `PreCompact` + `OnCompaction`:**
+- `PreCompact` at start of `maybe_compact()`. Payload: `{source_tokens, message_count, mode}`.
+- `OnCompaction` via `_emit_on_compaction` helper, 3 call sites. Honors `hooks_on_compaction_skip_cache_hit` setting.
+
+**`harness/agents/router.py` — `OnRoutingDecision`:**
+- `_fire_routing_hook(decision, model, task, trigger)` helper. ALL 5 return sites wrapped. Triggers: `user_prompt`, `low_confidence`, `parsed_unknown`, `fallback_used`, `fallback_exhausted`.
+
+**`harness/server/routes/chat.py` — `UserPromptSubmit`:**
+- Fires in WebSocket receive handler. `block` IS respected — returns `{type: "blocked", reason: ...}`.
+
+**`harness/agents/registry.py` — `InstructionsLoaded`:**
+- Fires in `_read_override` and `all_specs`. Payload: `{spec_name, file_path, source}`.
+
+**`harness/memory/unified.py` — `OnMemoryWrite`:**
+- Payload: `{layer, key_hash, scope, size_bytes}` — NO value/key in clear (PII safety).
+
+### Tests
+
+- `tests/test_hook_emissions_v114.py` — 15 tests (Alex):
+  10 per-emission unit + 1 trust boundary + 1 counter + 3 safe_fire isolation
+
+**+15 net new tests, 2072 total, 0 regressions.**
+
 ## Phase 4.4 v1.13.0 — `harness hooks` / `harness observability` CLI (2026-06-17) — Phase 4 = 1/12 step
 
 **Phase 4.4 v1.13.0 — 3 new files / 5 modified files / +40 tests / 2057 total tests / 0 new deps**

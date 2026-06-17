@@ -24,6 +24,10 @@ from harness.config import settings
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup/shutdown hooks."""
+    # Phase 4.4+ v1.14.0: SessionStart / SessionEnd emission points.
+    import time as _time
+    _startup_ts = _time.monotonic()
+
     # Ensure data dirs exist
     settings.session_dir.mkdir(parents=True, exist_ok=True)
     settings.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -475,6 +479,49 @@ async def lifespan(app: FastAPI):
     else:
         print("[harness] hot_reload: disabled (settings.hot_reload_enabled=False)")
 
+    # Phase 4.4+ v1.14.0: wire the global HookRunner singleton to the
+    # SAME registry that the server's DI runner uses. This is the
+    # collapse from the dual-registry risk in the v1.14.0 design
+    # review (Blocker #3): production emission sites that cannot
+    # DI (UnifiedMemory, LLMRouterClassifier, ContextCompactor)
+    # call ``safe_fire()`` which delegates to the global runner.
+    # If the global runner is None, ``safe_fire`` still works (it
+    # lazy-initializes from ``get_registry()``); we set it
+    # explicitly here so the registry is the SAME object the DI
+    # runner uses (no parallel registries).
+    try:
+        from harness.hooks.registry import get_registry
+        from harness.hooks.runner import (
+            HookRunner,
+            set_global_hook_runner,
+        )
+        server_registry = get_registry()
+        server_runner = HookRunner(server_registry, default_timeout_ms=3000)
+        app.state.hook_runner = server_runner
+        set_global_hook_runner(server_runner)
+        print(
+            f"[harness] hook_runner: enabled "
+            f"(registry_size={len(server_registry)})"
+        )
+    except Exception as exc:  # noqa: BLE001 — best-effort
+        print(
+            f"[harness] hook_runner: disabled (init failed: "
+            f"{type(exc).__name__}: {exc})"
+        )
+
+    # Phase 4.4+ v1.14.0: SessionStart — process-level, NOT per-session (#9 review)
+    try:
+        from harness.hooks.runner import safe_fire
+        await safe_fire(
+            "SessionStart",
+            payload={
+                "session_id": "server-boot",
+                "working_dir": str(settings.project_root),
+            },
+        )
+    except Exception:  # noqa: BLE001 — best-effort
+        pass
+
     yield
     # shutdown: close the outbound dispatcher's HTTP client.
     # ``outbound`` may not exist if the runner init failed (in
@@ -483,6 +530,18 @@ async def lifespan(app: FastAPI):
     outbound = getattr(app.state, "outbound", None)
     if outbound is not None:
         await outbound.aclose()
+    # Phase 4.4+ v1.14.0: SessionEnd — best-effort, shutdown must not hang
+    try:
+        from harness.hooks.runner import safe_fire
+        await safe_fire(
+            "SessionEnd",
+            payload={
+                "session_id": "server-boot",
+                "duration_seconds": round(_time.monotonic() - _startup_ts, 1),
+            },
+        )
+    except Exception:  # noqa: BLE001 — best-effort
+        pass
     # Phase 4.2: stop hot-reload watcher.
     watcher = getattr(app.state, "hot_reload_watcher", None)
     if watcher is not None:
@@ -493,7 +552,7 @@ def create_app() -> FastAPI:
     """Build FastAPI app with middleware and routers."""
     app = FastAPI(
         title="Solomon Harness",
-        version="1.13.0",
+        version="1.14.0",
         description=(
             "Open-source agentic shell — Web MVP (Phase 0) + "
             "sub-agent system (Phase 2.0+2.1) + GitHub PR integration (Phase 2.2) "

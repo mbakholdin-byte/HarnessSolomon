@@ -315,4 +315,97 @@ class HookRunner:
         )
 
 
-__all__ = ["HookRunner", "_invoke_builtin"]
+__all__ = ["HookRunner", "_invoke_builtin", "safe_fire"]
+
+
+# === Phase 4.4+ v1.14.0: process-level singleton for production emission sites ===
+
+_global_runner: "HookRunner | None" = None
+
+
+def get_global_hook_runner() -> "HookRunner":
+    """Return the process-level HookRunner singleton.
+
+    Production emission sites (AgentLoop, AgentRunner, ContextCompactor,
+    UnifiedMemory, LLMRouterClassifier) call this when they don't have
+    access to a DI'd runner. The runner is bound to the same registry
+    that ``get_registry()`` returns (Phase 4.4 singleton with builtins
+    loaded), so registration via ``.harness/hooks/*.json`` is visible
+    to all emission points.
+
+    The server ALSO exposes its own runner on ``app.state.hook_runner``
+    (initialized in ``lifespan`` with the same registry). Production
+    code that already has DI (e.g. ``runtime.ToolRuntime``) should
+    prefer the injected runner; this singleton is the fallback for
+    sites that cannot be DI'd without breaking the trust boundary.
+
+    Trust boundary: this module is stdlib + asyncio + dataclasses.
+    It imports from ``harness.hooks.*`` and ``harness.observability``
+    ONLY. It does NOT import from ``harness.agents`` or
+    ``harness.server`` (enforced by
+    ``tests/test_hooks_trust_boundary.py``).
+    """
+    global _global_runner
+    if _global_runner is None:
+        from harness.hooks.registry import get_registry
+        _global_runner = HookRunner(get_registry(), default_timeout_ms=3000)
+    return _global_runner
+
+
+def set_global_hook_runner(runner: "HookRunner | None") -> None:
+    """Inject a runner (DI from app.state) or reset the singleton.
+
+    Called by ``lifespan`` to bind the server's runner to the
+    global handle so production sites without DI get the same
+    registry. Pass ``None`` to reset (tests + shutdown).
+    """
+    global _global_runner
+    _global_runner = runner
+
+
+async def safe_fire(
+    event: str,
+    *,
+    session_id: str = "",
+    agent_id: str = "",
+    payload: dict | None = None,
+    request_id: str = "",
+) -> Decision:
+    """Fire a hook event with full failure isolation.
+
+    Production call sites should use this wrapper, not ``runner.fire()``
+    directly. ``safe_fire``:
+      - Builds the ``HookContext``.
+      - Calls ``get_global_hook_runner().fire(ctx)``.
+      - Catches ALL exceptions (unknown event name, runner crash,
+        observer failure) and returns ``"allow"`` (fail-open).
+      - Never raises.
+
+    The returned decision is what the caller should respect:
+      - ``"allow"`` — proceed as normal.
+      - ``"modify"`` — proceed, but the caller's payload MAY be
+        different (see ``aggregate.final_payload``). For v1.14.0
+        the returned decision is sufficient; payload-mutation
+        per-event is a Phase 4.5 concern.
+      - ``"block"`` — caller should abort the operation. Some
+        events (Stop, SessionEnd, OnCompaction) cannot be truly
+        aborted and are documented as "best-effort, log only".
+    """
+    from harness.hooks.context import HookContext
+    ctx = HookContext(
+        event=event,
+        session_id=session_id,
+        agent_id=agent_id,
+        payload=payload or {},
+        request_id=request_id,
+    )
+    try:
+        runner = get_global_hook_runner()
+        agg = await runner.fire(ctx)
+        return agg.final_decision
+    except Exception as e:  # noqa: BLE001 — production must never crash on hook failure
+        logger.debug(
+            "safe_fire(%s) swallowed exception: %s: %s",
+            event, type(e).__name__, e,
+        )
+        return "allow"

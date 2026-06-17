@@ -15,12 +15,14 @@ To inspect what's installed, run::
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from importlib import resources
 from pathlib import Path
 from typing import Iterable
 
 from harness.agents.spec import AgentSpec, FrontmatterParseError, parse_agent_md
+from harness.hooks.runner import safe_fire  # Phase 4.4+ v1.14.0: InstructionsLoaded hook
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +53,20 @@ def _project_override_path(project_root: Path, name: str) -> Path:
     return project_root / ".harness" / "agents" / f"{name}.md"
 
 
+# Phase 4.4+ v1.14.0: fire-and-forget InstructionsLoaded hook.
+def _fire_instructions_loaded(spec_name: str, file_path: str, source: str) -> None:
+    """Fire-and-forget InstructionsLoaded hook from synchronous context."""
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(safe_fire(
+            "InstructionsLoaded",
+            payload={"spec_name": spec_name, "file_path": file_path, "source": source},
+        ))
+    except RuntimeError:
+        # No event loop running — skip silently (tests, CLI).
+        pass
+
+
 def _read_builtin(name: str) -> AgentSpec | None:
     """Parse the built-in ``.md`` for ``name``, or return None if missing."""
     f = _builtin_file(name)
@@ -62,12 +78,15 @@ def _read_builtin(name: str) -> AgentSpec | None:
     from harness.agents.spec import FrontmatterParseError
     text = f.read_text(encoding="utf-8", errors="replace")
     try:
-        return _parse_text(text, source=f"<builtin:{name}>")
+        spec = _parse_text(text, source=f"<builtin:{name}>")
     except FrontmatterParseError as e:
         # Re-raise with a clearer source label.
         raise FrontmatterParseError(
             f"built-in agent {name!r} is malformed: {e}"
         ) from e
+    # Phase 4.4+ v1.14.0: InstructionsLoaded hook (fire-and-forget)
+    _fire_instructions_loaded(name, f"<builtin:{name}>", "builtin")
+    return spec
 
 
 def _read_override(project_root: Path, name: str) -> AgentSpec | None:
@@ -75,7 +94,10 @@ def _read_override(project_root: Path, name: str) -> AgentSpec | None:
     p = _project_override_path(project_root, name)
     if not p.exists():
         return None
-    return parse_agent_md(p)
+    spec = parse_agent_md(p)
+    # Phase 4.4+ v1.14.0: InstructionsLoaded hook (fire-and-forget)
+    _fire_instructions_loaded(name, str(p), "project")
+    return spec
 
 
 def _parse_text(text: str, *, source: str) -> "AgentSpec":
