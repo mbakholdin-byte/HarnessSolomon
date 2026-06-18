@@ -12,8 +12,10 @@ from harness.hooks.builtin import (
     BUILTIN_HOOKS,
     autosave_hook,
     block_dangerous_hook,
+    complexity_check_hook,
     confirm_dangerous_hook,
     inject_context_hook,
+    license_check_hook,
     log_hook,
     notify_terminal_hook,
     validate_hook,
@@ -21,18 +23,22 @@ from harness.hooks.builtin import (
 
 
 class TestBuiltinRegistry:
-    """BUILTIN_HOOKS dict has all 7 hooks (Phase 4.0 = 5, Phase 4.3 = +2)."""
+    """BUILTIN_HOOKS dict: 7 core hooks (Phase 4.0 + 4.3) + Phase 4.10 advisory hooks."""
+
+    # Phase 4.0 + 4.3 core set (must always be present).
+    _CORE_HOOKS = {
+        "log",
+        "validate",
+        "block_dangerous",
+        "inject_context",
+        "autosave",
+        "confirm_dangerous",
+        "notify_terminal",
+    }
 
     def test_all_7_present(self) -> None:
-        assert set(BUILTIN_HOOKS) == {
-            "log",
-            "validate",
-            "block_dangerous",
-            "inject_context",
-            "autosave",
-            "confirm_dangerous",
-            "notify_terminal",
-        }
+        # The original 7 must remain present (superset check).
+        assert self._CORE_HOOKS.issubset(set(BUILTIN_HOOKS))
 
     def test_phase43_hooks_registered(self) -> None:
         assert "confirm_dangerous" in BUILTIN_HOOKS
