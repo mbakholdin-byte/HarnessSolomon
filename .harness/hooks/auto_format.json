@@ -1,0 +1,10 @@
+{
+  "hook_id": "user.subprocess.auto_format",
+  "event": "PostToolUse",
+  "transport": "subprocess",
+  "matcher": "tool_name=write_file,tool_name=edit_file",
+  "script_path": "harness/hooks/patterns/auto_format.py",
+  "timeout_ms": 5000,
+  "enabled": true,
+  "priority": 100
+}

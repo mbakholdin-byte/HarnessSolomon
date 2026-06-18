@@ -1247,6 +1247,50 @@ class Settings(BaseSettings):
     # Phase 4.3: 2 new builtin hooks for Elicitation + Notification.
     hooks_builtin_confirm_dangerous_enabled: bool = Field(default=True, description="Phase 4.3: enable builtin ConfirmDangerousHook (Elicitation default answer injector).")
     hooks_builtin_notify_terminal_enabled: bool = Field(default=True, description="Phase 4.3: enable builtin NotifyTerminalHook (Notification fanout to stderr).")
+    # Phase 4.10 Task B: 3 security hooks (secret_detect / sql_injection_guard /
+    # unsafe_import_block). Each has its own enable toggle; unsafe_import_block
+    # additionally exposes its denylist as a comma-separated string so operators
+    # can extend it without code changes.
+    hooks_builtin_secret_detect_enabled: bool = Field(
+        default=True,
+        description=(
+            "Phase 4.10: enable builtin SecretDetectHook (PreToolUse regex "
+            "scan for AWS / GitHub / OpenAI keys, PEM, JWT, password literals). "
+            "Fail-closed: a match always blocks. Default True."
+        ),
+    )
+    hooks_builtin_sql_injection_guard_enabled: bool = Field(
+        default=True,
+        description=(
+            "Phase 4.10: enable builtin SqlInjectionGuardHook (PreToolUse "
+            "regex scan for string-interpolated SQL). Fail-closed. Default True."
+        ),
+    )
+    hooks_builtin_unsafe_import_block_enabled: bool = Field(
+        default=True,
+        description=(
+            "Phase 4.10: enable builtin UnsafeImportBlockHook (PreToolUse "
+            "regex scan for dangerous imports in *.py content). Fail-closed. "
+            "Default True."
+        ),
+    )
+    hooks_unsafe_imports_blocklist: str = Field(
+        default=(
+            "os.system,subprocess,eval,exec,pickle,"
+            "yaml.load,requests.post"
+        ),
+        description=(
+            "Phase 4.10: comma-separated list of dangerous module/method "
+            "names that unsafe_import_block will reject when seen in *.py "
+            "content. Defaults match the OWASP Python security cheat sheet: "
+            "``os.system`` (shell escape), ``subprocess`` (when paired with "
+            "``shell=True``), ``eval``/``exec`` (arbitrary code), ``pickle`` "
+            "(deserialisation RCE), ``yaml.load`` (without SafeLoader), "
+            "``requests.post`` (when missing a timeout). Operators can extend "
+            "or narrow via the ``HARNESS_HOOKS_UNSAFE_IMPORTS_BLOCKLIST`` env "
+            "var. Empty string disables ALL checks (use with care)."
+        ),
+    )
     # Phase 4.3+ v1.11.0: webhook + desktop channels for Notification.
     hooks_notify_webhook_url: str = Field(default="", description="Phase 4.3+: URL to POST Notification events to (empty = webhook channel disabled).")
     hooks_notify_webhook_secret: str = Field(default="", description="Phase 4.3+: HMAC-SHA256 secret for X-Harness-Signature header (empty = no signature).")

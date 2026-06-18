@@ -1,0 +1,9 @@
+{
+  "hook_id": "user.builtin.license_check",
+  "event": "PreToolUse",
+  "transport": "builtin",
+  "matcher": "tool_name=write_file,tool_name=edit_file",
+  "timeout_ms": 1000,
+  "enabled": true,
+  "priority": 100
+}
