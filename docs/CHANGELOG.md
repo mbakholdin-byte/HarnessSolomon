@@ -1,5 +1,84 @@
 # Changelog — Solomon Harness
 
+## Phase 4.11 v1.21.0 — SSE Elicitation transport + admin observability endpoints + 2 new scopes (2026-06-18) — Phase 4 = 9/12 step
+
+**Phase 4.11 v1.21.0 — 3 new files / 4 modified files / +34 tests / 2437 total tests / 0 new required deps / +6 Settings fields**
+
+Phase 4.10 закрыл hook pattern library. v1.21.0 = **3rd Elicitation transport (SSE)** + **admin observability JSON endpoints с RBAC** + **scope expansion**.
+
+### Что закрыто
+
+**SSE Elicitation transport (`harness/server/routes/elicitation_sse.py` NEW, 12 tests)**:
+- `GET /api/v1/elicitation/sse?session=S` — `StreamingResponse` (text/event-stream).
+- 3 event types: `new_question`, `answered`, `timeout` + heartbeat comment каждые 15s.
+- Client disconnect detection (`await request.is_disconnected()`).
+- Session filter изолирует questions между streams.
+- Seen-questions dedup (one new → только 1 event, не дублируется в polling).
+- Max session age auto-disconnect.
+- **3 Settings:** `hooks_elicitation_sse_enabled` (default False, opt-in), `hooks_elicitation_sse_heartbeat_s=15`, `hooks_elicitation_sse_max_session_age_s=3600`.
+- **RBAC:** `Scope.ELICITATION_READ`.
+
+**Admin observability endpoints (`harness/server/routes/observability_admin.py` NEW, 12 tests)**:
+- 3 endpoints: `/api/v1/observability/{metrics, health/deep, audit/recent}`.
+- JSON snapshots (не Prometheus text format).
+- Reuse Phase 4.9 (`PrometheusMetrics.snapshot()`, `HealthChecker.deep()`) + Phase 4.0 (`HookAuditSink`).
+- **PII safety:** `_strip_pii()` удаляет `question_preview`, `arguments_preview` и т.д. из ответов (operator видит metric values, НЕ user data).
+- **3 Settings:** `hooks_observability_admin_enabled=True`, `hooks_observability_admin_audit_max_limit=500`, `hooks_observability_admin_metrics_filter=""` (optional regex).
+- **RBAC:** `Scope.OBSERVABILITY_READ`.
+
+**Scope expansion (`harness/server/auth/scopes.py` MODIFIED, 10 tests)**:
+- 2 new scopes в `Scope` enum: `OBSERVABILITY_READ="observability.read"`, `ELICITATION_READ="elicitation.read"`.
+- `SCOPE_DESCRIPTIONS` обновлён.
+- `ALL_SCOPES`: 7 → 9 (auto-derived from enum).
+- Existing `test_all_seven_scopes_listed` → `test_all_scopes_listed` (updated for new count).
+
+### Tests
+
+**+34 net new tests, 2437 total (was 2405), 2 skipped.**
+
+Breakdown:
+- `tests/test_elicitation_sse.py` — 12 tests
+- `tests/test_observability_admin.py` — 12 tests
+- `tests/test_scope_expansion_phase_4_11.py` — 10 tests
+
+Full suite: 2435 passed + 2 skipped + 2 pre-existing flakes (НЕ регрессии).
+
+### Architecture notes
+
+- **Why SSE как 3rd transport (НЕ replacement WS):** WebSocket — primary, full-duplex. SSE — server-push only через HTTP/1.1 streaming. Корпоративные networks с proxy/firewall часто блокируют WS upgrade, но пропускают HTTP streaming. SSE = fallback без дополнительных ports/protocols.
+- **Why PII strip в admin endpoints:** Observability metrics могут содержать PII через labels (user_id, session_id, arguments_preview). Operator dashboards показывают aggregates, НЕ user-specific data. `_strip_pii()` regex на known PII fields before JSON serialization.
+- **Why 2 new scopes (НЕ reuse existing):** Granularity. `OBSERVATION_READ` (admin tools) ≠ `MEMORY_READ` (user-facing). `ELICITATION_READ` (SSE subscribe) ≠ `AGENTS_READ` (job queue). Each scope = minimal privilege для use case.
+- **Why `seen_questions` dedup в SSE:** `broker.pending()` polling 250ms может вернуть same question multiple times. Set tracks seen IDs per stream, emit только new ones.
+- **Why heartbeat comment (`: keep-alive`):** Reverse proxies (nginx) default timeout 60s. SSE connection silently dies without traffic. Heartbeat каждые 15s keeps connection alive + operator knows it's healthy.
+- **Why `test_all_scopes_listed` rename (НЕ duplicate):** Scope count changed (7→9). Existing test was hardcoded to "seven" — обновляем в single test вместо adding new test.
+
+### Trust boundary (preserved)
+
+AST-enforced на новых routes:
+- 0 violations
+- `elicitation_sse.py` — stdlib + FastAPI + `harness.elicitation` (broker) only. NO `harness.agents`/`harness.server` imports.
+- `observability_admin.py` — stdlib + FastAPI + `harness.observability` only. NO `harness.agents` imports.
+- `scopes.py` — stdlib + enum only. NO production imports.
+
+### Files
+
+NEW (~450 LoC production + ~900 LoC tests):
+- `harness/server/routes/elicitation_sse.py` (~150 LoC)
+- `harness/server/routes/observability_admin.py` (~180 LoC)
+- `tests/test_elicitation_sse.py` (~280 LoC)
+- `tests/test_observability_admin.py` (~300 LoC)
+- `tests/test_scope_expansion_phase_4_11.py` (~220 LoC)
+
+MODIFIED:
+- `harness/server/auth/scopes.py` — 2 new scopes + descriptions
+- `harness/config.py` — 6 new Settings fields
+- `harness/server/app.py` — register 2 new routes (SSE + admin)
+- `tests/test_capabilities.py` — `test_all_seven_scopes_listed` → `test_all_scopes_listed` (count update)
+- `harness/__init__.py` (1.20.0 → 1.21.0)
+- `harness/server/app.py` (FastAPI version 1.20.0 → 1.21.0)
+- `pyproject.toml` (version 1.20.0 → 1.21.0)
+- `docs/CHANGELOG.md` (+v1.21.0 section)
+
 ## Phase 4.10 v1.20.0 — Hook pattern library: 8 production-ready patterns (2026-06-18) — Phase 4 = 8/12 step
 
 **Phase 4.10 v1.20.0 — 8 new JSON specs / 7 new pattern files / 3 new test files / +59 tests / 2405 total tests / 0 new required deps / +4 Settings fields**
