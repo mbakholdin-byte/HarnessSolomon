@@ -1,0 +1,9 @@
+{
+  "hook_id": "user.builtin.unsafe_import_block",
+  "event": "PreToolUse",
+  "transport": "builtin",
+  "matcher": "tool_name=write_file,tool_name=edit_file",
+  "enabled": true,
+  "priority": 90,
+  "description": "Phase 4.10 Task B: PreToolUse regex scan for dangerous imports / usages in *.py content. Default denylist (configurable via Settings.hooks_unsafe_imports_blocklist): os.system, subprocess+shell=True, eval, exec, pickle.load(s), yaml.load without SafeLoader, requests.post without timeout. Fail-closed. Originally specified with match_glob='*.py'; the Python implementation inspects the content key (write_file / edit_file convention) so the matcher restricts at the registry layer to those two tools."
+}

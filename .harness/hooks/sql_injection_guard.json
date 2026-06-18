@@ -1,0 +1,9 @@
+{
+  "hook_id": "user.builtin.sql_injection_guard",
+  "event": "PreToolUse",
+  "transport": "builtin",
+  "matcher": "tool_name=bash,tool_name=write_file,tool_name=edit_file",
+  "enabled": true,
+  "priority": 90,
+  "description": "Phase 4.10 Task B: PreToolUse regex scan for string-built SQL queries (f-strings, concatenation, %-formatting, .format(), concatenated DELETE). Catches the four classic Python SQL-injection anti-patterns. Parametrised queries (cursor.execute('SELECT ... WHERE id=?', (id,))) are allowed because they contain no interpolation marker. Originally specified with match_glob='*.sh'; here expressed as the matcher grammar the spec loader actually recognises (bash + write/edit_file)."
+}
