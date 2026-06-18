@@ -470,8 +470,8 @@ class TestBuiltinHooksRegistry:
         assert BUILTIN_HOOKS["notify_terminal"] is notify_terminal_hook
 
     def test_total_builtin_count(self) -> None:
-        # Phase 4.0 = 5; Phase 4.3 = 7.
-        assert len(BUILTIN_HOOKS) == 7
+        # Phase 4.0 = 5; Phase 4.3 = 7; Phase 4.10 = 12 (added 5 security/simple patterns).
+        assert len(BUILTIN_HOOKS) == 12
 
 
 # === 8. Observability emit helpers ===
