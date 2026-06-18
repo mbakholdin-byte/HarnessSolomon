@@ -1,0 +1,9 @@
+{
+  "hook_id": "user.builtin.test_required",
+  "event": "PreToolUse",
+  "transport": "builtin",
+  "enabled": true,
+  "priority": 100,
+  "matcher": "tool_name=bash",
+  "comment": "Blocks 'git commit' if staged *.py files exist and 'pytest' is not in the command. Trust boundary: stdlib + subprocess + re only."
+}

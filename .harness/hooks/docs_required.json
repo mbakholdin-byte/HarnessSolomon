@@ -1,0 +1,9 @@
+{
+  "hook_id": "user.builtin.docs_required",
+  "event": "PostToolUse",
+  "transport": "builtin",
+  "enabled": true,
+  "priority": 100,
+  "matcher": "payload.path=*.py",
+  "comment": "Logs a warning (no block) for public functions/classes in *.py files that are missing docstrings. Trust boundary: stdlib + ast only."
+}
