@@ -93,8 +93,13 @@ class PrometheusMetrics:
         for name in (
             "http_requests_total", "http_request_duration_seconds",
             "llm_calls_total", "llm_latency_seconds", "llm_cost_total_usd",
+            # Phase 4.9 v1.19.0: per-model cost + token breakdown.
+            "llm_cost_total_usd_by_model",
+            "llm_tokens_total",
             "hook_dispatches_total", "hook_duration_seconds",
             "tool_calls_total", "tool_duration_seconds",
+            # Phase 4.9 v1.19.0: per-tool latency histogram.
+            "tool_duration_seconds_by_tool",
             "compaction_total", "compaction_duration_seconds",
             "merge_queue_events_total", "queue_depth",
             "outbound_deliveries_total",
@@ -148,6 +153,32 @@ class PrometheusMetrics:
             ["model", "tier"],
             registry=self._registry,
         )
+        # Phase 4.9 v1.19.0: per-model cost breakdown. While
+        # ``llm_cost_total_usd`` above carries (model, tier) labels
+        # as the legacy aggregate, this counter is the canonical
+        # metric for "cost per model_id" dashboards. ``model_id`` is
+        # the catalog id (e.g. "Qwen/Qwen3-8B", "MiniMax-M2.7") —
+        # matching the id emitted by the router. Using a separate
+        # metric avoids mixing the legacy ``(model, tier)`` label
+        # cardinality with the per-model roll-up and lets operators
+        # delete the old one without breaking dashboards.
+        self.llm_cost_total_usd_by_model = Counter(
+            f"{n}_llm_cost_total_usd_by_model",
+            "Cumulative LLM cost in USD, labeled by model_id",
+            ["model_id"],
+            registry=self._registry,
+        )
+        # Phase 4.9 v1.19.0: per-model token breakdown. ``type``
+        # distinguishes input (prompt) vs output (completion) tokens
+        # so dashboards can split "expensive-in" models (huge system
+        # prompts) from "expensive-out" models (chatty completions).
+        self.llm_tokens_total = Counter(
+            f"{n}_llm_tokens_total",
+            "Cumulative LLM tokens, labeled by model_id and type "
+            "(input/output)",
+            ["model_id", "type"],
+            registry=self._registry,
+        )
         # Hooks
         self.hook_dispatches_total = Counter(
             f"{n}_hook_dispatches_total",
@@ -174,6 +205,23 @@ class PrometheusMetrics:
             "Tool call latency",
             ["tool_name"],
             buckets=DEFAULT_BUCKETS,
+            registry=self._registry,
+        )
+        # Phase 4.9 v1.19.0: per-tool latency histogram (labelled
+        # breakdown of tool_duration_seconds). Enables p95/p99 analysis
+        # per tool via histogram_quantile(0.95,
+        # sum(rate(tool_duration_seconds_by_tool_bucket[5m])) by (le,
+        # tool_name)). Buckets intentionally finer at the low end
+        # (1ms/5ms/10ms) to discriminate between fast in-process tools
+        # (read_file, scratchpad_*) and slower ones (bash, grep).
+        self.tool_duration_seconds_by_tool = Histogram(
+            f"{n}_tool_duration_seconds_by_tool",
+            "Tool execution duration in seconds, labeled by tool name",
+            ["tool_name"],
+            buckets=(
+                0.001, 0.005, 0.01, 0.025, 0.05, 0.1,
+                0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
+            ),
             registry=self._registry,
         )
         # Compaction

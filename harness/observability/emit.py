@@ -274,34 +274,77 @@ def emit_llm_call(
     *,
     error: str = "",
     request_id: str = "",
+    # Phase 4.9 v1.19.0: per-model cost + token breakdown. When the
+    # caller supplies ``model_id`` (the catalog id, e.g.
+    # "MiniMax-M2.7") we emit two additional Counters in parallel
+    # with the legacy aggregate:
+    #   - ``llm_cost_total_usd_by_model{model_id=...}``
+    #   - ``llm_tokens_total{model_id=..., type="input|output"}``
+    # ``cost_usd_override`` lets the router pass its pre-computed
+    # cost (it already knows litellm's response cost); falls back to
+    # the local pricing table when omitted.
+    model_id: str = "",
+    cost_usd_override: float | None = None,
 ) -> float:
     """Emit an LLM call log + metrics. Step 6.3 wiring.
+
+    Phase 4.9 v1.19.0: when ``model_id`` is non-empty, additionally
+    emits the per-model breakdown counters
+    (``llm_cost_total_usd_by_model`` and ``llm_tokens_total``). The
+    legacy aggregate counters (``llm_calls_total``, ``llm_cost_total_usd``,
+    ``llm_latency_seconds``) are always emitted for backwards
+    compatibility with existing dashboards.
 
     Returns the computed cost_usd (0.0 if cost tracking is disabled).
     """
     obs = get_observability()
     if not obs.settings.observability_log_llm_calls:
         return 0.0
-    cost_usd = (
-        compute_cost(
-            model,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            costs=(
-                parse_cost_overrides(obs.settings.observability_cost_overrides)
-                if obs.settings.observability_cost_overrides
-                else None
-            ),
+    if cost_usd_override is not None:
+        cost_usd = float(cost_usd_override)
+    else:
+        cost_usd = (
+            compute_cost(
+                model,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                costs=(
+                    parse_cost_overrides(obs.settings.observability_cost_overrides)
+                    if obs.settings.observability_cost_overrides
+                    else None
+                ),
+            )
+            if obs.settings.observability_cost_enabled
+            else 0.0
         )
-        if obs.settings.observability_cost_enabled
-        else 0.0
-    )
     labels = {"model": model, "tier": tier, "status": status}
     obs.metric_inc("llm_calls_total", labels)
     obs.metric_observe("llm_latency_seconds", duration_s, {"model": model, "tier": tier})
     if cost_usd > 0.0:
         obs.metric_add("llm_cost_total_usd", cost_usd, {"model": model, "tier": tier})
     obs.cost.record_call(model, prompt_tokens, completion_tokens)
+    # Phase 4.9 v1.19.0: per-model breakdown. Emitted alongside the
+    # legacy counters so old dashboards keep working; new dashboards
+    # should switch to these labelled metrics. We swallow all errors
+    # here because the breakdown is purely informational — the
+    # observability path must never break the call path.
+    if model_id:
+        try:
+            obs.metrics.llm_cost_total_usd_by_model.labels(
+                model_id=model_id
+            ).inc(cost_usd)
+            obs.metrics.llm_tokens_total.labels(
+                model_id=model_id, type="input"
+            ).inc(int(prompt_tokens))
+            obs.metrics.llm_tokens_total.labels(
+                model_id=model_id, type="output"
+            ).inc(int(completion_tokens))
+        except Exception as exc:  # noqa: BLE001 — fail-open
+            _log.debug(
+                "emit_llm_call breakdown failed for %s: %s",
+                model_id,
+                exc,
+            )
     obs.emit(
         LogEvent(
             event="llm_call",
@@ -313,6 +356,10 @@ def emit_llm_call(
                 "cost_usd": cost_usd,
                 "status": status,
                 "error": error,
+                # Include the breakdown key in the structured log so
+                # downstream JSONL consumers can correlate per-model
+                # series without parsing Prometheus labels.
+                "model_id": model_id or model,
             },
             request_id=request_id,
             latency_ms=round(duration_s * 1000, 3),
@@ -330,12 +377,23 @@ def emit_tool_call(
     error: str = "",
     request_id: str = "",
 ) -> None:
-    """Emit a tool call log + metrics. Step 6.4 wiring."""
+    """Emit a tool call log + metrics. Step 6.4 wiring.
+
+    Phase 4.9 v1.19.0: also observes the new
+    ``tool_duration_seconds_by_tool`` histogram so dashboards can
+    compute p95/p99 per tool. The legacy aggregate
+    ``tool_duration_seconds`` histogram is still emitted for backward
+    compatibility with existing alerts/dashboards.
+    """
     obs = get_observability()
     if not obs.settings.observability_log_tool_calls:
         return
-    obs.metric_inc("tool_calls_total", {"tool_name": tool_name, "status": status})
+    labels = {"tool_name": tool_name, "status": status}
+    obs.metric_inc("tool_calls_total", labels)
     obs.metric_observe("tool_duration_seconds", duration_s, {"tool_name": tool_name})
+    # Phase 4.9 v1.19.0: per-tool latency histogram. Same fail-open
+    # behaviour as metric_observe (swallowed by ObservabilityHandle).
+    obs.metric_observe("tool_duration_seconds_by_tool", duration_s, {"tool_name": tool_name})
     obs.emit(
         LogEvent(
             event="tool_call",
