@@ -45,6 +45,14 @@ class Scope(str, Enum):
     # Phase 3 v1.4.0: write session control operations (manual /compact)
     SESSIONS_WRITE = "sessions.write"
 
+    # Phase 4.11 v1.21.0: observability admin endpoints
+    # (metrics / health / audit — read-only introspection of server state).
+    OBSERVABILITY_READ = "observability.read"
+
+    # Phase 4.11 v1.21.0: SSE elicitation transport
+    # (subscribe to Elicitation questions streamed over Server-Sent Events).
+    ELICITATION_READ = "elicitation.read"
+
 
 ALL_SCOPES: frozenset[Scope] = frozenset(Scope)
 
@@ -57,6 +65,8 @@ SCOPE_DESCRIPTIONS: dict[Scope, str] = {
     Scope.MEMORY_WRITE: "Dual-write notes to the 4-layer memory system (POST /api/v1/memory/notes)",
     Scope.SESSIONS_READ: "Read session metadata (GET /api/v1/sessions)",
     Scope.SESSIONS_WRITE: "Force-compact a session's context (POST /api/v1/sessions/{id}/compact, Phase 3 v1.4.0)",
+    Scope.OBSERVABILITY_READ: "Read admin observability endpoints (metrics/health/audit, Phase 4.11 v1.21.0)",
+    Scope.ELICITATION_READ: "Subscribe to Elicitation questions via SSE transport (Phase 4.11 v1.21.0)",
 }
 
 
