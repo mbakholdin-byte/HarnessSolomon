@@ -161,6 +161,12 @@ class LLMRouter:
                 duration_s=duration,
                 status=status,
                 error=error_msg,
+                # Phase 4.9 v1.19.0: emit the per-model breakdown so
+                # error paths also surface in dashboards (a model
+                # that only errors will show tokens=0 but a non-zero
+                # call count, which is the signal operators want).
+                model_id=model,
+                cost_usd_override=0.0,
             )
             raise
         result = self._normalize_completion(model, response)
@@ -174,6 +180,13 @@ class LLMRouter:
                 completion_tokens=int(usage.get("completion_tokens", 0) or 0),
                 duration_s=duration,
                 status=status,
+                # Phase 4.9 v1.19.0: pass the cost already computed by
+                # ``_normalize_completion`` (which uses the catalog
+                # pricing table) so the breakdown counters see the
+                # same value as ``CompletionResult.cost``. ``model_id``
+                # is the catalog id (same as ``model`` here).
+                model_id=model,
+                cost_usd_override=result.cost,
             )
         except Exception:  # noqa: BLE001 — observability must never break completion
             logger.debug("emit_llm_call failed", exc_info=True)
