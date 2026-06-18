@@ -421,6 +421,28 @@ async def lifespan(app: FastAPI):
     print(f"[harness] db_path: {settings.db_path}")
     print(f"[harness] project_root: {settings.project_root}")
 
+    # Phase 4.11 Task B v1.21.0: wire the HookAuditSink singleton so
+    # ``GET /api/v1/observability/audit/recent`` can read recent entries
+    # without re-instantiating the sink per request. The sink is always
+    # constructed (cheap: it only opens the file on write); when
+    # ``hooks_audit_log=False`` the sink simply has no entries to tail.
+    # Lives under ``<session_dir>/audit/`` so the audit NDJSON files are
+    # co-located with the per-session JSONL mirror.
+    try:
+        from harness.hooks.audit import HookAuditSink
+        audit_sink = HookAuditSink(settings.session_dir / "audit")
+        app.state.audit_sink = audit_sink
+        print(
+            f"[harness] audit_sink: {settings.session_dir / 'audit'} "
+            f"(hooks_audit_log={settings.hooks_audit_log})"
+        )
+    except Exception as exc:  # noqa: BLE001 — best-effort
+        print(
+            f"[harness] audit_sink: disabled (init failed: "
+            f"{type(exc).__name__}: {exc})"
+        )
+        app.state.audit_sink = None
+
     # Phase 4.2: hot-reload watchers for .harness/agents/*.md,
     # .harness/hooks/*.json, and (Phase 4.2+) .harness/privacy/*.json.
     # Best-effort — if any fails, log and continue (the app works
@@ -552,7 +574,7 @@ def create_app() -> FastAPI:
     """Build FastAPI app with middleware and routers."""
     app = FastAPI(
         title="Solomon Harness",
-        version="1.20.0",
+        version="1.21.0",
         description=(
             "Open-source agentic shell — Web MVP (Phase 0) + "
             "sub-agent system (Phase 2.0+2.1) + GitHub PR integration (Phase 2.2) "
@@ -654,6 +676,38 @@ def create_app() -> FastAPI:
         f"(timeout={settings.hooks_elicitation_longpoll_timeout_s}s, "
         f"interval={settings.hooks_elicitation_longpoll_interval_s}s)"
     )
+    # Phase 4.11 v1.21.0: Server-Sent Events transport for Elicitation.
+    # Mounted unconditionally (the router enforces the
+    # ``hooks_elicitation_sse_enabled`` flag per-request, returning 403
+    # when disabled) so operators can flip the flag at runtime without
+    # restarting the server. The default is False — SSE is opt-in
+    # because each subscriber holds a long-lived worker. The route also
+    # requires the ``elicitation.read`` scope (via ``require_scope``),
+    # which is distinct from the WS / long-poll transports (those have
+    # no scope check — SSE is the first transport to enforce RBAC).
+    from harness.server.routes.elicitation_sse import (
+        router as elicitation_sse_router,
+    )
+    app.state.hooks_elicitation_sse_enabled = (
+        settings.hooks_elicitation_sse_enabled
+    )
+    app.state.hooks_elicitation_sse_heartbeat_s = (
+        settings.hooks_elicitation_sse_heartbeat_s
+    )
+    app.state.hooks_elicitation_sse_max_session_age_s = (
+        settings.hooks_elicitation_sse_max_session_age_s
+    )
+    app.include_router(
+        elicitation_sse_router,
+        prefix="/api/v1/elicitation",
+        tags=["elicitation-sse"],
+    )
+    print(
+        f"[harness] elicitation_sse: "
+        f"{'enabled' if settings.hooks_elicitation_sse_enabled else 'disabled'} "
+        f"(heartbeat={settings.hooks_elicitation_sse_heartbeat_s}s, "
+        f"max_age={settings.hooks_elicitation_sse_max_session_age_s}s)"
+    )
     # Phase 4.8 v1.18.0: Elicitation decision history endpoint.
     # Read-only view over the shared ``agent-jobs.db`` SQLite file. No
     # enable flag — the table is created lazily by
@@ -670,6 +724,25 @@ def create_app() -> FastAPI:
         prefix="/api/v1/elicitation",
         tags=["elicitation-history"],
     )
+    # Phase 4.11 Task B v1.21.0: admin observability JSON endpoints
+    # (metrics snapshot / deep health / recent audit tail). Mounted only
+    # when ``hooks_observability_admin_enabled`` is True — operators who
+    # want to reduce the admin surface flip the flag to False and the
+    # endpoints return 404 (not 403) so dashboards fail fast. All three
+    # endpoints are scope-gated via ``Scope.OBSERVABILITY_READ`` inside
+    # the router itself, regardless of this flag.
+    if getattr(settings, "hooks_observability_admin_enabled", True):
+        from harness.server.routes.observability_admin import (
+            router as observability_admin_router,
+        )
+        app.include_router(
+            observability_admin_router,
+            prefix="/api/v1/observability",
+            tags=["observability-admin"],
+        )
+        print("[harness] observability_admin: enabled (scope=observability.read)")
+    else:
+        print("[harness] observability_admin: disabled by setting")
     # Phase 2.2: merge-queue HTTP API. Phase 1.6: routes now require
     # ``agents.read`` via ``Depends(require_scope(Scope.AGENTS_READ))``.
     app.include_router(agents_jobs_router, prefix="/api/v1/agents", tags=["agents"])

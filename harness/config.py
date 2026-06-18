@@ -1442,6 +1442,88 @@ class Settings(BaseSettings):
             "endpoint. Lower = snappier response at higher CPU cost."
         ),
     )
+    # Phase 4.11 v1.21.0: Server-Sent Events transport for Elicitation.
+    # The SSE endpoint holds a long-lived HTTP stream that pushes
+    # ``new_question`` / ``answered`` / ``timeout`` events to subscribers.
+    # Default False — operators opt in because SSE consumes a long-lived
+    # worker per client (unlike WS, which multiplexes via the accept loop).
+    # When False, ``GET /api/v1/elicitation/sse`` returns 403.
+    hooks_elicitation_sse_enabled: bool = Field(
+        default=False,
+        description=(
+            "Phase 4.11 v1.21.0: enable the Server-Sent Events transport "
+            "for Elicitation (``GET /api/v1/elicitation/sse``). Default "
+            "False — SSE is opt-in because each subscriber holds a "
+            "long-lived worker. When False, the endpoint returns 403."
+        ),
+    )
+    hooks_elicitation_sse_heartbeat_s: float = Field(
+        default=15.0,
+        description=(
+            "Phase 4.11 v1.21.0: interval (seconds) between SSE "
+            "``: keep-alive`` comments. Proxies (nginx, Cloudflare) "
+            "typically close idle connections at 60s — 15s keeps the "
+            "stream alive with comfortable margin. Set to 0 to disable "
+            "heartbeats (not recommended behind a reverse proxy)."
+        ),
+    )
+    hooks_elicitation_sse_max_session_age_s: float = Field(
+        default=3600.0,
+        description=(
+            "Phase 4.11 v1.21.0: maximum wall-clock seconds a single SSE "
+            "subscription is allowed to run before the server gracefully "
+            "closes the stream. Prevents leaky long-lived connections from "
+            "accumulating when a client disconnects without the server "
+            "noticing (e.g. laptop lid closed, NAT timeout without TCP "
+            "RST). Default 1 hour. Clients may reconnect — the broker "
+            "is stateless across reconnects (deduplication is per-stream)."
+        ),
+    )
+
+    # === Phase 4.11 Task B: Admin observability endpoints (JSON, RBAC) ===
+    # Gate the 3 /api/v1/observability/* admin endpoints (metrics / health
+    # deep / audit recent) behind an explicit enable flag + scope check.
+    # Operators who want to disable the admin surface entirely (e.g. to
+    # reduce attack surface on a hardened deployment) flip the master
+    # switch to False — the endpoints then return 404 (not 403) so probes
+    # and dashboards fail fast rather than retrying against a forbidden
+    # resource.
+    hooks_observability_admin_enabled: bool = Field(
+        default=True,
+        description=(
+            "Phase 4.11 Task B v1.21.0: master switch for the admin "
+            "observability JSON endpoints "
+            "(``/api/v1/observability/{metrics,health/deep,audit/recent}``). "
+            "When False, the endpoints are not mounted (404). Default "
+            "True. The endpoints are always scope-gated via "
+            "``Scope.OBSERVABILITY_READ`` regardless of this flag."
+        ),
+    )
+    hooks_observability_admin_audit_max_limit: int = Field(
+        default=500,
+        ge=1,
+        le=10000,
+        description=(
+            "Phase 4.11 Task B v1.21.0: hard cap on the ``limit`` query "
+            "parameter for ``GET /api/v1/observability/audit/recent``. "
+            "Requests with ``limit`` above this value are rejected with "
+            "HTTP 422. Default 500 — large enough for forensic review "
+            "of recent hook activity, small enough to bound response "
+            "size on a busy deployment."
+        ),
+    )
+    hooks_observability_admin_metrics_filter: str = Field(
+        default="",
+        description=(
+            "Phase 4.11 Task B v1.21.0: optional regex filter applied "
+            "to the metric names returned by "
+            "``GET /api/v1/observability/metrics``. When non-empty, "
+            "only metrics whose name matches the pattern are included "
+            "in the JSON snapshot. Default empty (return all metrics). "
+            "The same filter can be overridden per-request via the "
+            "``?filter=`` query parameter."
+        ),
+    )
 
     # === Phase 4.1: Observability — master switches ===
     observability_enabled: bool = Field(
