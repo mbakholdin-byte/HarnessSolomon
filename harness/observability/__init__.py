@@ -35,7 +35,13 @@ from harness.observability.emit import (
     get_observability,
     reset_observability,
 )
-from harness.observability.health import HealthChecker, HealthReport, HealthStatus
+from harness.observability.health import (
+    HealthChecker,
+    HealthReport,
+    HealthStatus,
+    ProbeResult,
+    ProbeStatus,
+)
 from harness.observability.logger import JsonlLogger
 from harness.observability.metrics import PrometheusMetrics
 from harness.observability.tracer import NoOpSpan, NoOpTracer, OTelTracer
@@ -51,10 +57,12 @@ __all__ = [
     "OTelTracer",
     "NoOpTracer",
     "NoOpSpan",
-    # Health
+    # Health (Phase 4.1 + Phase 4.9 Task C deep probes)
     "HealthChecker",
     "HealthReport",
     "HealthStatus",
+    "ProbeResult",
+    "ProbeStatus",
     # Cost
     "CostTracker",
     "DEFAULT_COSTS",
