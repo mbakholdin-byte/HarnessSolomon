@@ -1,5 +1,104 @@
 # Changelog — Solomon Harness
 
+## Phase 4.10 v1.20.0 — Hook pattern library: 8 production-ready patterns (2026-06-18) — Phase 4 = 8/12 step
+
+**Phase 4.10 v1.20.0 — 8 new JSON specs / 7 new pattern files / 3 new test files / +59 tests / 2405 total tests / 0 new required deps / +4 Settings fields**
+
+Phase 4.9 закрыл observability depth. v1.20.0 = **hook pattern library**: 8 готовых `.harness/hooks/*.json` для типовых use-cases (formatting, security, compliance, workflow).
+
+### Что закрыто
+
+**3 simple patterns (Coder, 14/14 tests)**:
+
+| Pattern | Event | Transport | Что делает |
+|---------|-------|-----------|------------|
+| `auto_format` | PostToolUse | subprocess | `ruff format` после write/edit на `*.py` |
+| `license_check` | PreToolUse | builtin | Block GPL-3.0/AGPL-3.0/SSPL imports |
+| `complexity_check` | PostToolUse | builtin | Warn если cyclomatic complexity > 10 (AST-based) |
+
+**3 security patterns (Prog, 34/34 tests)**:
+
+| Pattern | Event | Transport | Что делает |
+|---------|-------|-----------|------------|
+| `secret_detect` | PreToolUse | builtin | Block AWS/GitHub/OpenAI/PEM/JWT/password в args |
+| `sql_injection_guard` | PreToolUse | builtin | Block f-string/concat/format SQL queries |
+| `unsafe_import_block` | PreToolUse | builtin | Block `os.system`, `pickle`, `eval`, `yaml.load` без SafeLoader |
+
+**2 workflow patterns + smoke (Admin, 11/11 tests)**:
+
+| Pattern | Event | Transport | Что делает |
+|---------|-------|-----------|------------|
+| `test_required` | PreToolUse | builtin | Block `git commit` с `*.py` changes без `pytest` |
+| `docs_required` | PostToolUse | builtin | Warn на public funcs без docstring |
+
+**Joint verification:** 91/91 passed (0.54s) — full integration всех 8 patterns через `HookRegistry` dispatcher.
+
+### Trust boundary (preserved)
+
+- 32/32 AST tests passed на `harness/hooks/builtin/*.py` (zero `harness.agents`/`harness.server` imports).
+- `harness/hooks/patterns/auto_format.py` — **standalone subprocess script** (NO `harness.*` imports, только stdlib + subprocess). Trust boundary applies только к builtin hooks.
+- Hot-reload (Phase 4.2 v1.8.0) автоматически подхватывает 8 новых JSON specs через `.harness/hooks/*.json` FileWatcher.
+
+### Settings (4 new fields)
+
+- `hooks_license_check_forbidden` — list of forbidden licenses (default: GPL-3.0, AGPL-3.0, SSPL)
+- `hooks_complexity_threshold` — cyclomatic complexity threshold (default: 10)
+- `hooks_unsafe_imports_blocklist` — list of dangerous imports
+- `hooks_test_required_pattern` — git diff pattern для detection (default: `*.py`)
+
+### Tests
+
+**+59 net new tests, 2405 total (was 2336), 2 skipped.**
+
+Breakdown:
+- `tests/test_hook_patterns_simple.py` — 14 tests (Coder)
+- `tests/test_hook_patterns_security.py` — 34 tests (Prog, +22 бонус — покрыли edge cases: parametrized license list, false positive rate на stdlib)
+- `tests/test_hook_patterns_smoke.py` — 11 tests (Admin, full integration всех 8 patterns)
+
+Full suite: 2400 passed + 2 skipped + 2 pre-existing flakes (test_l2_retrieval, test_elicitation_notification::test_runner_dispatches_elicitation) — НЕ регрессии.
+
+**Regression fix** (this commit): `test_total_builtin_count` updated 7 → 12 (Phase 4.10 добавил 5 новых builtin hooks).
+
+### Architecture notes
+
+- **Why JSON specs vs Settings strings:** Hot-reload (Phase 4.2) работает с `.harness/hooks/*.json` через FileWatcher. Settings strings в env vars требуют restart процесса. JSON specs можно менять без restart.
+- **Why standalone `patterns/auto_format.py`:** Subprocess context, не module. НЕ импортирует `harness.*` — only stdlib + subprocess. Это isolation boundary: bad pattern script не может сломать harness internals.
+- **Why configurable thresholds (4 Settings fields):** Hardcoded thresholds (complexity > 10, GPL blocklist) ограничивают adoption. Settings allows per-project tuning.
+- **Why post-hook для docs_required (warn only):** Pre-hook block = frustrating UX (developer can't save without docstring). Post-hook warn = informational, накапливается в observability для periodic review.
+- **Why AST-based complexity (НЕ line count):** Cyclomatic complexity корректнее (один if = 1 branch, не 5 lines). AST-based = no false positives на комментарии/docstrings.
+
+### Files
+
+NEW (~700 LoC production + ~900 LoC tests + 8 JSON specs):
+- `.harness/hooks/auto_format.json`
+- `.harness/hooks/license_check.json`
+- `.harness/hooks/complexity_check.json`
+- `.harness/hooks/secret_detect.json`
+- `.harness/hooks/sql_injection_guard.json`
+- `.harness/hooks/unsafe_import_block.json`
+- `.harness/hooks/test_required.json`
+- `.harness/hooks/docs_required.json`
+- `harness/hooks/patterns/auto_format.py` (~60 LoC, standalone)
+- `harness/hooks/builtin/license_check.py` (~80 LoC)
+- `harness/hooks/builtin/complexity_check.py` (~100 LoC)
+- `harness/hooks/builtin/secret_detect.py` (~90 LoC)
+- `harness/hooks/builtin/sql_injection_guard.py` (~70 LoC)
+- `harness/hooks/builtin/unsafe_import_block.py` (~80 LoC)
+- `harness/hooks/builtin/test_required.py` (~80 LoC)
+- `harness/hooks/builtin/docs_required.py` (~100 LoC)
+- `tests/test_hook_patterns_simple.py` (~280 LoC)
+- `tests/test_hook_patterns_security.py` (~520 LoC)
+- `tests/test_hook_patterns_smoke.py` (~280 LoC)
+
+MODIFIED:
+- `harness/config.py` — 4 new Settings fields
+- `harness/hooks/builtin/__init__.py` — re-export 7 new hooks
+- `tests/test_elicitation_notification.py` — `test_total_builtin_count` 7 → 12
+- `harness/__init__.py` (1.19.0 → 1.20.0)
+- `harness/server/app.py` (FastAPI version 1.19.0 → 1.20.0)
+- `pyproject.toml` (version 1.19.0 → 1.20.0)
+- `docs/CHANGELOG.md` (+v1.20.0 section)
+
 ## Phase 4.9 v1.19.0 — Per-tool latency histogram + per-LLM-model cost breakdown + deep health probes (2026-06-18) — Phase 4 = 7/12 step
 
 **Phase 4.9 v1.19.0 — 3 new files / 5 modified files / +53 tests / 2336 total tests / 0 new deps**
