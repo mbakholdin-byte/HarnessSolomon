@@ -1,5 +1,80 @@
 # Changelog — Solomon Harness
 
+## Phase 4.9 v1.19.0 — Per-tool latency histogram + per-LLM-model cost breakdown + deep health probes (2026-06-18) — Phase 4 = 7/12 step
+
+**Phase 4.9 v1.19.0 — 3 new files / 5 modified files / +53 tests / 2336 total tests / 0 new deps**
+
+Phase 4.8 закрыл defensive layer для hooks (rate limit + circuit breaker). v1.19.0 расширяет observability **по 3 dimension**: per-tool (latency), per-LLM-model (cost + tokens), per-subsystem (deep health).
+
+### Что закрыто
+
+**Per-tool latency histogram (`harness/observability/metrics.py` + `emit.py`)**:
+- New Histogram `tool_duration_seconds_by_tool{tool_name}` с 12 buckets (0.001s → 10.0s).
+- `metric_observe` helper в `emit.py` — inc в новый histogram через стандартный `labels(...).observe()`.
+- **Backward compat:** old `tool_duration_seconds` (без labels) оставлен для existing dashboards.
+- 24 tests passed (parametrize 12 tools × 2 scenarios = 24).
+
+**Per-LLM-model cost + token breakdown (`harness/observability/metrics.py` + `emit.py` + `harness/server/llm/router.py`)**:
+- 2 new Counters: `llm_cost_total_usd_by_model{model_id}` + `llm_tokens_total{model_id, type}` (type="input"|"output").
+- `emit_llm_call` расширен optional `model_id` + `cost_usd_override` kwargs (backward compat — existing callers без `model_id` продолжают работать).
+- 2 wire points в `LLMRouter` (error + success paths) передают `model_id` для breakdown.
+- **Backward compat:** old `llm_cost_total_usd` aggregate counter оставлен.
+- 11 tests passed.
+
+**Deep health probes (`harness/observability/health.py` + `__init__.py`)**:
+- `HealthChecker` расширен 9 optional kwargs (`db_path`, `qdrant_url`, `opensearch_url`, `job_store`, `merge_queue`, `elicitation_broker`, `notify_channels`, `rate_limiter`, `circuit_breaker`).
+- 8 probe methods (DB, Qdrant, OpenSearch, JobStore, MergeQueue, ElicitationBroker, NotifyChannels, RateLimiter). CircuitBreaker probe зарезервирован без реализации (kwarg принимается, probe нет).
+- `asyncio.gather` всех probes в parallel + `asyncio.wait_for(2.0)` per-probe timeout.
+- Status semantics: "ok" (all pass) | "degraded" (non-critical fail) | "down" (critical fail).
+- `ProbeResult` dataclass + `ProbeStatus` enum exported.
+- 18 tests passed (parametrize 8 probes × multiple scenarios).
+
+### Tests
+
+**+53 net new tests, 2336 total (was 2283), 2 skipped.**
+
+Breakdown:
+- `tests/test_tool_duration_by_tool.py` — 24 tests (12 tools × 2 scenarios parametrize)
+- `tests/test_llm_cost_by_model.py` — 11 tests (5 классов: emit, isolation, tokens, zero cost, snapshot)
+- `tests/test_health_deep_probes.py` — 18 tests (parametrize 8 probes × scenarios)
+
+Full suite: 2334 passed + 2 skipped + 2 pre-existing flakes (test_l2_retrieval test order dependency, test_elicitation_notification Settings mock race) — НЕ регрессии.
+
+### Architecture notes
+
+- **Why per-tool/per-model labels (НЕ multiple metrics):** Single metric с labels — Prometheus best practice. Multiple metrics → combinatorial explosion в cardinality. Per-label breakdown позволяет `histogram_quantile(0.95, {tool_name="read_file"})` без новых metrics.
+- **Why extended `emit_llm_call` signature (НЕ replacement):** Phase 4.1 wire 17 trigger points вызывают `emit_llm_call` без `model_id`. Replacement сломал бы все callsites. Extended kwargs (`model_id: str | None = None`) — backward compat.
+- **Why deep probes parallel + 2s timeout:** Sequential probes = sum latencies (8 × 2s = 16s max). Parallel = max(probe_latencies) (~2s). 2s timeout per-probe — `asyncio.wait_for` wraps each probe, slow subsystem не блокирует others.
+- **Why `ProbeResult` dataclass (НЕ tuple):** Type safety, IDE completion, JSON serialization в /health/deep endpoint. Tuple требовал бы `p[0]`, `p[1]`, `p[2]` — fragile.
+- **Why DI для health probes (НЕ global imports):** Trust boundary. `harness/observability/health.py` НЕ импортирует `harness.agents`/`harness.server`. Probes принимают injected deps через `__init__` kwargs — same pattern как PrivacyZoneFilter (Phase 4.1).
+- **Why CircuitBreaker probe reserved без реализации:** Phase 4.8 добавил HookCircuitBreaker, но в `__init__` нет singleton (создаётся per-request через `runner.py`). DI для breaker — extra complexity, не нужная для v1.19.0. Reserved kwarg = forward-compat.
+
+### Trust boundary (preserved)
+
+AST-enforced на `harness/observability/*`:
+- 0 violations (3/3 trust boundary tests passed)
+- `health.py` — stdlib + asyncio + pydantic. NO `harness.agents`/`harness.server` imports.
+- DI pattern: probes принимают injected deps, не импортируют глобально.
+- `server → observability` direction allowed (server.py может импортировать emit.py для emit hooks).
+
+### Files
+
+NEW (~880 LoC tests):
+- `tests/test_tool_duration_by_tool.py` (~280 LoC)
+- `tests/test_llm_cost_by_model.py` (~250 LoC)
+- `tests/test_health_deep_probes.py` (~350 LoC)
+
+MODIFIED:
+- `harness/observability/metrics.py` — 1 new Histogram + 2 new Counters
+- `harness/observability/emit.py` — `metric_observe` helper + `emit_tool_call`/`emit_llm_call` extended signatures
+- `harness/observability/health.py` — 8 probe methods + `ProbeResult` + DI kwargs
+- `harness/observability/__init__.py` — re-export `ProbeResult`, `ProbeStatus`
+- `harness/server/llm/router.py` — 2 wire points для `model_id` breakdown
+- `harness/__init__.py` (1.18.0 → 1.19.0)
+- `harness/server/app.py` (FastAPI version 1.18.0 → 1.19.0)
+- `pyproject.toml` (version 1.18.0 → 1.19.0)
+- `docs/CHANGELOG.md` (+v1.19.0 section)
+
 ## Phase 4.8 v1.18.0 — ElicitationDecision history + notify retry/DLQ + hook rate limiter/circuit breaker (2026-06-17) — Phase 4 = 6/12 step
 
 **Phase 4.8 v1.18.0 — 4 new files / 7 modified files / +58 tests / 2283 total tests / 0 new required deps**
