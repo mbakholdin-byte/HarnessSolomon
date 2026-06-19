@@ -1,6 +1,6 @@
-# Observability — Solomon Harness v1.7.0
+# Observability — Solomon Harness v1.22.0+
 
-> **Phase 4.1 — Production observability** для Solomon Harness. Structured JSONL logs, OpenTelemetry-compatible traces, Prometheus `/metrics` endpoint, deep health checks (liveness/readiness/deep), per-task cost tracking. Построено поверх Phase 4.0 hooks framework (v1.6.0).
+> **Phase 4.1–4.12 — Production observability** для Solomon Harness. Structured JSONL logs, OpenTelemetry-compatible traces, Prometheus `/metrics` endpoint, deep health checks (liveness/readiness/deep + 8 subsystem probes), per-task cost tracking (per-model breakdown), per-tool latency histograms, **admin JSON endpoints** (Phase 4.11, RBAC-gated). Построено поверх Phase 4.0 hooks framework.
 
 ---
 
@@ -11,12 +11,13 @@
 3. [JsonlLogger — structured logs](#3-jsonllogger--structured-logs)
 4. [PrometheusMetrics — `/metrics` endpoint](#4-prometheusmetrics--metrics-endpoint)
 5. [OTelTracer — distributed tracing](#5-oteltracer--distributed-tracing)
-6. [HealthChecker — live/ready/deep](#6-healthchecker--liverreadydeep)
-7. [CostTracker — per-task cost](#7-costtracker--per-task-cost)
-8. [Конфигурация (26 settings)](#8-конфигурация-26-settings)
-9. [Примеры](#9-примеры)
-10. [Troubleshooting](#10-troubleshooting)
-11. [См. также](#11-см-также)
+6. [HealthChecker — live/ready/deep + 8 probes (Phase 4.9)](#6-healthchecker--liverreadydeep--8-probes-phase-49)
+7. [CostTracker — per-task cost (per-model breakdown, Phase 4.9)](#7-costtracker--per-task-cost-per-model-breakdown-phase-49)
+8. [Конфигурация](#8-конфигурация)
+9. [Admin endpoints (Phase 4.11)](#9-admin-endpoints-phase-411)
+10. [Примеры](#10-примеры)
+11. [Troubleshooting](#11-troubleshooting)
+12. [См. также](#12-см-также)
 
 ---
 
@@ -113,7 +114,7 @@ recent = logger.tail(n=20)  # last 20 lines, parsed as dicts
 
 Активация: `observability_prometheus_enabled=True` + `pip install prometheus-client`.
 
-### 4.2. Метрики (18 total)
+### 4.2. Метрики (28 total)
 
 **HTTP (2):**
 
@@ -122,27 +123,32 @@ recent = logger.tail(n=20)  # last 20 lines, parsed as dicts
 | `harness_http_requests_total` | Counter | route, method, status | Total HTTP requests |
 | `harness_http_request_duration_seconds` | Histogram | route, method | Request latency |
 
-**LLM (3):**
+**LLM (5, +3 in Phase 4.9):**
 
 | Name | Type | Labels | Описание |
 |------|------|--------|----------|
 | `harness_llm_calls_total` | Counter | model, tier, status | Total LLM completions |
 | `harness_llm_latency_seconds` | Histogram | model, tier | LLM latency |
-| `harness_llm_cost_total_usd` | Counter | model, tier | Cumulative USD cost |
+| `harness_llm_cost_total_usd` | Counter | model, tier | Cumulative USD cost (aggregate) |
+| `harness_llm_cost_total_usd_by_model` | Counter | model_id | Per-LLM-model cost breakdown (Phase 4.9) |
+| `harness_llm_tokens_total` | Counter | model_id, type=input\|output | Per-LLM-model token breakdown (Phase 4.9) |
 
-**Hooks (2):**
+**Hooks (4, +2 in Phase 4.8):**
 
 | Name | Type | Labels | Описание |
 |------|------|--------|----------|
 | `harness_hook_dispatches_total` | Counter | event, decision | Total hook dispatches |
 | `harness_hook_duration_seconds` | Histogram | event | Hook latency |
+| `harness_hook_rate_limited_total` | Counter | hook_id | Rate-limited skips (Phase 4.8) |
+| `harness_hook_circuit_skip_total` | Counter | hook_id, state | Circuit breaker skips (Phase 4.8) |
 
-**Tools (2):**
+**Tools (3, +1 in Phase 4.9):**
 
 | Name | Type | Labels | Описание |
 |------|------|--------|----------|
 | `harness_tool_calls_total` | Counter | tool_name, status | Total tool calls |
-| `harness_tool_duration_seconds` | Histogram | tool_name | Tool latency |
+| `harness_tool_duration_seconds` | Histogram | tool_name | Tool latency (aggregate) |
+| `harness_tool_duration_seconds_by_tool` | Histogram | tool_name | Per-tool latency (12 buckets, Phase 4.9) |
 
 **Compaction (2):**
 
@@ -158,13 +164,16 @@ recent = logger.tail(n=20)  # last 20 lines, parsed as dicts
 | `harness_merge_queue_events_total` | Counter | kind, status | Total queue events |
 | `harness_queue_depth` | Gauge | — | Current queue depth |
 
-**Outbound / Privacy / Webhook (3):**
+**Outbound / Privacy / Webhook / Notify / Elicitation (5, +3 in Phase 4.3–4.8):**
 
 | Name | Type | Labels |
 |------|------|--------|
 | `harness_outbound_deliveries_total` | Counter | kind, status_code |
 | `harness_privacy_zone_total` | Counter | action |
 | `harness_webhook_inbound_total` | Counter | event_type, status |
+| `harness_notify_dlq_total` | Counter | severity, channel, terminal (Phase 4.8) |
+| `harness_elicitation_total` | Counter | decision (Phase 4.3) |
+| `harness_notification_total` | Counter | severity, channel (Phase 4.3) |
 
 **Sessions (2):**
 
@@ -240,7 +249,7 @@ observability_trace_sample_ratio = 0.1  # 10% sampling
 
 ---
 
-## 6. HealthChecker — live/ready/deep
+## 6. HealthChecker — live/ready/deep + 8 probes (Phase 4.9)
 
 ### 6.1. Три эндпоинта
 
@@ -248,11 +257,31 @@ observability_trace_sample_ratio = 0.1  # 10% sampling
 |----------|-------------|---------------|
 | `GET /health/live` | always 200 | Процесс жив |
 | `GET /health/ready` | 200 / 503 | Critical deps (Qdrant/SQLite/Neo4j) reachable |
-| `GET /health/deep` | 200 / 200 (degraded) | Все probes + диагностика |
+| `GET /health/deep` | 200 / 200 (degraded) | Все probes + диагностика (8 subsystem probes, Phase 4.9) |
 
-**Backward compat:** `GET /api/health` (Phase 0) → alias для `/health/deep?minimal=true`. Возвращает `{status, version, project_root}` (Phase 0 shape).
+**Backward compat:** `GET /api/health` (Phase 0) → alias для `/health/deep?minimal=true`.
 
-### 6.2. Probe registration (DI)
+### 6.2. Deep probes (Phase 4.9)
+
+`HealthChecker` расширен 9 optional kwargs: `db_path`, `qdrant_url`, `opensearch_url`, `job_store`, `merge_queue`, `elicitation_broker`, `notify_channels`, `rate_limiter`, `circuit_breaker` (reserved, no probe yet).
+
+8 probe methods:
+1. DB (SQLite)
+2. Qdrant
+3. OpenSearch
+4. JobStore
+5. MergeQueue
+6. ElicitationBroker
+7. NotifyChannels
+8. RateLimiter
+
+CircuitBreaker probe зарезервирован без реализации (forward-compat kwarg принимается).
+
+**Execution:** `asyncio.gather` всех probes в parallel + `asyncio.wait_for(2.0)` per-probe timeout.
+**Status:** `"ok"` (all pass) | `"degraded"` (non-critical fail) | `"down"` (critical fail).
+**Output:** `ProbeResult` dataclass + `ProbeStatus` enum (exported from `harness/observability/__init__.py`).
+
+### 6.3. Probe registration (DI, Phase 4.1 Plan B1)
 
 ```python
 from harness.observability import HealthChecker
@@ -265,7 +294,7 @@ async def qdrant_probe() -> tuple[dict, bool]:
     except Exception as e:
         return ({"status": "error", "error": str(e)}, False)
 
-hc = HealthChecker(version="1.7.0", project_root="/srv/harness")
+hc = HealthChecker(version="1.22.0", project_root="/srv/harness")
 hc.configure(
     ready_timeout_s=2.0,    # B7: per-probe timeout
     deep_timeout_s=5.0,
@@ -277,7 +306,7 @@ hc.register_probe("sqlite", sqlite_probe)
 
 **Plan B1:** Probes DI'ятся через `register_probe(name, probe)`. Модуль НЕ импортирует Qdrant/Neo4j/SQLite напрямую (trust boundary preserved).
 
-### 6.3. Aggregation logic
+### 6.4. Aggregation logic
 
 | Condition | Status | HTTP code |
 |-----------|--------|-----------|
@@ -288,7 +317,7 @@ hc.register_probe("sqlite", sqlite_probe)
 
 ---
 
-## 7. CostTracker — per-task cost
+## 7. CostTracker — per-task cost (per-model breakdown, Phase 4.9)
 
 ### 7.1. Cost table (12 моделей)
 
@@ -313,13 +342,22 @@ hc.register_probe("sqlite", sqlite_probe)
 
 **R1 mitigation:** Prices as of 2026-06-16. Override через `observability_cost_overrides` (JSON) или дополняйте `DEFAULT_COSTS` при drift.
 
-### 7.2. Формула
+### 7.2. Per-model breakdown (Phase 4.9)
+
+Помимо aggregate counter (`harness_llm_cost_total_usd{model, tier}`), Phase 4.9 v1.19.0 добавил:
+
+- `harness_llm_cost_total_usd_by_model{model_id}` — per-model Counter для breakdown по конкретным провайдерам.
+- `harness_llm_tokens_total{model_id, type=input|output}` — token count breakdown.
+
+Wire points в `LLMRouter` (2 call sites: error + success paths). Backward compat: extended kwargs `model_id: str | None = None` в `emit_llm_call`.
+
+### 7.3. Формула
 
 ```
 cost_usd = (prompt_tokens * input_cost + completion_tokens * output_cost) / 1000
 ```
 
-### 7.3. API
+### 7.4. API
 
 ```python
 from harness.observability import CostTracker
@@ -336,7 +374,7 @@ print(ct.by_model())       # {"gpt-4o": {...}, "claude-3-5-sonnet": {...}}
 print(ct.to_dict())        # JSON-serialisable breakdown
 ```
 
-### 7.4. Override
+### 7.5. Override
 
 ```python
 # Settings: observability_cost_overrides = '{"gpt-4o": [3.00, 12.00]}'
@@ -350,69 +388,80 @@ ct.record_call("gpt-4o", 1000, 500, costs={**DEFAULT_COSTS, **overrides})
 
 ---
 
-## 8. Конфигурация (26 settings)
+## 8. Конфигурация
 
 Все в `harness/config.py`, секция "Phase 4.1: Observability". **Master switch:** `observability_enabled: bool = True` — False = вся framework отключена.
 
 ### Master switches (4)
-
-| Setting | Type | Default | Описание |
-|---------|------|---------|----------|
-| `observability_enabled` | bool | True | Master switch |
-| `observability_jsonl_enabled` | bool | True | JSONL logs (default ON) |
-| `observability_prometheus_enabled` | bool | False | /metrics endpoint (opt-in) |
-| `observability_otlp_enabled` | bool | False | OTLP export (opt-in) |
+`observability_enabled=True`, `observability_jsonl_enabled=True`, `observability_prometheus_enabled=False` (opt-in), `observability_otlp_enabled=False` (opt-in).
 
 ### JSONL logger (3)
-
-| Setting | Type | Default |
-|---------|------|---------|
-| `observability_log_dir` | Path | `<project_root>/data/logs` |
-| `observability_log_max_files` | int | 30 (1-365) |
-| `observability_log_max_file_size_mb` | int | 100 (1-1024) |
+`observability_log_dir=<project_root>/data/logs`, `observability_log_max_files=30`, `observability_log_max_file_size_mb=100`.
 
 ### Prometheus (2)
-
-| Setting | Type | Default |
-|---------|------|---------|
-| `observability_metrics_path` | str | `/metrics` |
-| `observability_metrics_namespace` | str | `harness` |
+`observability_metrics_path="/metrics"`, `observability_metrics_namespace="harness"`.
 
 ### OpenTelemetry (3)
-
-| Setting | Type | Default |
-|---------|------|---------|
-| `observability_otlp_endpoint` | str | `""` (no OTLP) |
-| `observability_otlp_headers` | str | `""` |
-| `observability_trace_sample_ratio` | float | 1.0 (0.0-1.0) |
+`observability_otlp_endpoint=""`, `observability_otlp_headers=""`, `observability_trace_sample_ratio=1.0`.
 
 ### Deep health (4)
-
-| Setting | Type | Default |
-|---------|------|---------|
-| `observability_health_ready_timeout_s` | float | 2.0 |
-| `observability_health_deep_timeout_s` | float | 5.0 |
-| `observability_health_require_qdrant` | bool | False |
-| `observability_health_require_neo4j` | bool | False |
+`observability_health_ready_timeout_s=2.0`, `observability_health_deep_timeout_s=5.0`, `observability_health_require_qdrant=False`, `observability_health_require_neo4j=False`.
 
 ### Cost tracking (2)
+`observability_cost_enabled=True`, `observability_cost_overrides=""`.
 
-| Setting | Type | Default |
-|---------|------|---------|
-| `observability_cost_enabled` | bool | True |
-| `observability_cost_overrides` | str | `""` (use DEFAULT_COSTS) |
+### Admin endpoints (Phase 4.11, 3)
+`hooks_observability_admin_enabled=True`, `hooks_observability_admin_audit_max_limit=500`, `hooks_observability_admin_metrics_filter=""`.
 
 ### Per-event enable (8)
+`observability_log_http_requests=True`, `observability_log_llm_calls`, `observability_log_tool_calls`, `observability_log_hook_dispatches`, `observability_log_compactions`, `observability_log_merge_queue_events`, `observability_log_outbound_deliveries`, `observability_log_privacy_decisions`.
 
-`observability_log_http_requests` (default True), `observability_log_llm_calls`, `observability_log_tool_calls`, `observability_log_hook_dispatches`, `observability_log_compactions`, `observability_log_merge_queue_events`, `observability_log_outbound_deliveries`, `observability_log_privacy_decisions`.
-
-**Total: 4 + 3 + 2 + 3 + 4 + 2 + 8 = 26 settings.**
+**Total: ~29 settings** (26 framework + 3 admin).
 
 ---
 
-## 9. Примеры
+## 9. Admin endpoints (Phase 4.11)
 
-### 9.1. Минимальный (logs only)
+**Phase 4.11 v1.21.0** добавила 3 admin JSON endpoints для operator dashboards (Grafana JSON panels, custom alerting). Все под `/api/v1/observability/*`, RBAC-gated через `Scope.OBSERVABILITY_READ`.
+
+### 9.1. Endpoints
+
+| Endpoint | Scope | Что возвращает |
+|----------|-------|----------------|
+| `GET /api/v1/observability/metrics` | `observability.read` | JSON snapshot всех Prometheus counters + gauges (опц. `?filter=<regex>` на metric names). Histograms excluded (use Prometheus text `/metrics`). |
+| `GET /api/v1/observability/health/deep` | `observability.read` | JSON deep health report (8 subsystem probes from Phase 4.9): `{status, version, project_root, checks, probes, ts}`. |
+| `GET /api/v1/observability/audit/recent?limit=N` | `observability.read` | Последние N `HookAuditSink` entries (default 50, max `hooks_observability_admin_audit_max_limit=500`). |
+
+### 9.2. DLQ endpoints (Phase 4.13B v1.23.0)
+
+Webhook DLQ — отдельный namespace под observability admin (read-only listing) + webhooks admin (mutation):
+
+| Endpoint | Scope | Что делает |
+|----------|-------|------------|
+| `GET /api/v1/observability/webhooks/dlq?limit=N&include_replayed=bool` | `observability.read` | Список DLQ entries (default 100, max 1000). |
+| `POST /api/v1/observability/webhooks/dlq/{dlq_id}/replay` | `webhooks.admin` | Re-send DLQ entry с CURRENT signing secret. |
+
+### 9.3. PII safety
+
+`_strip_pii()` regex на known PII fields перед JSON serialization: `question_preview`, `arguments_preview`, `prompt_preview`, `answer`, `raw_payload`. Operator dashboards видят aggregates, НЕ user-specific data.
+
+### 9.4. Settings
+
+- `hooks_observability_admin_enabled=True` (default) — монтирует router. False → 404 (не 403).
+- `hooks_observability_admin_audit_max_limit=500` — cap на `limit` query param.
+- `hooks_observability_admin_metrics_filter=""` — server-wide regex filter (overridable per-request).
+
+### 9.5. RBAC и trust boundary
+
+- All 3 endpoints требуют `Scope.OBSERVABILITY_READ` (Phase 4.11). DLQ replay требует `Scope.WEBHOOK_ADMIN` (Phase 4.13B).
+- В open dev mode (`settings.auth_required=False`) scope check bypassed.
+- AST-enforced: `observability_admin.py` импортирует только stdlib + FastAPI + `harness.config` + `harness.observability`. NO `harness.agents` imports.
+
+---
+
+## 10. Примеры
+
+### 10.1. Минимальный (logs only)
 
 ```python
 from harness.observability import JsonlLogger, LogEvent
@@ -428,7 +477,7 @@ logger.emit(LogEvent(
 ))
 ```
 
-### 9.2. Metrics (требует `prometheus-client`)
+### 10.2. Metrics (требует `prometheus-client`)
 
 ```python
 from harness.observability import PrometheusMetrics
@@ -441,7 +490,7 @@ m.llm_cost_total_usd.labels(model="gpt-4o", tier="T3").inc(0.005)
 output = m.render()  # bytes
 ```
 
-### 9.3. Tracer (требует `opentelemetry-api`)
+### 10.3. Tracer (требует `opentelemetry-api`)
 
 ```python
 from harness.observability import OTelTracer
@@ -452,7 +501,7 @@ with tracer.start_span("llm_call", model="gpt-4o") as span:
     # When span exits, OTel SDK records it.
 ```
 
-### 9.4. HealthChecker с 2 probes
+### 10.4. HealthChecker с 2 probes
 
 ```python
 from harness.observability import HealthChecker
@@ -483,7 +532,7 @@ report = await hc.readiness()
 # report.to_dict() for JSON response.
 ```
 
-### 9.5. CostTracker
+### 10.5. CostTracker
 
 ```python
 from harness.observability import CostTracker, compute_cost, DEFAULT_COSTS
@@ -501,9 +550,9 @@ print(f"Total: ${ct.total():.4f} across {ct.calls()} calls")
 
 ---
 
-## 10. Troubleshooting
+## 11. Troubleshooting
 
-### 10.1. `/metrics` returns 404
+### 11.1. `/metrics` returns 404
 
 `observability_prometheus_enabled=True` AND `prometheus-client` installed. Проверьте:
 
@@ -513,7 +562,7 @@ pip show prometheus-client
 
 Если не установлен: `pip install prometheus-client` (или `pip install -e ".[observability]"`).
 
-### 10.2. `tracer.start_span()` yields `NoOpSpan`
+### 11.2. `tracer.start_span()` yields `NoOpSpan`
 
 `opentelemetry-api` не установлен. Установите:
 
@@ -521,29 +570,29 @@ pip show prometheus-client
 pip install opentelemetry-api opentelemetry-sdk
 ```
 
-### 10.3. JSONL log file растёт бесконечно
+### 11.3. JSONL log file растёт бесконечно
 
 - Включите `observability_log_max_files=30` + периодический вызов `logger.cleanup(max_files=30)`.
 - Или используйте внешний logrotate (`/etc/logrotate.d/harness`).
 
-### 10.4. `/health/ready` возвращает 503 хотя всё работает
+### 11.4. `/health/ready` возвращает 503 хотя всё работает
 
 Один из required probes (`require_qdrant=True`, `require_neo4j=True`) не зарегистрирован или возвращает `ok=False`. Проверьте probes через `await hc.readiness()` и смотрите `report.checks`.
 
-### 10.5. Cardinality explosion в Prometheus
+### 11.5. Cardinality explosion в Prometheus
 
 **Не используйте** `session_id`, `agent_id`, `request_id` как label — только high-cardinality-bounded: `route`, `method`, `status`, `model`, `tier`, `event`, `decision`, `tool_name`, `action`, `kind`. Plan B4.
 
-### 10.6. Trust boundary violation
+### 11.6. Trust boundary violation
 
 `tests/test_observability_trust_boundary.py` (3 проверки) валит CI если `harness/observability/*` начнёт импортить `harness.agents`, `harness.server`, или `harness.hooks`. Это **by design** — observability framework не должен зависеть от production кода.
 
-### 10.7. Cost не считается (всегда 0.0)
+### 11.7. Cost не считается (всегда 0.0)
 
 - `observability_cost_enabled=True` (default).
 - Model name есть в `DEFAULT_COSTS` или `observability_cost_overrides`. Unknown model = 0.0 (R1 mitigation).
 
-### 10.8. OTLP export не работает
+### 11.8. OTLP export не работает
 
 - `observability_otlp_enabled=True`.
 - `observability_otlp_endpoint` указывает на collector (e.g. `http://localhost:4317`).
@@ -551,18 +600,21 @@ pip install opentelemetry-api opentelemetry-sdk
 
 ---
 
-## 11. См. также
+## 12. См. также
 
-- `docs/PHASE4-OBSERVABILITY-PLAN.md` — подробный план Phase 4.1 (1250 строк, 16 секций, 8 BLOCKERS + 10 RISKS + 10 CONCERNS)
-- `docs/CHANGELOG.md` — v1.7.0 entry
-- `docs/hooks.md` — Phase 4.0 hooks framework (v1.6.0, 665 LoC, 11 секций)
-- `docs/roadmap.md` — Phase 4 status
-- `harness/observability/` — исходный код (5 модулей, ~1000 LoC)
-- `tests/test_observability_*.py` — 6 test files, 70 tests
+- [`docs/PHASE4-OBSERVABILITY-PLAN.md`](PHASE4-OBSERVABILITY-PLAN.md) — maintainer reference (Phase 4.1 plan)
+- [`docs/CHANGELOG.md`](CHANGELOG.md) — v1.7.0 → v1.22.0 history
+- [`docs/hooks.md`](hooks.md) — Phase 4.0+ hooks framework (16 events, 12 builtins)
+- [`docs/api.md`](api.md) — `/api/v1/observability/*` admin endpoints reference
+- [`docs/scope-api.md`](scope-api.md) — `observability.read` scope
+- [`docs/cli.md`](cli.md) — `harness observability <log|metrics|health|stats>` CLI
+- [`docs/roadmap.md`](roadmap.md) — Phase 4 статус
+- `harness/observability/` — исходный код (5 модулей, ~1100 LoC)
+- `tests/test_observability_*.py` + `tests/test_*_by_*.py` + `tests/test_health_deep_probes.py` + `tests/test_observability_admin.py` — 100+ tests
 - [Prometheus naming best practices](https://prometheus.io/docs/practices/naming/)
 - [OpenTelemetry Python docs](https://opentelemetry.io/docs/languages/python/)
 
 ---
 
-**Версия документа:** v1.7.0 (2026-06-16)
-**Phase:** 4.1 — Observability framework (FRAMEWORK SHIPPED, 17 trigger points wiring → Phase 4.1+)
+**Версия документа:** v1.22.0 (2026-06-19)
+**Phase:** 4.1–4.12 — Observability (framework + wiring + per-tool/per-model metrics + deep probes + admin endpoints)

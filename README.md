@@ -8,66 +8,104 @@
 - **Cross-encoder rerank** (BGE-reranker-v2-m3)
 - **Eval harness** baked-in (SWE-bench-style)
 - **RU-first** UX
-- **Hot-reload** skills и hooks через file watcher
+- **Hot-reload** skills, hooks и privacy zones через file watcher
 - **Cost-aware routing** (Haiku-class → локальные, Opus-class → cloud)
 - **Docker-sandbox** per agent type с seccomp
+- **Production observability** — JSONL logs, Prometheus metrics, OTel traces, per-task cost
+- **Hooks framework** — 16 событий, 4 транспорта, 12 builtin хуков, hot-reload
+- **Scope-gated API** — 10 RBAC scopes, Bearer token auth, capabilities discovery
+
+## Быстрый старт
+
+```bash
+# 1. Установить
+git clone https://github.com/mbakholdin-byte/HarnessSolomon.git
+cd HarnessSolomon
+python -m pip install -e .
+
+# 2. Минимум один API ключ
+export MINIMAX_API_KEY="sk-..."
+# или ZHIPUAI_API_KEY / MOONSHOT_API_KEY
+
+# 3. Запустить backend (порт 8765, не 8000!)
+python -m harness
+# → Uvicorn running on http://0.0.0.0:8765
+
+# 4. Проверить
+curl http://localhost:8765/api/health
+# {"status":"ok","version":"1.21.0",...}
+
+# 5. (Опционально) Frontend
+cd harness/web && npm install && npm run dev
+# → http://localhost:5173
+```
+
+Подробности: [`docs/quickstart.md`](docs/quickstart.md) (<10 минут до первого ответа).
 
 ## Документация
 
-- `docs/roadmap.md` — дорожная карта (16–17 недель до production)
-- `docs/PHASE-0-SPEC.md` — спецификация Фазы 0 (Web MVP)
-- `docs/PHASE-0-PLAN.md` — пошаговый план Фазы 0 (11 шагов)
-- `docs/hooks.md` — **Phase 4.0 Hooks framework** (14 events, 4 transports, 5 builtin) ⬅️ v1.6.0
-- `docs/observability.md` — **Phase 4.1 Observability framework** (JSONL logs, Prometheus, OTel, health, cost) ⬅️ новое в v1.7.0
-- `docs/MODEL_REGISTRY.md` — каталог моделей (T1/T2/T3)
-- `docs/architecture.md` — архитектура
-- `docs/quickstart.md` — быстрый старт (<10 мин до первого ответа)
-- `docs/CHANGELOG.md` — история изменений
+### Основная
+- [`docs/quickstart.md`](docs/quickstart.md) — быстрый старт (<10 мин)
+- [`docs/architecture.md`](docs/architecture.md) — high-level архитектура и слои
+- [`docs/migration.md`](docs/migration.md) — гайд миграции v0.x → v1.0
+- [`docs/CHANGELOG.md`](docs/CHANGELOG.md) — история изменений
+
+### Подсистемы
+- [`docs/hooks.md`](docs/hooks.md) — **Hooks framework** (16 events, 4 transports, 12 builtin, hot-reload, rate limit + circuit breaker)
+- [`docs/observability.md`](docs/observability.md) — **Observability** (JSONL, Prometheus, OTel, health, cost, admin endpoints)
+- [`docs/api.md`](docs/api.md) — **REST/WS API reference** (`/api/v1/*` endpoints, scopes, RBAC)
+- [`docs/scope-api.md`](docs/scope-api.md) — **Scope-gated API** (10 RBAC scopes, tokens, capabilities)
+- [`docs/elicitation.md`](docs/elicitation.md) — **Elicitation** (3 транспорта: WebSocket / long-poll / SSE)
+- [`docs/webhooks.md`](docs/webhooks.md) — **Outbound webhooks** (auto-disable, DLQ, secret rotation)
+- [`docs/cli.md`](docs/cli.md) — **CLI reference** (`harness serve`, `hooks`, `observability`, `auth`, `webhooks dlq`, …)
+
+### Каталоги
+- [`docs/MODEL_REGISTRY.md`](docs/MODEL_REGISTRY.md) — каталог моделей (T1/T2/T3)
+- [`docs/MODEL_SUPPORT.md`](docs/MODEL_SUPPORT.md) — статус поддержки провайдеров
+- [`docs/roadmap.md`](docs/roadmap.md) — дорожная карта
 
 ## Статус
 
-**Фаза 0 — Web MVP** ✅ (завершено 14.06.2026)
+**Текущая версия:** v1.21.0 (Phase 4.11)
+**Ближайший релиз:** v1.0.0-rc1 (Phase 4.14 final closeout)
 
-- [x] Backend: FastAPI + LiteLLM (MiniMax-M2.7 / GLM-4.7 / Moonshot-v1-128k)
-- [x] Tools: read_file, edit_file, write_file, bash, grep, glob
-- [x] Agent loop: max 5 итераций
-- [x] WebSocket chat endpoint с streaming
-- [x] Frontend: Vite + React 18 + TypeScript
-- [x] Chat UI с sessions, models, messages, tool calls
-- [x] 67/67 тестов зелёные (62 unit + 5 e2e smoke, real_llm отдельно через `-m real_llm`)
-- [x] Quickstart: <10 минут до первого ответа
+### Завершённые фазы
 
-**Phase 3 — Context Engineering** ✅ (завершено 15.06.2026, v1.0.0–v1.5.0, 12/12)
+| Фаза | Версия | Дата | Описание |
+|------|--------|------|----------|
+| Phase 0 — Web MVP | v0.1.0 | 14.06.2026 | FastAPI + LiteLLM, 6 tools, WebSocket chat, React UI |
+| Phase 1 — Memory | v1.0.0–v1.5.0 | 15.06.2026 | 4-слойная память, dual-write, privacy zones, scope-gated API |
+| Phase 2 — Orchestration | v1.x | 15.06.2026 | Sub-agents, MergeQueue, PR integration, stacked PRs |
+| Phase 3 — Context Engineering | v1.0.0–v1.5.0 | 15.06.2026 | Compaction, scratchpad, reflection, offloader |
+| Phase 4.0 — Hooks framework | v1.6.0 | 16.06.2026 | 14 events, 4 transports, 5 builtin hooks |
+| Phase 4.1 — Observability | v1.7.0–v1.7.2 | 16.06.2026 | JSONL, Prometheus, OTel, health, cost, API versioning |
+| Phase 4.2 — Hot-reload | v1.8.0–v1.9.0 | 16.06.2026 | FileWatcher, agents/hooks/privacy hot-reload |
+| Phase 4.3 — Elicitation + Notification | v1.10.0–v1.12.0 | 16.06.2026 | 2 new events, WebSocket transport, webhook+desktop fanout |
+| Phase 4.4 — CLI inspection | v1.13.0 | 17.06.2026 | `harness hooks`, `harness observability` CLI |
+| Phase 4.4+ — Hook wiring | v1.14.0 | 17.06.2026 | 11 production trigger points wired |
+| Phase 4.5 — PermissionRequest | v1.15.0 | 17.06.2026 | Hook-driven permission override, long-poll elicitation |
+| Phase 4.6 — Audit + schemas + Slack/Teams | v1.16.0 | 17.06.2026 | NDJSON audit CLI, Pydantic schemas, Slack+Teams notify |
+| Phase 4.7 — Permission wiring + tail + diff | v1.17.0 | 17.06.2026 | 5 file tools gated, live tail, stats diff |
+| Phase 4.8 — Elicitation history + retry/DLQ + circuit breaker | v1.18.0 | 17.06.2026 | Decision store, notify retry+DLQ, rate limiter |
+| Phase 4.9 — Per-tool + per-model metrics + deep probes | v1.19.0 | 18.06.2026 | Latency histograms, cost breakdown, 8 deep probes |
+| Phase 4.10 — Hook pattern library | v1.20.0 | 18.06.2026 | 8 production-ready hook JSON specs |
+| Phase 4.11 — SSE Elicitation + admin endpoints | v1.21.0 | 18.06.2026 | SSE transport, observability admin, 2 new scopes |
+| Phase 4.12 — Permission + 410 Gone + Follower | v1.22.0 | 19.06.2026 | Scratchpad perms, legacy 410, --follow improvements |
+| Phase 4.13 — Webhook hardening | v1.23.0 | 19.06.2026 | Auto-disable, DLQ replay, secret rotation |
 
-**Phase 4.0 — Hooks framework** ✅ (завершено 16.06.2026, v1.6.0, 1/12)
+### Тестовое покрытие
 
-- [x] 14 events (PreToolUse, PostToolUse, Stop, SubagentStart/Stop, SessionStart/End, UserPromptSubmit, PreCompact, InstructionsLoaded, PermissionRequest, OnMemoryWrite, OnRoutingDecision, OnCompaction)
-- [x] 4 transports (builtin / subprocess / http / llm)
-- [x] 5 builtin hooks (log, validate, block_dangerous, inject_context, autosave)
-- [x] HookAuditSink (NDJSON observability, opt-in)
-- [x] PreToolUse + PostToolUse wired в ToolRuntime
-- [x] 1697 tests passing, 0 regressions
-- [x] `docs/hooks.md` — полная документация (665 строк, 11 секций)
-
-**Phase 4.1 — Observability framework** ✅ (FRAMEWORK SHIPPED, 2026-06-16, v1.7.0)
-
-- [x] 5 модулей: JsonlLogger (NDJSON), PrometheusMetrics (/metrics), OTelTracer (spans), HealthChecker (live/ready/deep), CostTracker (USD per call)
-- [x] Trust boundary preserved (AST test enforced, 3 checks)
-- [x] Graceful degradation: prometheus_client / opentelemetry-api → no-op if not installed
-- [x] 26 new settings, 70 tests, 0 new required deps
-- [x] `docs/observability.md` — полная документация (580 строк, 11 секций)
-- [ ] 17 trigger points wiring (Phase 4.1+)
-
-**Next:** Phase 4.1+ — wire 17 trigger points; Phase 4.2 — Hot-reload hooks (file watcher); Phase 4.3 — /api/* → /api/v1/* migration
+- **2474+ tests** passing (Phase 4.12 v1.22.0)
+- 0 регрессий
+- Trust boundary AST-enforced на всех observability/hooks модулях
 
 ## Стек
 
 - **Backend:** Python 3.12+, FastAPI, uvicorn, LiteLLM, aiosqlite, Pydantic v2
 - **Frontend:** Vite, React 18, TypeScript, react-markdown
-- **LLM Фаза 0:** только облачные (MiniMax-M2.7, GLM-4.7, Moonshot-v1-128k)
-- **Локальные модели (Qwen3 8B/30B):** Фаза 0.5
-- **Embeddings (BGE-M3, FRIDA):** Фаза 1
-- **Memory (hmem, mem0, mempalace, hybrid):** Фаза 1
+- **LLM:** MiniMax-M2.7, GLM-4.7, Moonshot-v1-128k (cloud); Qwen3 8B/30B (local, Phase 0.5)
+- **Хранилища:** SQLite (WAL mode), Qdrant (embeddings), Neo4j (KG-RAG)
+- **Observability:** JSONL logs, Prometheus (`/metrics`), OpenTelemetry (OTLP export)
 
 ## Лицензия
 

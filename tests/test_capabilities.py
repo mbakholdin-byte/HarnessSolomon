@@ -107,6 +107,7 @@ class TestCapabilitiesEndpoint:
             "sessions.read", "sessions.write",  # Phase 3 v1.4.0
             "observability.read",  # Phase 4.11 v1.21.0
             "elicitation.read",    # Phase 4.11 v1.21.0
+            "webhooks.admin",      # Phase 4.13B v1.23.0
         }
         # Each scope has a non-empty description.
         for s in body["scopes_available"]:

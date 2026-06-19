@@ -361,9 +361,167 @@ Open-source модели часто хуже CC в tool-use. Техники:
 
 ---
 
-## Архитектура Solomon Harness — Phase 0 Web MVP
+## Архитектура Solomon Harness — v1.22.0+ (Phase 4)
 
-> Раздел добавлен 14.06.2026 (Step 11). Описывает текущую реализацию после 11 шагов Фазы 0 (backend + frontend + WebSocket chat).
+> Раздел обновлён 19.06.2026 (Phase 4.14A). Описывает реализацию после Phase 4.0–4.12: hooks, observability, hot-reload, elicitation, RBAC.
+
+### High-level компоненты
+
+```
+                         ┌─────────────────────────┐
+                         │  Client (React / curl)  │
+                         │  Bearer token (Phase1.6)│
+                         └────────────┬────────────┘
+                                      │ HTTP / WS / SSE
+                                      ▼
+┌──────────────────────────────────────────────────────────────────┐
+│  FastAPI app (port 8765)                                          │
+│  harness/server/app.py                                            │
+│                                                                   │
+│  ┌──────────────────┐  ┌──────────────────┐  ┌─────────────────┐ │
+│  │ Deprecation      │→│ Observability    │→│ Legacy 410 Gone │ │
+│  │ middleware       │  │ middleware       │  │ middleware      │ │
+│  │ (RFC 8594 hdrs)  │  │ (HTTP metrics)   │  │ (opt-in v1.22)  │ │
+│  └──────────────────┘  └──────────────────┘  └─────────────────┘ │
+│                                                                   │
+│  Routers:                                                         │
+│    /api/*        legacy (deprecation)                             │
+│    /api/v1/*     canonical (Phase 4.1+ v1.7.2)                    │
+│    /metrics      Prometheus text (Phase 4.1)                      │
+│    /health/*     live / ready / deep (8 probes, Phase 4.9)        │
+│    /api/v1/elicitation/{ws,poll,sse,history} (Phase 4.3-4.11)     │
+│    /api/v1/observability/{metrics,health,audit,webhooks} (4.11)   │
+│    /api/v1/webhooks/enable (Phase 4.13B)                          │
+└──────────────────────────────────────────────────────────────────┘
+         │                  │                  │             │
+         ▼                  ▼                  ▼             ▼
+┌────────────────┐ ┌──────────────┐ ┌──────────────┐ ┌──────────────┐
+│ Auth           │ │ Agent Loop   │ │ Hooks        │ │ Observability│
+│ harness/server │ │ harness/     │ │ harness/hooks│ │ harness/obs  │
+│ /auth/         │ │ agents/      │ │              │ │              │
+│ - tokens.db    │ │ - sub-agents │ │ - 16 events  │ │ - JSONL logs │
+│ - 10 scopes    │ │ - merge queue│ │ - 4 transports│ │ - Prom metrics│
+│ - RBAC DI      │ │ - PR stacks  │ │ - 12 builtins │ │ - OTel traces │
+│                │ │ - cascade    │ │ - hot-reload  │ │ - cost track  │
+│                │ │              │ │ - rate limit  │ │ - 8 probes    │
+│                │ │              │ │ - circuit brk │ │ - admin API   │
+└────────────────┘ └──────────────┘ └──────────────┘ └──────────────┘
+         │                  │                  │             │
+         └──────────────────┴──────────────────┴─────────────┘
+                                    │
+                                    ▼
+┌──────────────────────────────────────────────────────────────────┐
+│  Storage                                                          │
+│  SQLite (WAL): harness.db, agent-jobs.db, harness-scope.db,      │
+│                memory.db                                          │
+│  JSONL:     sessions/*.jsonl, data/logs/*.jsonl,                  │
+│             data/audit/hooks-*.ndjson                             │
+│  Qdrant (Phase 1): embeddings                                     │
+│  Neo4j (Phase 1): KG-RAG                                          │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+### Слои (актуальные для v1.22.0+)
+
+1. **Frontend** — React 18 + TypeScript + Vite (`harness/web/src/`)
+2. **API Gateway** — FastAPI + Uvicorn + 3 middleware (`harness/server/app.py`)
+3. **Auth (Phase 1.6)** — SQLite token store + 10 RBAC scopes + capabilities discovery (`harness/server/auth/`)
+4. **Agent Loop** — async generator, max 5 iterations (`harness/server/agent/loop.py`)
+5. **Tool Runtime** — async subprocess с deny patterns + PermissionRequest hook contract (`harness/server/agent/runtime.py`)
+6. **LLM Router** — LiteLLM wrapper + cost-aware cascade (`harness/server/llm/router.py`)
+7. **Sub-agents (Phase 2)** — MergeQueue, worktree isolation, PR stacks (`harness/agents/`)
+8. **Memory (Phase 1)** — UnifiedMemory 4-layer schema, dual-write (`harness/memory/`)
+9. **Context (Phase 3)** — Compactor + scratchpad + reflection + offloader (`harness/context/`)
+10. **Hooks (Phase 4.0-4.12)** — 16 events × 4 transports × 12 builtins + hot-reload + defensive layer (`harness/hooks/`)
+11. **Observability (Phase 4.1-4.11)** — JSONL + Prometheus + OTel + 8 deep probes + admin endpoints (`harness/observability/`)
+12. **Privacy (Phase 3 v1.5.0)** — Zone filter, redaction engine (`harness/privacy/`, `harness/redaction/`)
+
+### Endpoints (v1.22.0+)
+
+**Legacy `/api/*`** (deprecation headers, opt-in 410 после 2026-12-31):
+- `GET /api/health`, `GET /api/models`, `GET /api/sessions*`, `WS /api/chat/ws`
+
+**Canonical `/api/v1/*`** (RBAC-gated, Phase 1.6+):
+- `GET /api/v1/capabilities` (public, self-description)
+- `GET /api/v1/sessions*`, `POST /api/v1/sessions/{id}/compact`
+- `GET /api/v1/memory/{search,stats}`, `POST /api/v1/memory/notes`
+- `GET /api/v1/agents/jobs*`, `POST /api/v1/agents/jobs`, `GET /api/v1/agents/health`
+- `POST /api/v1/agents/webhooks/github` (GitHub inbound, Phase 2.3)
+- `WS /api/v1/chat/ws` (streaming chat)
+- `WS /api/v1/elicitation/ws` (Phase 4.3+ v1.12)
+- `GET /api/v1/elicitation/poll`, `POST /api/v1/elicitation/answer` (Phase 4.5 v1.15, opt-in)
+- `GET /api/v1/elicitation/sse` (Phase 4.11 v1.21, opt-in, requires `elicitation.read`)
+- `GET /api/v1/elicitation/history` (Phase 4.8 v1.18)
+- `GET /api/v1/observability/{metrics,health/deep,audit/recent}` (Phase 4.11 v1.21, requires `observability.read`)
+- `GET /api/v1/observability/webhooks/dlq`, `POST /api/v1/observability/webhooks/dlq/{id}/replay` (Phase 4.13B v1.23)
+- `POST /api/v1/webhooks/enable` (Phase 4.13B v1.23, requires `webhooks.admin`)
+
+**Top-level** (no `/api` prefix):
+- `GET /metrics` (Prometheus text, Phase 4.1)
+- `GET /health/{live,ready,deep}` (Phase 4.1, deep с 8 probes в Phase 4.9)
+- `GET /docs`, `GET /redoc` (FastAPI auto-docs)
+
+### Trust boundary
+
+```ascii
+                     ┌─────────────────────────┐
+                     │  harness.hooks          │ ← leaf
+                     │  harness.observability  │
+                     │  harness.privacy        │
+                     │  harness.server.auth    │
+                     └─────────────────────────┘
+                                  ▲
+                                  │ (one-way: prod → obs/hooks/auth)
+                                  │
+                     ┌─────────────────────────┐
+                     │  harness.agents         │ ← production
+                     │  harness.server         │
+                     │  harness.context        │
+                     │  harness.memory         │
+                     └─────────────────────────┘
+```
+
+AST-enforced тестами: `tests/test_hooks_trust_boundary.py`, `tests/test_observability_trust_boundary.py`, `tests/test_legacy_gone_imports_only_stdlib_and_fastapi.py`. Any violation в CI → fail.
+
+### Storage layout (v1.22.0+)
+
+```
+harness/data/
+├── harness.db              # SQLite — сессии (aiosqlite)
+├── agent-jobs.db           # Sub-agent jobs + webhook events + DLQ +
+│                           # elicitation_decisions + notify_dlq +
+│                           # outbound_webhooks (Phase 4.13B) + compact_store
+├── harness-scope.db        # RBAC tokens (Phase 1.6)
+├── memory.db               # UnifiedMemory (Phase 1)
+├── sessions/
+│   └── {session_id}.jsonl  # Append-only messages
+├── logs/
+│   └── harness-YYYY-MM-DD.jsonl   # Observability (Phase 4.1)
+└── audit/
+    ├── hooks-YYYY-MM-DD.ndjson    # Hook audit (Phase 4.0)
+    └── session-end.ndjson         # Autosave (Phase 4.0)
+```
+
+### Запуск
+
+```bash
+# Backend (FastAPI, порт 8765)
+python -m harness
+
+# Frontend (Vite dev, порт 5173)
+cd harness/web && npm install && npm run dev
+
+# Production: gunicorn/uvicorn workers + reverse proxy (nginx)
+# с X-Accel-Buffering: no для SSE endpoints
+```
+
+Подробнее: `docs/quickstart.md`, `docs/api.md`.
+
+---
+
+## Архитектура Phase 0 Web MVP (историческая справка)
+
+> Сохранено для reference. Phase 0 был завершён 14.06.2026; актуальная архитектура выше.
 
 ### Компоненты
 

@@ -1,22 +1,27 @@
-# Hooks Framework — Solomon Harness v1.6.0
+# Hooks Framework — Solomon Harness v1.22.0+
 
-> **Phase 4.0 — Hooks framework** для production-пайплайна. Позволяет встраивать side-effects (логирование, валидация, блокировки, аудит) в ключевые точки жизненного цикла агента через декларативные **hook specs** с 4 транспортами: **builtin / subprocess / http / llm**.
+> **Phase 4.0–4.12 — Hooks framework** для production-пайплайна. Позволяет встраивать side-effects (логирование, валидация, блокировки, аудит, интерактивные запросы к человеку, уведомления) в ключевые точки жизненного цикла агента через декларативные **hook specs** с 4 транспортами: **builtin / subprocess / http / llm**.
+>
+> Покрытие: **16 событий**, **12 builtin хуков**, **4 транспорта**, **hot-reload** (Phase 4.2), **defensive layer** (rate limiter + circuit breaker, Phase 4.8), **payload schema validation** (Phase 4.6), **hook pattern library** (8 готовых JSON specs, Phase 4.10).
 
 ---
 
 ## Содержание
 
 1. [Что такое hooks](#1-что-такое-hooks)
-2. [14 событий (EventType)](#2-14-событий-eventtype)
+2. [16 событий (EventType)](#2-16-событий-eventtype)
 3. [Решения (Decision)](#3-решения-decision)
 4. [4 транспорта](#4-4-транспорта)
-5. [5 встроенных хуков (builtin)](#5-5-встроенных-хуков-builtin)
+5. [12 встроенных хуков (builtin)](#5-12-встроенных-хуков-builtin)
 6. [Регистрация и настройка](#6-регистрация-и-настройка)
-7. [Конфигурация (31 settings)](#7-конфигурация-31-settings)
+7. [Конфигурация](#7-конфигурация)
 8. [Audit log (NDJSON)](#8-audit-log-ndjson)
-9. [Примеры (built-in / subprocess / http / llm)](#9-примеры)
-10. [Troubleshooting](#10-troubleshooting)
-11. [См. также](#11-см-также)
+9. [Hot-reload (Phase 4.2)](#9-hot-reload-phase-42)
+10. [Defensive layer: rate limiter + circuit breaker (Phase 4.8)](#10-defensive-layer-rate-limiter--circuit-breaker-phase-48)
+11. [Hook pattern library (Phase 4.10)](#11-hook-pattern-library-phase-410)
+12. [Примеры (built-in / subprocess / http / llm)](#12-примеры)
+13. [Troubleshooting](#13-troubleshooting)
+14. [См. также](#14-см-также)
 
 ---
 
@@ -36,7 +41,7 @@
 
 ---
 
-## 2. 14 событий (EventType)
+## 2. 16 событий (EventType)
 
 | Событие | Где срабатывает | Payload (`HookContext.payload`) | Решение |
 |---------|-----------------|----------------------------------|---------|
@@ -50,12 +55,12 @@
 | `UserPromptSubmit` | Каждое WebSocket user message | `{"prompt": str, "session_id": str}` | block → отклонить prompt |
 | `PreCompact` | **Перед** `ContextCompactor.maybe_compact` | `{"messages_count": int, "tokens_estimate": int}` | allow (snapshot state) |
 | `InstructionsLoaded` | `AgentSpec` загружен с диска | `{"spec_name": str, "file_path": str}` | allow |
-| `PermissionRequest` | Tool запрещён denylist'ом | `{"tool_name": str, "arguments": dict, "reason": str}` | `modify` → allow (override) |
-| `OnMemoryWrite` | Внутри `UnifiedMemory.write` (post-redact, pre-persist) | `{"layer": "L1"/"L2", "key": str, "value_preview": str}` | `block` → отменить запись |
+| `PermissionRequest` | Tool запрещён denylist'ом (Phase 4.5+: `_bash` + 5 file tools + scratchpad WRITE) | `{"tool_name": str, "arguments": dict, "reason": str}` | `modify` → allow (override) |
+| `OnMemoryWrite` | Внутри `UnifiedMemory.write` (post-redact, pre-persist) | `{"layer": "L1"/"L2", "key_hash": str, "scope": str, "size_bytes": int}` | `block` → отменить запись |
 | `OnRoutingDecision` | После `LLMRouterClassifier.classify` | `{"tier": "T1"/"T2"/"T3", "model": str, "confidence": float}` | `modify` → override tier/model |
 | `OnCompaction` | После `ContextCompactor` (cache-miss only, если opt-in) | `{"session_id": str, "summary_preview": str, "saved_tokens": int}` | allow (post-process) |
-
-> **Elicitation / Notification** — DEFERRED to Phase 4.4.
+| `Elicitation` | Phase 4.3+ — интерактивный запрос к человеку (requires_confirmation) | `{"question": str, "options": list, "default_answer": str, "requires_confirmation": bool}` | `modify` → inject answer (broker.publish → wait → answer_source) |
+| `Notification` | Phase 4.3+ — асинхронное уведомление (fanout по каналам) | `{"message": str, "severity": "info"\|"warn"\|"error", "channels": ["stdout","webhook","desktop","slack","teams"]}` | allow (never block) |
 
 **Per-event enable flag:** каждое событие имеет настройку `hooks_on_<event>_enabled: bool` (default: True).
 
@@ -260,91 +265,72 @@ Respond JSON: {{"decision": "allow"|"block", "reason": "..."}}""",
 
 ---
 
-## 5. 5 встроенных хуков (builtin)
+## 5. 12 встроенных хуков (builtin)
 
-5 хуков идут в коробке и подключаются по `settings.hooks_builtin_<name>_enabled: bool`.
+12 хуков идут в коробке и подключаются по `settings.hooks_builtin_<name>_enabled: bool` или через JSON spec в `.harness/hooks/*.json` (hot-reloadable).
 
-### 5.1. log (default: ON)
+### Framework builtins (5, Phase 4.0)
 
+#### 5.1. log (default: ON)
 Логирует каждое событие через stdlib `logging` на INFO. Не меняет решение.
 
-```python
-# harness/hooks/builtin/log.py
-async def log_hook(ctx: HookContext) -> HookDecision:
-    logger.info("hook %s for %s in session %s",
-                ctx.event, ctx.agent_id, ctx.session_id)
-    return HookDecision(decision="allow", hook_id="builtin.log")
-```
+#### 5.2. validate (default: ON)
+Валидирует payload против Pydantic-схемы (Phase 4.6: `harness/hooks/schemas.py` — 16 моделей). `block` при невалидном. Fail-open: при ошибке схемы payload остаётся оригинальным (hook dispatch не должен падать).
 
-### 5.2. validate (default: ON)
-
-Валидирует payload против Pydantic-схемы (если есть). `block` при невалидном.
-
-```python
-# Схемы переопределяются через _SCHEMAS_OVERRIDE dict в тестах
-async def validate_hook(ctx: HookContext) -> HookDecision:
-    schema = _SCHEMAS.get(ctx.event)
-    if schema is None:
-        return HookDecision(decision="allow", hook_id="builtin.validate")
-    try:
-        schema(**ctx.payload)
-    except ValidationError as e:
-        return HookDecision(
-            decision="block", hook_id="builtin.validate",
-            output={"reason": str(e)},
-        )
-    return HookDecision(decision="allow", hook_id="builtin.validate")
-```
-
-### 5.3. block_dangerous (default: ON)
-
+#### 5.3. block_dangerous (default: ON)
 Regex-блокировка деструктивных команд в `PreToolUse` для `bash` tool.
 
-**7 паттернов:**
+**7 паттернов:** `rm -r[f] /<path>`, `mkfs /dev/...`, `dd of=/dev/...`, `:(){ :|:& };:`, `DROP DATABASE`, `TRUNCATE TABLE`, `format c:`.
 
-1. `rm -r[f] /<path>` — рекурсивное удаление в root
-2. `mkfs /dev/...` — форматирование диска
-3. `dd of=/dev/...` — запись в raw device
-4. `:(){ :|:& };:` — fork bomb
-5. `DROP DATABASE` — удаление БД
-6. `TRUNCATE TABLE` — очистка таблицы
-7. `format c:` (Windows) — форматирование системного диска
+**Настройка:** `settings.hooks_block_dangerous_patterns: str` (comma-separated regex).
 
-**Настройка:** `settings.hooks_block_dangerous_patterns: str` (comma-separated regex), default = встроенные 7.
-
-### 5.4. inject_context (default: OFF)
-
+#### 5.4. inject_context (default: OFF)
 Инжектит L0 (scratchpad) в system prompt при `InstructionsLoaded`. Использует Phase 3 v1.2.0 `ScratchpadStore`.
 
-```python
-async def inject_context_hook(ctx: HookContext) -> HookDecision:
-    if ctx.event != "InstructionsLoaded":
-        return HookDecision(decision="allow", hook_id="builtin.inject_context")
-    spec_name = ctx.payload.get("spec_name", "")
-    notes = scratchpad.read_l0(spec_name=spec_name, session_id=ctx.session_id)
-    if not notes:
-        return HookDecision(decision="allow", hook_id="builtin.inject_context")
-    return HookDecision(
-        decision="modify", hook_id="builtin.inject_context",
-        output={"payload": {
-            "spec_name": spec_name,
-            "file_path": ctx.payload["file_path"],
-            "l0_injection": "\n".join(notes),
-        }},
-    )
-```
-
-**Включение:** `settings.hooks_builtin_inject_context_enabled: bool` (default False — opt-in, может быть шумно).
-
-### 5.5. autosave (default: ON)
-
+#### 5.5. autosave (default: ON)
 На `SessionEnd` пишет `data/audit/session-end.ndjson` со списком сессий.
 
-**Формат строки:**
+### Interactive builtins (2, Phase 4.3)
 
-```json
-{"ts": "2026-06-16T12:34:56Z", "session_id": "...", "duration_seconds": 1234.5}
-```
+#### 5.6. confirm_dangerous (default: ON, Elicitation event)
+Когда `requires_confirmation=True`, публикует вопрос в `ElicitationBroker` и ждёт ответ (timeout = `hooks_elicitation_ws_timeout_s`, default 30s). Возвращает `modify` с `answer=default_answer` (по умолчанию `"abort"`, safe fallback).
+
+**3 пути разрешения** (`payload["answer_source"]`):
+- `ws_human` — WebSocket/SSE/long-poll клиент ответил вовремя.
+- `default_timeout` — клиент не ответил, использован default.
+- `default_ws_disabled` — `hooks_elicitation_ws_enabled=False`.
+
+#### 5.7. notify_terminal (default: ON, Notification event)
+Диспетчер уведомлений. Итерирует `payload["channels"]` (default `["stdout"]`) и вызывает handler per-channel:
+
+| Channel | Реализация |
+|---------|-----------|
+| `stdout` (default) | `[severity] message` в stderr |
+| `webhook` (Phase 4.3+) | HTTP POST + HMAC-SHA256 (опционально) |
+| `desktop` (Phase 4.3+, opt-in) | Windows `msg *`, macOS `osascript`, Linux `notify-send` |
+| `slack` (Phase 4.6) | Slack Incoming Webhook (severity → color) |
+| `teams` (Phase 4.6) | MS Teams MessageCard (severity → themeColor) |
+
+**Retry + DLQ** (Phase 4.8): transient errors (5xx, timeout) → exponential backoff (`hooks_notify_max_retries=3`, `hooks_notify_retry_initial_delay_ms=100`, max=5000ms). Permanent errors (4xx) → DLQ immediately. DLQ entries в `data/audit/agent-jobs.db`, table `notify_dlq`. Per-channel isolation через `asyncio.gather(return_exceptions=True)`.
+
+**DLQ metric:** `notify_dlq_total{severity, channel, terminal}` — emit'ится ВСЕГДА (даже при `dlq_enabled=False`).
+
+### Pattern library builtins (5, Phase 4.10)
+
+Готовые паттерны — JSON specs в `.harness/hooks/*.json` + Python реализации. See [§11](#11-hook-pattern-library-phase-410).
+
+| Pattern | Event | Transport | Что делает |
+|---------|-------|-----------|------------|
+| `auto_format` | PostToolUse | subprocess | `ruff format` после write/edit на `*.py` |
+| `license_check` | PreToolUse | builtin | Block GPL-3.0/AGPL-3.0/SSPL imports |
+| `complexity_check` | PostToolUse | builtin | Warn если cyclomatic complexity > 10 (AST) |
+| `secret_detect` | PreToolUse | builtin | Block AWS/GitHub/OpenAI/PEM/JWT/password в args |
+| `sql_injection_guard` | PreToolUse | builtin | Block f-string/concat/format SQL queries |
+| `unsafe_import_block` | PreToolUse | builtin | Block `os.system`, `pickle`, `eval`, `yaml.load` без SafeLoader |
+| `test_required` | PreToolUse | builtin | Block `git commit` с `*.py` changes без `pytest` |
+| `docs_required` | PostToolUse | builtin | Warn на public funcs без docstring |
+
+> **Note:** `BUILTIN_HOOKS` registry (5 framework + 2 interactive + 5 pattern = **12**) обновлён в Phase 4.10. Тест `test_total_builtin_count` проверяет registry size.
 
 ---
 
@@ -424,36 +410,39 @@ hooks_llm_specs: str = ""  # "OnRoutingDecision:llm:qwen3:8b:3000:Decide whether
 
 ---
 
-## 7. Конфигурация (31 settings)
+## 7. Конфигурация
 
-Все в `harness/config.py`, секция "Hooks framework". **Master switch:** `hooks_enabled: bool = True` — False = вся framework отключён.
+Все в `harness/config.py`, секция "Hooks framework". **Master switch:** `hooks_enabled: bool = True` — False = вся framework отключён. Полный набор settings разбит по подгруппам:
 
-### Framework (13)
+### Framework (13 core)
+`hooks_enabled`, `hooks_default_max_ms=3000`, `hooks_max_per_event=10`, `hooks_max_recursion_depth=3`, `hooks_subprocess_specs=""`, `hooks_http_specs=""`, `hooks_llm_specs=""`, `hooks_filter_chain=""`, `hooks_fail_open=True`, `hooks_redact_payloads=True`, `hooks_audit_log=False`, `hooks_subprocess_allowed_paths=".harness/hooks/**"`, `hooks_on_memory_write_silent_layers="L1"`, `hooks_on_compaction_skip_cache_hit=True`.
 
-| Setting | Type | Default | Описание |
-|---------|------|---------|----------|
-| `hooks_enabled` | bool | True | Master switch |
-| `hooks_default_max_ms` | int | 3000 | Default per-hook timeout |
-| `hooks_max_per_event` | int | 10 | Max hook'ов на одно событие |
-| `hooks_max_recursion_depth` | int | 3 | Recursion guard depth |
-| `hooks_subprocess_specs` | str | "" | Comma-separated subprocess specs |
-| `hooks_http_specs` | str | "" | Comma-separated HTTP specs |
-| `hooks_llm_specs` | str | "" | Comma-separated LLM specs |
-| `hooks_filter_chain` | str | "" | Global filter (fnmatch syntax) |
-| `hooks_fail_open` | bool | True | Если True — ошибка в hook → allow |
-| `hooks_redact_payloads` | bool | True | Redact PII в audit log |
-| `hooks_audit_log` | bool | False | Включить NDJSON audit sink |
-| `hooks_subprocess_allowed_paths` | str | ".harness/hooks/**" | Glob для разрешённых путей |
-| `hooks_on_memory_write_silent_layers` | str | "L1" | Слои, для которых OnMemoryWrite НЕ срабатывает |
-| `hooks_on_compaction_skip_cache_hit` | bool | True | OnCompaction fires только на cache miss |
+### Per-event enable (16, default True)
+`hooks_on_pre_tool_use_enabled`, …, `hooks_on_elicitation_enabled`, `hooks_on_notification_enabled`.
 
-### Per-event enable (14)
+### Builtin enable (12)
+`hooks_builtin_log_enabled=True`, `hooks_builtin_validate_enabled=True`, `hooks_builtin_block_dangerous_enabled=True`, `hooks_builtin_inject_context_enabled=False` (opt-in), `hooks_builtin_autosave_enabled=True`, `hooks_builtin_confirm_dangerous_enabled=True`, `hooks_builtin_notify_terminal_enabled=True`, + 5 pattern builtins (license/complexity/secret/sql_injection/unsafe_import).
 
-`hooks_on_pre_tool_use_enabled`, `hooks_on_post_tool_use_enabled`, `hooks_on_stop_enabled`, `hooks_on_subagent_start_enabled`, `hooks_on_subagent_stop_enabled`, `hooks_on_session_start_enabled`, `hooks_on_session_end_enabled`, `hooks_on_user_prompt_submit_enabled`, `hooks_on_pre_compact_enabled`, `hooks_on_instructions_loaded_enabled`, `hooks_on_permission_request_enabled`, `hooks_on_memory_write_enabled`, `hooks_on_routing_decision_enabled`, `hooks_on_compaction_enabled`. **Все default True.**
+### Hot-reload (3, Phase 4.2)
+`hot_reload_enabled=True`, `hot_reload_debounce_ms=200`, `hot_reload_poll_interval_s=1.0`.
 
-### Builtin enable (5)
+### Elicitation (Phase 4.3, 4.5, 4.11)
+`hooks_elicitation_ws_enabled=True`, `hooks_elicitation_ws_timeout_s=30.0`, `hooks_elicitation_longpoll_enabled=False` (opt-in), `hooks_elicitation_longpoll_timeout_s=30.0`, `hooks_elicitation_longpoll_poll_interval_s=0.25`, `hooks_elicitation_longpoll_interval_s=0.25`, `hooks_elicitation_sse_enabled=False` (opt-in), `hooks_elicitation_sse_heartbeat_s=15`, `hooks_elicitation_sse_max_session_age_s=3600`.
 
-`hooks_builtin_log_enabled`, `hooks_builtin_validate_enabled`, `hooks_builtin_block_dangerous_enabled` (default True), `hooks_builtin_inject_context_enabled` (default False — opt-in), `hooks_builtin_autosave_enabled`.
+### Notification channels (Phase 4.3, 4.6)
+`hooks_notify_webhook_url=""`, `hooks_notify_webhook_secret=""`, `hooks_notify_webhook_timeout_s=5.0`, `hooks_notify_desktop_enabled=False`, `hooks_notify_slack_webhook_url=""`, `hooks_notify_slack_channel=""`, `hooks_notify_slack_username="Solomon Harness"`, `hooks_notify_teams_webhook_url=""` (+ 2 reserved).
+
+### Notify retry + DLQ (Phase 4.8)
+`hooks_notify_max_retries=3`, `hooks_notify_retry_initial_delay_ms=100`, `hooks_notify_retry_max_delay_ms=5000`, `hooks_notify_dlq_enabled=True`.
+
+### Defensive layer (Phase 4.8)
+`hooks_rate_limit_capacity=60`, `hooks_rate_limit_refill_per_sec=1.0`, `hooks_rate_limit_enabled=True`, `hooks_circuit_breaker_threshold=5`, `hooks_circuit_breaker_cooldown_s=60.0`, `hooks_circuit_breaker_enabled=True`.
+
+### Admin endpoints (Phase 4.11)
+`hooks_observability_admin_enabled=True`, `hooks_observability_admin_audit_max_limit=500`, `hooks_observability_admin_metrics_filter=""`.
+
+### Pattern thresholds (Phase 4.10)
+`hooks_license_check_forbidden="GPL-3.0,AGPL-3.0,SSPL"`, `hooks_complexity_threshold=10`, `hooks_unsafe_imports_blocklist=...`, `hooks_test_required_pattern="*.py"`.
 
 **Backward compat:** все новые kwargs в ToolRuntime / AgentLoop / app.lifespan default `None` или `""` — старый код работает.
 
@@ -510,9 +499,65 @@ recent = sink.tail(n=20)
 
 ---
 
-## 9. Примеры
+## 9. Hot-reload (Phase 4.2)
 
-### 9.1. Минимальный (log + block_dangerous)
+**FileWatcher primitive** (`harness/watcher.py`) — watchfiles (Rust-backed) с polling fallback (POSIX + Windows). 3 ресурса hot-reloadable:
+
+| Ресурс | Директория | Что происходит при изменении |
+|--------|-----------|------------------------------|
+| Agent specs | `.harness/agents/*.md` + `harness/agents/builtin/*.md` (Phase 4.2+ v1.9.0) | Re-parse, следующий `all_specs()` подхватит |
+| Hook specs | `.harness/hooks/*.json` (single object или list) | Re-parse → `registry.register(spec)` |
+| Privacy zones | `.harness/privacy/*.json` (Phase 4.2+ v1.8.1) | `PrivacyZoneFilter.set_rules(new_rules)` (atomic swap) |
+
+**Гарантии:**
+- **Best-effort:** init failure → log + continue (app работает без hot-reload).
+- **Fail-open:** malformed file → log warning, last good spec stays.
+- **Debounce:** 200ms окно (default, `hot_reload_debounce_ms`) — editor save events coalesce.
+- **Singleton:** `get_file_watcher()` — один watcher на процесс.
+- **AST-enforced trust boundary:** `watcher.py` НЕ импортирует agents/hooks/server/observability.
+
+**Force-reload без file event:** `harness reload [kind]` CLI (Phase 4.2+ v1.9.0). Kinds: `all` (default), `agents`, `hooks`, `privacy`.
+
+---
+
+## 10. Defensive layer: rate limiter + circuit breaker (Phase 4.8)
+
+`harness/hooks/rate_limit.py` (~280 LoC). Wire в `HookRunner._dispatch_one` — **до** вызова hook body.
+
+### Token bucket (rate limiter)
+- Capacity + refill_per_sec (`hooks_rate_limit_capacity=60`, `hooks_rate_limit_refill_per_sec=1.0`).
+- `consume(n) → bool` — атомарный drain.
+- Per-hook_id, thread-safe (`threading.Lock`).
+- Metric: `hook_rate_limited_total{hook_id}`.
+
+### Circuit breaker
+- States: `closed` → `open` (threshold failures: `hooks_circuit_breaker_threshold=5`) → `half_open` (cooldown: `hooks_circuit_breaker_cooldown_s=60.0`) → `closed` (probe success) или `open` (probe failure).
+- Half-open probe через sentinel (предотвращает race conditions).
+- Metric: `hook_circuit_skip_total{hook_id, state}`.
+
+**Композиция:** rate limit → circuit breaker → hook body. Skip возвращает `allow+error` marker (НЕ блокирует остальные hooks).
+
+---
+
+## 11. Hook pattern library (Phase 4.10)
+
+8 готовых JSON specs в `.harness/hooks/*.json` + Python реализации. See [§5](#5-12-встроенных-хуков-builtin) (pattern builtins 5.8–5.12).
+
+**Совместимость с hot-reload:** JSON specs подхватываются FileWatcher автоматически. Изменение в файле → следующий hook dispatch использует новую spec.
+
+**Configuration thresholds (4 settings):**
+- `hooks_license_check_forbidden` — list forbidden licenses (default: GPL-3.0, AGPL-3.0, SSPL).
+- `hooks_complexity_threshold` — cyclomatic complexity threshold (default: 10).
+- `hooks_unsafe_imports_blocklist` — list dangerous imports.
+- `hooks_test_required_pattern` — git diff pattern (default: `*.py`).
+
+**Why JSON specs vs Settings strings:** Hot-reload работает с файлами. Settings strings в env vars требуют restart процесса.
+
+---
+
+## 12. Примеры
+
+### 12.1. Минимальный (log + block_dangerous)
 
 ```python
 from harness.config import Settings
@@ -532,7 +577,7 @@ await registry.register(HookSpec(
 runner = HookRunner(registry)
 ```
 
-### 9.2. Subprocess (allow / block через exit 0 / 2)
+### 12.2. Subprocess (allow / block через exit 0 / 2)
 
 ```python
 # File: /abs/hooks/audit_tool_use.py
@@ -553,7 +598,7 @@ spec = HookSpec(
 )
 ```
 
-### 9.3. HTTP (внешний API для policy enforcement)
+### 12.3. HTTP (внешний API для policy enforcement)
 
 ```python
 # Сервер: app.py → POST /enforce
@@ -578,7 +623,7 @@ spec = HookSpec(
 )
 ```
 
-### 9.4. LLM-as-hook (catch-all safety classifier)
+### 12.4. LLM-as-hook (catch-all safety classifier)
 
 ```python
 from harness.hooks.llm_hook import LLMHook
@@ -592,7 +637,7 @@ Is this safe? Respond JSON: {{"decision": "allow"|"block", "reason": "..."}}""",
 )
 ```
 
-### 9.5. Modify (privacy filter, redaction в payload)
+### 12.5. Modify (privacy filter, redaction в payload)
 
 ```python
 async def redact_pii(ctx: HookContext) -> HookDecision:
@@ -612,55 +657,60 @@ async def redact_pii(ctx: HookContext) -> HookDecision:
 
 ---
 
-## 10. Troubleshooting
+## 13. Troubleshooting
 
-### 10.1. Hook не срабатывает
+### 13.1. Hook не срабатывает
 
 - Проверьте `settings.hooks_enabled: True`.
 - Проверьте per-event флаг: `hooks_on_pre_tool_use_enabled: True` (default).
 - Проверьте `filter_chain` / `matcher` в HookSpec — может фильтровать.
 - Проверьте `hooks_max_per_event` — если зарегистрировано >10 hook'ов, лишние дропаются с warning.
 
-### 10.2. Subprocess hook крашится с "file not found"
+### 13.2. Subprocess hook крашится с "file not found"
 
 - Используйте **абсолютный путь** (`script_path="/abs/path/hook.py"`).
 - На Windows: `C:/abs/path/hook.py` (forward slashes) или `C:\\abs\\path\\hook.py`.
 - Проверьте `settings.hooks_subprocess_allowed_paths` — путь должен матчиться.
 
-### 10.3. HTTP hook всегда allow (fail-open)
+### 13.3. HTTP hook всегда allow (fail-open)
 
 - Проверьте URL доступен (curl / ping).
 - Проверьте 2xx ответ содержит JSON с полем `decision`.
 - 4xx / 5xx / timeout / network error = fail-open by design (см. §4.3).
 - Включите `settings.hooks_audit_log: True` и смотрите `aggregate.decisions[].error`.
 
-### 10.4. LLM hook "llm_router is None"
+### 13.4. LLM hook "llm_router is None"
 
 - Конструктор `HookRunner(llm_router=<router>)` обязателен для LLM transport.
 - Runner **не** импортирует `harness.server.llm.router` напрямую (trust boundary) — DI обязателен.
 
-### 10.5. Audit log не пишется
+### 13.5. Audit log не пишется
 
 - `settings.hooks_audit_log: True` (default False).
 - Проверьте права на запись в `<project_root>/data/audit/`.
 - Файл ротируется по дням: `hooks-2026-06-15.ndjson`, `hooks-2026-06-16.ndjson`.
 
-### 10.6. Trust boundary violation в тестах
+### 13.6. Trust boundary violation в тестах
 
 `test_hooks_trust_boundary.py` (4 проверки) валит CI если `harness.hooks/*` начнёт импортить `harness.agents` или `harness.server`. Это **by design** — hooks framework не должен зависеть от production кода (zero coupling).
 
 ---
 
-## 11. См. также
+## 14. См. также
 
-- `docs/PHASE4-HOOKS-PLAN.md` — подробный план Phase 4.0 (1082 строки, для maintainer'ов)
-- `docs/CHANGELOG.md` — v1.6.0 entry (что добавлено)
-- `docs/roadmap.md` — Phase 4 статус
-- `harness/hooks/` — исходный код
-- `tests/test_hooks_*` — 23 test file, ~276 tests
+- [`docs/PHASE4-HOOKS-PLAN.md`](PHASE4-HOOKS-PLAN.md) — подробный план Phase 4.0 (maintainer reference)
+- [`docs/CHANGELOG.md`](CHANGELOG.md) — v1.6.0 → v1.22.0 history (Phase 4.0 → 4.12)
+- [`docs/observability.md`](observability.md) — hooks metrics (`hook_dispatches_total`, `hook_duration_seconds`, `hook_rate_limited_total`, `hook_circuit_skip_total`)
+- [`docs/elicitation.md`](elicitation.md) — Elicitation event (3 транспорта: WS/long-poll/SSE)
+- [`docs/webhooks.md`](webhooks.md) — Outbound webhook fanout (Notification event)
+- [`docs/scope-api.md`](scope-api.md) — 10 RBAC scopes (`elicitation.read`, `observability.read`, `webhooks.admin`)
+- [`docs/cli.md`](cli.md) — `harness hooks` subcommand reference
+- [`docs/roadmap.md`](roadmap.md) — Phase 4 статус (10/12 step)
+- `harness/hooks/` — исходный код (16 events, 12 builtins, 4 transports)
+- `tests/test_hooks_*` / `tests/test_hook_*` — 40+ test files, ~600 tests
 - [Anthropic context engineering — Hooks](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/hooks) — upstream reference
 
 ---
 
-**Версия документа:** v1.6.0 (2026-06-16)
-**Phase:** 4.0 — Hooks framework (ЗАКРЫТО)
+**Версия документа:** v1.22.0 (2026-06-19)
+**Phase:** 4.0–4.12 — Hooks framework (12/12 step done, Phase 4.13 webhook hardening separately documented)

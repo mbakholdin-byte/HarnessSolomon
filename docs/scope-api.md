@@ -43,19 +43,22 @@ harness auth list
 
 ## Scopes reference
 
-| Scope | Routes | Description |
-|-------|--------|-------------|
-| `agents.read` | `GET /api/v1/agents/jobs/{id}`, `GET /api/v1/agents/jobs`, `GET /api/v1/agents/health` | Read sub-agent jobs and queue stats |
-| `agents.write` | `POST /api/v1/agents/jobs` (with `pr_mode="off"`) | Enqueue sub-agent jobs |
-| `agents.pr` | `POST /api/v1/agents/jobs` (compound with `agents.write` when `pr_mode != "off"`) | Open and merge GitHub PRs via the queue (Phase 2.3) |
-| `memory.read` | `GET /api/v1/memory/search`, `GET /api/v1/memory/stats` | Search the 4-layer memory |
-| `memory.write` | `POST /api/v1/memory/notes` | Dual-write notes to memory |
-| `sessions.read` | `GET /api/v1/sessions?recent=N` | Read session metadata |
+The closed set has **10 scopes** (v1.23.0). Defined in `harness/server/auth/scopes.py`; new scopes added by extending the `Scope` enum and providing a description in `SCOPE_DESCRIPTIONS`. The capabilities endpoint (`GET /api/v1/capabilities`) reflects the closed set live.
 
-The closed set is defined in `harness/server/auth/scopes.py`; new
-scopes are added by extending the `Scope` enum and providing a
-description in `SCOPE_DESCRIPTIONS`. The capabilities endpoint
-(`GET /api/v1/capabilities`) reflects the closed set live.
+| Scope | Wire value | Routes | Phase |
+|-------|-----------|--------|-------|
+| `AGENTS_READ` | `agents.read` | `GET /api/v1/agents/jobs/{id}`, `GET /api/v1/agents/jobs`, `GET /api/v1/agents/health` | 1.6 |
+| `AGENTS_WRITE` | `agents.write` | `POST /api/v1/agents/jobs` (when `pr_mode="off"`) | 1.6 |
+| `AGENTS_PR` | `agents.pr` | `POST /api/v1/agents/jobs` (when `pr_mode != "off"`, compound with `agents.write`) | 2.3+ |
+| `MEMORY_READ` | `memory.read` | `GET /api/v1/memory/search`, `GET /api/v1/memory/stats` | 1.6 |
+| `MEMORY_WRITE` | `memory.write` | `POST /api/v1/memory/notes` | 1.6 |
+| `SESSIONS_READ` | `sessions.read` | `GET /api/v1/sessions?recent=N` | 1.6 |
+| `SESSIONS_WRITE` | `sessions.write` | `POST /api/v1/sessions/{id}/compact` (manual /compact, Phase 3 v1.4.0) | 3 v1.4.0 |
+| `OBSERVABILITY_READ` | `observability.read` | `GET /api/v1/observability/{metrics,health/deep,audit/recent,webhooks/dlq}` (Phase 4.11 v1.21.0) | 4.11 |
+| `ELICITATION_READ` | `elicitation.read` | `GET /api/v1/elicitation/sse` (SSE transport, Phase 4.11 v1.21.0) | 4.11 |
+| `WEBHOOK_ADMIN` | `webhooks.admin` | `POST /api/v1/webhooks/enable`, `POST /api/v1/observability/webhooks/dlq/{id}/replay` (Phase 4.13B v1.23.0) | 4.13B |
+
+**Matching semantics:** `has_scope(token_scopes, required)` uses **ANY** match (logical OR). A token with scopes `{memory.read, sessions.read}` can call any endpoint whose required set intersects. Empty `required` is treated as "no requirement" (returns True).
 
 ## Auth model
 
@@ -162,20 +165,30 @@ curl -s http://localhost:8765/api/v1/capabilities | jq
 
 Returns the server's self-description. **Always public** (no auth
 required) so a client with no token can still learn the auth
-surface. Shape:
+surface. Shape (v1.23.0 example):
 
 ```json
 {
-  "server_version": "0.6.0",
+  "server_version": "1.21.0",
   "auth_required": true,
   "scopes_available": [
     {"name": "agents.read", "description": "Read sub-agent jobs and queue stats (GET /api/v1/agents/jobs*)"},
-    ...
+    {"name": "agents.write", "description": "Enqueue / cancel sub-agent jobs (POST /api/v1/agents/jobs)"},
+    {"name": "agents.pr", "description": "Open and merge GitHub PRs via the merge queue (Phase 2.3+)"},
+    {"name": "memory.read", "description": "Search the 4-layer memory system (GET /api/v1/memory/*)"},
+    {"name": "memory.write", "description": "Dual-write notes to the 4-layer memory system (POST /api/v1/memory/notes)"},
+    {"name": "sessions.read", "description": "Read session metadata (GET /api/v1/sessions)"},
+    {"name": "sessions.write", "description": "Force-compact a session's context (POST /api/v1/sessions/{id}/compact, Phase 3 v1.4.0)"},
+    {"name": "observability.read", "description": "Read admin observability endpoints (metrics/health/audit, Phase 4.11 v1.21.0)"},
+    {"name": "elicitation.read", "description": "Subscribe to Elicitation questions via SSE transport (Phase 4.11 v1.21.0)"},
+    {"name": "webhooks.admin", "description": "Administer outbound webhooks: re-enable disabled URLs, list/replay the DLQ (Phase 4.13B v1.23.0)"}
   ],
   "endpoints": [
     {"method": "GET", "path": "/api/v1/agents/jobs", "scopes": ["agents.read"]},
     {"method": "POST", "path": "/api/v1/agents/jobs", "scopes": ["agents.write", "agents.pr"]},
-    ...
+    {"method": "GET", "path": "/api/v1/observability/metrics", "scopes": ["observability.read"]},
+    {"method": "POST", "path": "/api/v1/webhooks/enable", "scopes": ["webhooks.admin"]},
+    "..."
   ]
 }
 ```
@@ -290,15 +303,12 @@ Make sure `auth_required=True` (the default) and that
 substitution can drop underscores. `curl -v` shows the
 negotiated request.
 
-## Out of scope (Phase 1.6.1+ / Phase 4+)
+## Out of scope (future phases)
 
-- **Token rotation** through the API (manual via CLI in 1.6)
+- **Token rotation** through the API (manual via CLI today)
 - **Token expiry** (no TTL today — only manual revoke)
-- **Rate limiting** per token
+- **Rate limiting** per token (note: hook rate limiter exists, but per-token API rate limit does not)
 - **OAuth / OIDC** integration
 - **Per-endpoint scopes** (e.g. `agents.jobs.read` vs `agents.jobs.write`)
 - **Web UI** for token management
-- **Audit log** (Phase 4 hooks)
-- **WebSocket auth** (`/api/v1/chat/ws` with Bearer in query) — Phase 4+
-- **Migration of `/api/*` legacy routes to `/api/v1/*`** with
-  deprecation headers — Phase 4+
+- **WebSocket auth** (`/api/v1/chat/ws` with Bearer in query)
