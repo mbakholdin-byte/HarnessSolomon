@@ -1690,6 +1690,63 @@ class Settings(BaseSettings):
         description="Phase 4.1: log privacy zone decisions (Phase 3 v1.5.0).",
     )
 
+    # === Phase 4.12 v1.22.0: --follow improvements ===
+    # Persistent tail state for ``harness hooks audit --follow`` and
+    # ``harness observability metrics --follow``. See
+    # :class:`harness.cli_follow.Follower`.
+    cli_follow_default_batch_size: int = Field(
+        default=10,
+        ge=1,
+        le=10000,
+        description=(
+            "Phase 4.12 v1.22.0: default batch size for the ``--follow`` "
+            "tail loop. When the audit/metrics source emits more than "
+            "this many lines in a single read, they are yielded in "
+            "batches of this size. Override per-invocation via the CLI "
+            "``--batch-size N`` flag. Default 10 — balances output "
+            "latency against per-batch processing cost."
+        ),
+    )
+    cli_follow_state_dir: Path = Field(
+        default=Path("~/.harness").expanduser(),
+        description=(
+            "Phase 4.12 v1.22.0: directory where the ``--follow`` "
+            "tail loop stores persistent state files "
+            "(``.follow-state-{kind}.json``). Each state file records "
+            "the last-read byte offset + inode so ``--resume`` can "
+            "continue from where the previous run left off. Default "
+            "``~/.harness`` (operator's home directory). Override to "
+            "place state alongside project data (e.g. "
+            "``<project_root>/.harness/follow-state/``)."
+        ),
+    )
+
+    # === Phase 4.12 v1.22.0: Legacy /api/* → 410 Gone ===
+    # Master switch for hard-deprecation of the legacy ``/api/*`` surface.
+    # When False (default), legacy endpoints continue to serve with the
+    # existing ``Deprecation``/``Sunset``/``Link`` headers added by
+    # :class:`harness.server.deprecation.LegacyApiDeprecationMiddleware`.
+    # When True, the new :class:`harness.server.middleware.legacy_gone.
+    # LegacyApisGoneMiddleware` short-circuits every ``/api/*`` request
+    # (excluding ``/api/v1/*``) with an HTTP 410 Gone response pointing
+    # clients at the migration guide. Operators flip this AFTER the
+    # Sunset date has passed and telemetry shows ~0 legacy traffic.
+    legacy_apis_gone_enabled: bool = Field(
+        default=False,
+        description=(
+            "Phase 4.12 v1.22.0: when True, legacy ``/api/*`` endpoints "
+            "(any path starting with ``/api/`` but NOT ``/api/v1/``) "
+            "return HTTP 410 Gone with RFC 8594 ``Deprecation``/``Sunset`` "
+            "headers and a JSON body pointing at the migration guide. "
+            "Default False (opt-in) — flipping to True is a hard cutover "
+            "that breaks legacy clients. Combine with the existing "
+            "``LegacyApiDeprecationMiddleware`` headers (which stay on "
+            "regardless) for a staged deprecation: headers first (Phase "
+            "4.1), then 410 (Phase 4.12) once telemetry confirms clients "
+            "have migrated."
+        ),
+    )
+
     # === Phase 3: Embeddings (ONNX local) ===
     embeddings_dir: Path = Field(
         default=PROJECT_ROOT / "models" / "embeddings",

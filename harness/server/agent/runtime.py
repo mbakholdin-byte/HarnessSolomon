@@ -614,6 +614,14 @@ class ToolRuntime:
         from harness.hooks.context import HookContext
         from harness.hooks.runner import get_global_hook_runner
 
+        # Phase 4.12 v1.22.0: respect the ``hooks_permission_request_enabled``
+        # setting. When disabled, the PermissionRequest event is NOT emitted
+        # and the hook cannot override the denylist decision. The caller's
+        # ``initial_decision`` is returned unchanged (fail-open: the denylist
+        # still applies, only the hook-mediated override path is suppressed).
+        if not getattr(_settings, "hooks_permission_request_enabled", True):
+            return initial_decision
+
         # Truncate to 200 chars — keeps PII / large arguments out of
         # the audit log and prevents payload size blow-ups in hook
         # transports (subprocess stdin, HTTP POST body).
@@ -983,6 +991,23 @@ class ToolRuntime:
                 ok=False,
                 error="scratchpad_write_note: 'tags' must be a list[str] or omitted",
             )
+        # Phase 4.12 v1.22.0: PermissionRequest wiring for the write
+        # path. Scratchpad writes are state-mutating (a new note enters
+        # the memory), so we expose them to the hook for audit / policy
+        # overrides. There is no path-based denylist for scratchpad —
+        # the initial decision is ``allow`` and a hook MAY force ``deny``
+        # via ``block`` or ``modify`` decisions.
+        final_decision = await self._resolve_permission_via_hook(
+            tool_name="scratchpad_write_note",
+            arguments=args,
+            initial_decision="allow",
+            denied_reason="",
+        )
+        if final_decision == "deny":
+            return ToolResult(
+                ok=False,
+                error="denied: blocked by PermissionRequest hook",
+            )
         # Lazy import: avoid hard-coupling runtime.py to scratchpad_store.
         from harness.agents.scratchpad import NoteLevel
         try:
@@ -1089,6 +1114,20 @@ class ToolRuntime:
                 ok=False,
                 error="scratchpad_plan_step: 'deps' must be a list[int] or omitted",
             )
+        # Phase 4.12 v1.22.0: PermissionRequest wiring. Plan steps
+        # mutate the session plan graph — expose to the hook so a
+        # policy may block creation (e.g. quota / step-budget rules).
+        final_decision = await self._resolve_permission_via_hook(
+            tool_name="scratchpad_plan_step",
+            arguments=args,
+            initial_decision="allow",
+            denied_reason="",
+        )
+        if final_decision == "deny":
+            return ToolResult(
+                ok=False,
+                error="denied: blocked by PermissionRequest hook",
+            )
         try:
             step = await self._scratchpad.add_plan_step(
                 description, deps=deps,
@@ -1137,6 +1176,20 @@ class ToolRuntime:
                     "scratchpad_mark_done: 'status' must be one of "
                     "'pending', 'in_progress', 'done', 'blocked'"
                 ),
+            )
+        # Phase 4.12 v1.22.0: PermissionRequest wiring. Marking a plan
+        # step as done mutates the plan graph (advances state) — expose
+        # to the hook so a policy may block / audit state transitions.
+        final_decision = await self._resolve_permission_via_hook(
+            tool_name="scratchpad_mark_done",
+            arguments=args,
+            initial_decision="allow",
+            denied_reason="",
+        )
+        if final_decision == "deny":
+            return ToolResult(
+                ok=False,
+                error="denied: blocked by PermissionRequest hook",
             )
         from harness.agents.scratchpad import PlanStatus
         try:

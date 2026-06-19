@@ -1,5 +1,67 @@
 # Changelog — Solomon Harness
 
+## Phase 4.12 v1.22.0 — PermissionRequest для _bash + scratchpad, Legacy /api/* → 410 Gone middleware, Follower класс с rotation/state/batching (2026-06-19) — Phase 4 = 10/12 step
+
+**Phase 4.12 v1.22.0 — 4 new files / 5 modified files / +37 tests (34 ТЗ + 3 bonus) / 2474 total tests / 0 new required deps / +1 Settings field / trust boundary preserved**
+
+Phase 4.11 закрыл SSE Elicitation + admin observability. v1.22.0 = **3 дрейфующих долга** Phase 4.9+ закрыты одной версией.
+
+### Что закрыто
+
+**Task A — PermissionRequest в _bash + scratchpad WRITE-методах (`harness/server/agent/runtime.py` MODIFIED, 12 тестов)**:
+- 3 scratchpad WRITE-метода (`_scratchpad_write_note`, `_scratchpad_plan_step`, `_scratchpad_mark_done`) wire'нуты через `_resolve_permission_via_hook` — Phase 4.7 v1.17.0 покрыл только file tools.
+- `_bash` УЖЕ был wire'нут в v1.15.0 — дублирование не потребовалось (9→9 вызовов, не 4→9).
+- Сигнатура: `(tool_name, arguments, initial_decision, denied_reason)` — соответствует реальному коду, не псевдо-сигнатуре из ТЗ.
+- Trust boundary: PermissionRequest встроен в существующий `_resolve_permission_via_hook` (line 573), не дублирует логику.
+
+**Task B — Legacy `/api/*` → 410 Gone middleware (`harness/server/middleware/` NEW PACKAGE, 12 тестов)**:
+- `LegacyApisGoneMiddleware` возвращает 410 Gone для `/api/*` (но НЕ `/api/v1/*`).
+- RFC 8594 compliant headers: `Deprecation: true`, `Sunset: Wed, 31 Dec 2026 23:59:59 GMT`, `Link: </api/v1/>; rel="successor-version"`.
+- JSON body: `{error, message, migration_url}`.
+- **Opt-in** через `legacy_apis_gone_enabled` setting (default False) — существующие deployments продолжают работать до flip switch.
+- Читает флаг из `app.state` (не из config напрямую) — trust boundary.
+- Реорганизация: `harness/server/middleware.py` (single file) → `harness/server/middleware/` package (3 файла: `__init__.py`, `observability.py`, `legacy_gone.py`).
+- Trust boundary: импортирует ТОЛЬКО stdlib + FastAPI/Starlette — verified by AST test (`test_legacy_gone_imports_only_stdlib_and_fastapi`).
+
+**Task C — `--follow` improvements: rotation + batching + persistent state + filter regex (`harness/cli_follow.py` MODIFIED +535 LoC, 13 тестов)**:
+- Новый reusable `Follower` класс (async generator) для `--follow` режима.
+- **File rotation**: детектит inode change (POSIX) или state-file mismatch (Windows, где `st_ino=0`) → переоткрывает файл с byte 0.
+- **Batching**: буферизует до `--batch-size` строк или до паузы между poll'ами, yield'ит `list[str]`.
+- **Persistent state**: `--state-file` хранит `{kind, last_offset, last_inode, started_at}`, `--resume` подхватывает.
+- **Filter regex**: `--filter REGEX` через `re.search` на raw line.
+- **Missing file**: retry до `--missing-file-retries` (default 5) перед abort.
+- **`audit --follow`** и **`metrics --follow`** оба мигрированы на Follower (polling-based, без `watchdog` dep).
+- Trust boundary: stdlib only — verified by AST test.
+
+### Метрики
+
+| Метрика | v1.21.0 | v1.22.0 | Δ |
+|---------|---------|---------|---|
+| Total tests | 2437 | 2474 | **+37** (34 ТЗ + 3 bonus) |
+| New files | — | 4 | middleware/legacy_gone.py, test_cli_follow_v122.py, test_legacy_gone_v122.py, test_permission_request_v122.py |
+| Modified files | — | 5 | cli.py, cli_follow.py, config.py, runtime.py, app.py |
+| Total LoC (cli_follow.py) | 358 | 893 | +535 |
+| New required deps | — | 0 | (polling-based, no watchdog) |
+| New Settings fields | — | 1 | `legacy_apis_gone_enabled` (opt-in, default False) |
+| Pre-existing flakes | 1 | 1 | `test_runner_dispatches_elicitation` (Phase 4.5, не Phase 4.12) |
+| Trust boundary violations | 0 | 0 | verified by AST tests |
+| Regressions | 0 | 0 | 2402 passed, 10 skipped, 1 pre-existing flake |
+
+### Acceptance criteria
+
+- ✅ Joint Verification: PASS (37/37 новых тестов)
+- ✅ Trust Boundary AST: PASS (6/6 tests, runner + legacy_gone + observability)
+- ✅ Полный suite: 2402 passed / 0 regressions
+- ✅ 0 new required deps
+- ✅ Phase 4 = 10/12 step done (2 осталось: 4.11 webhook delivery + 4.12 final closeout)
+
+### Следующие шаги
+
+- Phase 4.13: webhook delivery + admin endpoints consolidation
+- Phase 4.14 final closeout: documentation sweep + roadmap v3.25 + Phase 5 prep
+
+---
+
 ## Phase 4.11 v1.21.0 — SSE Elicitation transport + admin observability endpoints + 2 new scopes (2026-06-18) — Phase 4 = 9/12 step
 
 **Phase 4.11 v1.21.0 — 3 new files / 4 modified files / +34 tests / 2437 total tests / 0 new required deps / +6 Settings fields**

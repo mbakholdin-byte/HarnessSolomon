@@ -2016,6 +2016,32 @@ def _build_parser() -> argparse.ArgumentParser:
             "no rotation)."
         ),
     )
+    # Phase 4.12 v1.22.0: --follow improvements (batching + state).
+    hooks_audit_p.add_argument(
+        "--batch-size", type=int, default=0, dest="batch_size",
+        help=(
+            "(--follow only) Yield lines in batches of N. When set, "
+            "switches to the Follower implementation (async, "
+            "persistent state). Default 0 = legacy single-line path "
+            "(settings.cli_follow_default_batch_size is used when "
+            "--resume / --reset is set without --batch-size)."
+        ),
+    )
+    hooks_audit_p.add_argument(
+        "--resume", action="store_true",
+        help=(
+            "(--follow only) Continue from the byte offset saved by "
+            "the previous --follow run (Phase 4.12 v1.22.0). State "
+            "is stored under settings.cli_follow_state_dir."
+        ),
+    )
+    hooks_audit_p.add_argument(
+        "--reset", action="store_true",
+        help=(
+            "(--follow only) Ignore any saved state and start from "
+            "byte 0 of the audit file (Phase 4.12 v1.22.0)."
+        ),
+    )
 
     def _dispatch_hooks_audit(a: argparse.Namespace) -> int:
         if getattr(a, "follow", False):
@@ -2121,6 +2147,34 @@ def _build_parser() -> argparse.ArgumentParser:
     obs_metrics_p.add_argument(
         "--json", action="store_true",
         help="(--follow only) Print each diff as a JSON object per line.",
+    )
+    # Phase 4.12 v1.22.0: --batch-size + --resume/--reset (parity with
+    # hooks audit --follow). --batch-size buffers diffs into batches
+    # of N entries before flushing. --resume/--reset are no-ops for
+    # in-memory counters but accepted for CLI symmetry.
+    obs_metrics_p.add_argument(
+        "--batch-size", type=int, default=0, dest="batch_size",
+        help=(
+            "(--follow only) Buffer metric diffs into batches of N "
+            "entries before flushing to stdout (Phase 4.12 v1.22.0). "
+            "Default 0 = flush each diff immediately."
+        ),
+    )
+    obs_metrics_p.add_argument(
+        "--resume", action="store_true",
+        help=(
+            "(--follow only) Accepted for CLI parity with "
+            "`hooks audit --follow` but a no-op for in-memory "
+            "counters (Phase 4.12 v1.22.0)."
+        ),
+    )
+    obs_metrics_p.add_argument(
+        "--reset", action="store_true",
+        help=(
+            "(--follow only) Accepted for CLI parity with "
+            "`hooks audit --follow` but a no-op for in-memory "
+            "counters (Phase 4.12 v1.22.0)."
+        ),
     )
 
     def _dispatch_observability_metrics(a: argparse.Namespace) -> int:

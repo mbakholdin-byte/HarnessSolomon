@@ -606,6 +606,19 @@ def create_app() -> FastAPI:
     from harness.server.middleware import install_observability_middleware
     install_observability_middleware(app)
 
+    # Phase 4.12 v1.22.0: Legacy /api/* → 410 Gone (opt-in).
+    # Installed AFTER observability so Starlette's reversed execution
+    # order means legacy_gone runs FIRST on the request path
+    # (short-circuits 410 before the route is hit) while observability
+    # still sees the 410 on the response path (records it as a metric).
+    # The master switch lives on ``app.state.legacy_apis_gone_enabled``
+    # and defaults to False — operators flip it after the Sunset date.
+    from harness.server.middleware import install_legacy_gone_middleware
+    install_legacy_gone_middleware(
+        app,
+        enabled=getattr(settings, "legacy_apis_gone_enabled", False),
+    )
+
     # Routers
     from harness.server.routes.health import router as health_router
     from harness.server.routes.sessions import router as sessions_router

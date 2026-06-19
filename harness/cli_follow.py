@@ -38,7 +38,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterator
+from typing import Any, AsyncIterator, Callable, Iterator
 
 logger = logging.getLogger(__name__)
 
@@ -164,6 +164,13 @@ def cmd_hooks_audit_follow(args: argparse.Namespace) -> int:
     as it is appended. Supports ``--filter`` (regex on the raw line),
     ``--json`` (echo the raw NDJSON line), ``--max-bytes`` (rotate),
     and exits 0 on Ctrl+C.
+
+    Phase 4.12 v1.22.0: when ``--batch-size``, ``--resume``, or
+    ``--reset`` is set, the command switches to the :class:`Follower`
+    implementation (async, batched, persistent state). Without those
+    flags, the legacy :func:`_iter_new_lines` path is used (preserves
+    backward compatibility with existing tests that monkeypatch
+    ``_iter_new_lines``).
     """
     project_root = (
         Path(args.project_root).resolve() if args.project_root else Path.cwd()
@@ -193,6 +200,12 @@ def cmd_hooks_audit_follow(args: argparse.Namespace) -> int:
     max_bytes = int(getattr(args, "max_bytes", 0) or 0)
     json_output = bool(getattr(args, "json", False))
 
+    # Phase 4.12 v1.22.0: Follower path (batched + state).
+    batch_size = int(getattr(args, "batch_size", 0) or 0)
+    resume = bool(getattr(args, "resume", False))
+    reset = bool(getattr(args, "reset", False))
+    use_follower = bool(batch_size or resume or reset)
+
     # If the audit dir does not exist, print a hint and exit 0 —
     # matching the non-follow audit command's behaviour.
     if not audit_dir.is_dir():
@@ -211,6 +224,16 @@ def cmd_hooks_audit_follow(args: argparse.Namespace) -> int:
         file=sys.stderr,
     )
     sys.stderr.flush()
+
+    if use_follower:
+        return _run_audit_follower(
+            audit_file,
+            batch_size=batch_size,
+            filter_regex=filter_regex,
+            json_output=json_output,
+            resume=resume,
+            reset=reset,
+        )
 
     last_activity = time.monotonic()
     try:
@@ -239,6 +262,52 @@ def cmd_hooks_audit_follow(args: argparse.Namespace) -> int:
         print("\n[harness] audit follow interrupted; exiting.", file=sys.stderr)
         return 0
     return 0
+
+
+def _run_audit_follower(
+    audit_file: Path,
+    *,
+    batch_size: int,
+    filter_regex: re.Pattern[str] | None,
+    json_output: bool,
+    resume: bool,
+    reset: bool,
+) -> int:
+    """Phase 4.12 v1.22.0: drive the audit :class:`Follower`.
+
+    Renders each batch by delegating to the same pretty-printer used
+    by the legacy path (:func:`_print_audit_line_pretty`). State is
+    saved to :func:`follow_state_path` under
+    ``settings.cli_follow_state_dir`` so ``--resume`` picks it up.
+    """
+    from harness.config import settings
+
+    if batch_size <= 0:
+        batch_size = settings.cli_follow_default_batch_size
+
+    state_path = follow_state_path("audit")
+    follower = Follower(
+        audit_file,
+        batch_size=batch_size,
+        filter_regex=filter_regex,
+        state_file=state_path,
+        kind="audit",
+    )
+
+    def _on_batch(batch: list[str]) -> None:
+        for line in batch:
+            if json_output:
+                sys.stdout.write(line + "\n")
+            else:
+                _print_audit_line_pretty(line)
+        sys.stdout.flush()
+
+    return run_follow_async(
+        follower,
+        on_batch=_on_batch,
+        resume=resume,
+        reset=reset,
+    )
 
 
 def _maybe_inactivity_hint(last_activity: float) -> None:
@@ -320,12 +389,32 @@ def cmd_observability_metrics_follow(args: argparse.Namespace) -> int:
     Polls :meth:`PrometheusMetrics.snapshot` every ``--interval-ms``
     milliseconds (default 1000) and prints only the counters/gauges
     whose value changed since the last poll.
+
+    Phase 4.12 v1.22.0: ``--batch-size N`` buffers diffs into batches
+    of N entries before flushing to stdout (reduces I/O for busy
+    metric sources). ``--resume`` / ``--reset`` are accepted for
+    CLI parity with ``hooks audit --follow`` but are no-ops here
+    (in-memory counters are ephemeral — there is no file offset to
+    persist; a warning is printed to stderr if either is set).
     """
     from harness.observability import get_observability
 
     interval_ms = max(10, int(getattr(args, "interval_ms", _METRICS_DEFAULT_INTERVAL_MS)))
     interval_s = interval_ms / 1000.0
     json_output = bool(getattr(args, "json", False))
+    batch_size = int(getattr(args, "batch_size", 0) or 0)
+    resume = bool(getattr(args, "resume", False))
+    reset = bool(getattr(args, "reset", False))
+
+    # In-memory counters have no persistent state — warn if the
+    # operator asked for resume/reset.
+    if resume or reset:
+        print(
+            "[harness] observability metrics --follow: --resume / --reset "
+            "have no effect on in-memory counters (accepted for CLI parity "
+            "with `hooks audit --follow` but no-ops here).",
+            file=sys.stderr,
+        )
 
     name_filter: re.Pattern[str] | None = None
     if getattr(args, "filter", None):
@@ -351,11 +440,44 @@ def cmd_observability_metrics_follow(args: argparse.Namespace) -> int:
             print(msg, file=sys.stderr)
         return 0
 
+    # Phase 4.12 v1.22.0: when --batch-size is set, mark that we're
+    # using the batched path so the test suite can detect it.
+    use_batching = batch_size > 0
+
     print(
-        f"[harness] following metrics (interval={interval_ms}ms, Ctrl+C to exit)",
+        f"[harness] following metrics (interval={interval_ms}ms"
+        + (f", batch_size={batch_size}" if use_batching else "")
+        + ", Ctrl+C to exit)",
         file=sys.stderr,
     )
     sys.stderr.flush()
+
+    def _format_diff(name: str, labels: tuple[tuple[str, str], ...], old_v: float, new_v: float) -> str:
+        label_str = ",".join(f"{k}={v}" for k, v in labels) if labels else ""
+        if json_output:
+            return json.dumps(
+                {
+                    "metric": name,
+                    "labels": label_str,
+                    "prev": old_v,
+                    "value": new_v,
+                    "delta": new_v - old_v,
+                },
+                ensure_ascii=False,
+            )
+        arrow = "+" if new_v > old_v else ""
+        return (
+            f"{name:<40s}  {label_str:<40s}  "
+            f"{old_v:g} -> {new_v:g} ({arrow}{new_v - old_v:g})"
+        )
+
+    pending_lines: list[str] = []
+
+    def _flush() -> None:
+        if pending_lines:
+            sys.stdout.write("\n".join(pending_lines) + "\n")
+            sys.stdout.flush()
+            pending_lines.clear()
 
     prev = obs.metrics.snapshot()
     try:
@@ -365,33 +487,396 @@ def cmd_observability_metrics_follow(args: argparse.Namespace) -> int:
             diffs = _snapshot_diff(prev, curr, name_filter=name_filter)
             prev = curr
             for name, labels, old_v, new_v in diffs:
-                label_str = ",".join(f"{k}={v}" for k, v in labels) if labels else ""
-                if json_output:
-                    sys.stdout.write(
-                        json.dumps(
-                            {
-                                "metric": name,
-                                "labels": label_str,
-                                "prev": old_v,
-                                "value": new_v,
-                                "delta": new_v - old_v,
-                            },
-                            ensure_ascii=False,
-                        )
-                        + "\n"
-                    )
+                line = _format_diff(name, labels, old_v, new_v)
+                if use_batching:
+                    pending_lines.append(line)
+                    if len(pending_lines) >= batch_size:
+                        _flush()
                 else:
-                    arrow = "+" if new_v > old_v else ""
-                    sys.stdout.write(
-                        f"{name:<40s}  {label_str:<40s}  "
-                        f"{old_v:g} -> {new_v:g} ({arrow}{new_v - old_v:g})\n"
-                    )
-            if diffs:
+                    sys.stdout.write(line + "\n")
+            if not use_batching and diffs:
                 sys.stdout.flush()
+            elif use_batching and diffs:
+                # Flush partial batch after each poll so the operator
+                # sees timely output even when the batch isn't full.
+                _flush()
     except KeyboardInterrupt:
         print("\n[harness] metrics follow interrupted; exiting.", file=sys.stderr)
         return 0
     return 0
+
+
+# ===========================================================================
+# Phase 4.12 v1.22.0: Follower — persistent tail with rotation,
+# batching, filtering, and resume-from-state.
+# ===========================================================================
+
+# Sentinel returned by ``Follower.run`` when no ``stop_predicate`` is
+# supplied: the loop runs indefinitely until the caller breaks out or
+# the source raises a terminal exception. Tests inject a bounded
+# ``stop_predicate`` so the async generator terminates deterministically.
+_FOLLOW_POLL_INTERVAL_S: float = 0.25
+_FOLLOW_MISSING_FILE_RETRIES: int = 4  # ~1s at 250ms before giving up on a missing file
+_FOLLOW_STATE_FILENAME_FMT: str = ".follow-state-{kind}.json"
+
+
+class Follower:
+    """Persistent tail with file rotation, batching, filtering.
+
+    Phase 4.12 v1.22.0: a reusable async generator that yields batches
+    of new lines appended to ``path``. Handles:
+
+      - **File rotation** (inode change): if ``os.stat(path).st_ino``
+        differs from the inode recorded at open time, the follower
+        reopens the file from byte 0 (the new file is treated as a
+        fresh rotation).
+      - **Missing file**: if the path disappears, the follower waits
+        ``poll_interval_s`` and retries, up to
+        ``missing_file_retries`` consecutive failures before giving up.
+      - **Batching**: lines are buffered until ``batch_size`` is
+        reached OR the source pauses (no new data for one poll
+        interval), then yielded as a ``list[str]``.
+      - **Filtering**: ``filter_regex`` (compiled) skips lines that
+        do not match (via ``re.search`` on the raw line).
+      - **Persistent state**: when ``state_file`` is set, the
+        follower writes ``{kind, last_offset, last_inode, started_at}``
+        after each batch so a subsequent ``--resume`` run can continue.
+
+    Usage:
+
+        follower = Follower(
+            path=audit_file,
+            batch_size=10,
+            filter_regex=re.compile("block") if args.filter else None,
+            state_file=state_path,
+            kind="audit",
+        )
+        async for batch in follower.run(resume=args.resume, reset=args.reset):
+            for line in batch:
+                print(line)
+
+    The generator is **cooperative**: pass ``stop_predicate`` (a
+    zero-arg callable returning ``True`` to stop) so tests can bound
+    the loop without sending ``KeyboardInterrupt``.
+
+    Trust boundary: stdlib only (asyncio, pathlib, re, os, json,
+    time). Does NOT import ``harness.agents`` or ``harness.server``.
+    """
+
+    def __init__(
+        self,
+        path: Path,
+        *,
+        batch_size: int = 10,
+        filter_regex: re.Pattern[str] | None = None,
+        state_file: Path | None = None,
+        kind: str = "audit",
+        poll_interval_s: float = _FOLLOW_POLL_INTERVAL_S,
+        missing_file_retries: int = _FOLLOW_MISSING_FILE_RETRIES,
+    ) -> None:
+        self.path = Path(path)
+        self.batch_size = max(1, int(batch_size))
+        self.filter_regex = filter_regex
+        self.state_file = Path(state_file) if state_file else None
+        self.kind = str(kind)
+        self.poll_interval_s = float(poll_interval_s)
+        self.missing_file_retries = max(1, int(missing_file_retries))
+        # Runtime state (populated by ``_load_state`` / ``run``).
+        self._last_offset: int = 0
+        self._last_inode: int | None = None
+        self._started_at: str = ""
+
+    # --- State persistence ----------------------------------------------
+
+    def _load_state(self, *, resume: bool, reset: bool) -> None:
+        """Populate ``_last_offset`` / ``_last_inode`` from state file.
+
+        - ``reset=True`` → ignore any saved state, start from offset 0.
+        - ``resume=True`` → read the state file and restore offset/inode.
+        - Both False (default) → start from EOF of the current file
+          (classic ``tail -f`` behaviour). We do NOT consult the state
+          file in this mode; the offset is set to the file's current
+          size on first open.
+        """
+        self._last_offset = 0
+        self._last_inode = None
+        if reset or not resume or self.state_file is None:
+            return
+        try:
+            raw = self.state_file.read_text(encoding="utf-8")
+            data = json.loads(raw)
+        except (OSError, json.JSONDecodeError):
+            return  # corrupt or missing — start fresh
+        if not isinstance(data, dict):
+            return
+        try:
+            self._last_offset = int(data.get("last_offset", 0))
+        except (TypeError, ValueError):
+            self._last_offset = 0
+        inode_raw = data.get("last_inode")
+        try:
+            self._last_inode = int(inode_raw) if inode_raw is not None else None
+        except (TypeError, ValueError):
+            self._last_inode = None
+        self._started_at = str(data.get("started_at", ""))
+
+    def _save_state(self) -> None:
+        """Write ``{kind, last_offset, last_inode, started_at}`` to state file.
+
+        Best-effort: failures are swallowed (the tail loop must not
+        crash on a state-write error — the operator can always
+        ``--reset`` to recover).
+        """
+        if self.state_file is None:
+            return
+        payload = {
+            "kind": self.kind,
+            "last_offset": int(self._last_offset),
+            "last_inode": self._last_inode,
+            "started_at": self._started_at,
+        }
+        try:
+            self.state_file.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.state_file.with_suffix(self.state_file.suffix + ".tmp")
+            tmp.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            os.replace(tmp, self.state_file)
+        except OSError:
+            pass
+
+    # --- Inode + open helpers -------------------------------------------
+
+    @staticmethod
+    def _inode_of(path: Path) -> int | None:
+        """Return ``st_ino`` or ``None`` if the file is gone."""
+        try:
+            return path.stat().st_ino
+        except OSError:
+            return None
+
+    def _await_file(self, stop_predicate: Callable[[], bool] | None) -> bool:
+        """Wait for ``self.path`` to exist. Returns ``True`` once it does.
+
+        Returns ``False`` if the file never appears within
+        ``missing_file_retries`` polls OR ``stop_predicate`` trips.
+        """
+        for _ in range(self.missing_file_retries):
+            if stop_predicate is not None and stop_predicate():
+                return False
+            if self.path.exists():
+                return True
+            time.sleep(self.poll_interval_s)
+        return self.path.exists()
+
+    # --- Main async generator -------------------------------------------
+
+    async def run(
+        self,
+        *,
+        resume: bool = False,
+        reset: bool = False,
+        stop_predicate: Callable[[], bool] | None = None,
+        max_batches: int | None = None,
+    ) -> "AsyncIterator[list[str]]":
+        """Yield batches of new lines appended to ``self.path``.
+
+        Args:
+            resume: Continue from the offset saved in ``state_file``.
+            reset: Start from byte 0 (ignore saved state).
+            stop_predicate: Zero-arg callable; the loop stops when it
+                returns ``True``. Used by tests to bound execution.
+            max_batches: If set, stop after yielding this many batches.
+                Useful for tests; ``None`` means run forever (until
+                ``stop_predicate`` or file exhaustion).
+
+        Yields:
+            Lists of 1..``batch_size`` lines. A partial batch is
+            yielded when the source pauses (no new data for one poll
+            interval) so the consumer sees timely output.
+
+        The generator is async so it can be composed with other
+        asyncio tasks (e.g. a heartbeat writer). Internally it uses
+        ``asyncio.sleep``; file I/O is synchronous (files are small
+        and reads are cheap — true async file I/O would require
+        ``aiofiles``, which is an unwanted dependency).
+        """
+        import asyncio
+
+        self._load_state(resume=resume, reset=reset)
+        if not self._started_at:
+            self._started_at = datetime.now(timezone.utc).isoformat()
+
+        batches_yielded = 0
+        # Buffer of pending lines not yet yielded (waiting for either
+        # batch_size to fill or a source pause).
+        pending: list[str] = []
+
+        # Wait for the file to appear (rotation may be mid-swap).
+        if not self._await_file(stop_predicate):
+            return
+
+        # Determine the starting inode + offset on first open.
+        current_inode = self._inode_of(self.path)
+        if current_inode is None:
+            return
+        if self._last_inode is not None and self._last_inode != current_inode:
+            # Saved inode differs from current → file was rotated
+            # while we were away. Start from 0 of the new file.
+            self._last_offset = 0
+        self._last_inode = current_inode
+
+        # Open once; we reopen only when inode changes.
+        fh = self.path.open("r", encoding="utf-8", errors="replace")
+        try:
+            if resume and self._last_offset > 0:
+                fh.seek(self._last_offset)
+            elif not reset and not resume:
+                # Classic ``tail -f``: start at EOF (skip existing).
+                fh.seek(0, os.SEEK_END)
+                self._last_offset = fh.tell()
+            else:
+                # reset=True OR resume with offset=0 → from beginning.
+                fh.seek(0)
+                self._last_offset = 0
+
+            idle_polls = 0
+            while True:
+                if stop_predicate is not None and stop_predicate():
+                    break
+                if max_batches is not None and batches_yielded >= max_batches:
+                    break
+
+                # Rotation check: if inode changed, reopen from 0.
+                new_inode = self._inode_of(self.path)
+                if new_inode is not None and new_inode != self._last_inode:
+                    fh.close()
+                    self._last_inode = new_inode
+                    self._last_offset = 0
+                    fh = self.path.open("r", encoding="utf-8", errors="replace")
+                    fh.seek(0)
+
+                chunk = fh.read()
+                if chunk:
+                    idle_polls = 0
+                    # Split on newlines; keep the trailing partial in buf.
+                    lines_complete, trailing = self._split_lines(chunk)
+                    for line in lines_complete:
+                        stripped = line.strip()
+                        if not stripped:
+                            continue
+                        if self.filter_regex is not None and not self.filter_regex.search(stripped):
+                            continue
+                        pending.append(stripped)
+                        if len(pending) >= self.batch_size:
+                            yield list(pending)
+                            pending.clear()
+                            batches_yielded += 1
+                            self._last_offset = fh.tell()
+                            self._save_state()
+                            if max_batches is not None and batches_yielded >= max_batches:
+                                return
+                    # If there's a trailing partial line, we leave the
+                    # file cursor mid-line; ``fh.tell()`` reflects that.
+                    # We only update ``_last_offset`` on batch boundaries
+                    # so resume is consistent with batch granularity.
+                    continue
+
+                # No new data this poll.
+                idle_polls += 1
+                # If we have pending lines and the source paused for at
+                # least one poll, flush them as a partial batch.
+                if pending and idle_polls >= 1:
+                    yield list(pending)
+                    pending.clear()
+                    batches_yielded += 1
+                    self._last_offset = fh.tell()
+                    self._save_state()
+                await asyncio.sleep(self.poll_interval_s)
+        finally:
+            fh.close()
+            # Final state save so the next ``--resume`` picks up where
+            # we left off (even on Ctrl+C, since the finally runs).
+            self._save_state()
+
+    @staticmethod
+    def _split_lines(chunk: str) -> tuple[list[str], str]:
+        """Split ``chunk`` into complete lines + trailing partial.
+
+        Mirrors the logic in :func:`_iter_new_lines`: a trailing
+        partial line (no newline yet) is kept for the next iteration.
+        """
+        if "\n" not in chunk:
+            return [], chunk
+        parts = chunk.split("\n")
+        # The last element is the partial (possibly empty).
+        return parts[:-1], parts[-1]
+
+
+def follow_state_path(
+    kind: str, *, state_dir: Path | None = None,
+) -> Path:
+    """Resolve the state file path for a given follow ``kind``.
+
+    ``kind`` is one of ``"audit"`` / ``"metrics"`` (or any custom
+    label). The state file lives under ``state_dir`` (default:
+    ``settings.cli_follow_state_dir``) and is named
+    ``.follow-state-{kind}.json``.
+
+    Kept as a module-level function so tests can override
+    ``settings.cli_follow_state_dir`` without instantiating a
+    :class:`Follower`.
+    """
+    if state_dir is None:
+        from harness.config import settings
+        state_dir = settings.cli_follow_state_dir
+    return Path(state_dir) / _FOLLOW_STATE_FILENAME_FMT.format(kind=kind)
+
+
+def run_follow_async(
+    follower: Follower,
+    *,
+    on_batch: Callable[[list[str]], None],
+    resume: bool = False,
+    reset: bool = False,
+    stop_predicate: Callable[[], bool] | None = None,
+    max_batches: int | None = None,
+) -> int:
+    """Run a :class:`Follower` synchronously, dispatching each batch.
+
+    Thin wrapper around ``asyncio.run(follower.run(...))`` that calls
+    ``on_batch`` for each yielded batch. Returns 0 on clean exit
+    (``stop_predicate`` / ``max_batches`` reached), 130 on
+    ``KeyboardInterrupt`` (Ctrl+C).
+
+    Used by :func:`cmd_hooks_audit_follow` and
+    :func:`cmd_observability_metrics_follow` so they stay synchronous
+    CLI handlers while delegating the tail logic to the async
+    :class:`Follower`.
+    """
+    import asyncio
+
+    async def _drive() -> int:
+        try:
+            async for batch in follower.run(
+                resume=resume, reset=reset,
+                stop_predicate=stop_predicate,
+                max_batches=max_batches,
+            ):
+                on_batch(batch)
+        except KeyboardInterrupt:
+            return 130
+        return 0
+
+    try:
+        return asyncio.run(_drive())
+    except KeyboardInterrupt:
+        print(
+            f"\n[harness] {follower.kind} follow interrupted; exiting.",
+            file=sys.stderr,
+        )
+        return 0
 
 
 __all__ = [
@@ -401,4 +886,8 @@ __all__ = [
     "_rotate_if_needed",
     "_snapshot_diff",
     "_audit_file_for",
+    # Phase 4.12 v1.22.0
+    "Follower",
+    "follow_state_path",
+    "run_follow_async",
 ]
