@@ -109,6 +109,8 @@ class TestCapabilitiesEndpoint:
             "elicitation.read",    # Phase 4.11 v1.21.0
             "elicitation.write",   # v1.0.0 security fix
             "webhooks.admin",      # Phase 4.13B v1.23.0
+            "privacy.read",        # Phase 5.3 v1.25.0
+            "privacy.write",       # Phase 5.3 v1.25.0
         }
         # Each scope has a non-empty description.
         for s in body["scopes_available"]:

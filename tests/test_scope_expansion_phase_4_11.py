@@ -154,9 +154,9 @@ class TestScopeCount:
     """
 
     def test_total_scope_count_updated(self) -> None:
-        assert len(ALL_SCOPES) == 11, (
-            f"expected 11 scopes (7 baseline + 2 Phase 4.11 + "
-            f"1 Phase 4.13B + 1 Phase 5.5/v1.0.0 elicitation.write), got {len(ALL_SCOPES)}: "
+        assert len(ALL_SCOPES) == 13, (
+            f"expected 13 scopes (7 baseline + 2 Phase 4.11 + "
+            f"1 Phase 4.13B + 1 v1.0.0 elicitation.write + 2 Phase 5.3 v1.25.0 privacy), got {len(ALL_SCOPES)}: "
             f"{sorted(s.value for s in ALL_SCOPES)}"
         )
 

@@ -62,6 +62,11 @@ class Scope(str, Enum):
     # (re-enable auto-disabled URLs, list/replay the DLQ).
     WEBHOOK_ADMIN = "webhooks.admin"
 
+    # Phase 5.3 v1.25.0: privacy zones admin CRUD API
+    # (GET/POST/PUT/DELETE /api/v1/privacy/zones*).
+    PRIVACY_READ = "privacy.read"
+    PRIVACY_WRITE = "privacy.write"
+
 
 ALL_SCOPES: frozenset[Scope] = frozenset(Scope)
 
@@ -78,6 +83,8 @@ SCOPE_DESCRIPTIONS: dict[Scope, str] = {
     Scope.ELICITATION_READ: "Subscribe to Elicitation questions via SSE transport (Phase 4.11 v1.21.0)",
     Scope.ELICITATION_WRITE: "Answer Elicitation questions via WS upgrade or POST /answer endpoint, including confirm_dangerous (v1.0.0 security fix)",
     Scope.WEBHOOK_ADMIN: "Administer outbound webhooks: re-enable disabled URLs, list/replay the DLQ (Phase 4.13B v1.23.0)",
+    Scope.PRIVACY_READ: "Read privacy zone rules (GET /api/v1/privacy/zones*, Phase 5.3 v1.25.0)",
+    Scope.PRIVACY_WRITE: "Create / update / delete privacy zone rules (POST/PUT/DELETE /api/v1/privacy/zones, Phase 5.3 v1.25.0)",
 }
 
 

@@ -815,6 +815,32 @@ def create_app() -> FastAPI:
         agents_webhooks_router, prefix=expected_prefix, tags=["webhooks"],
     )
 
+    # Phase 5.3 v1.25.0: privacy zones admin CRUD API. Mounted only
+    # when ``privacy_zones_admin_enabled`` is True (opt-in) — operators
+    # who want runtime management of privacy zone rules flip the
+    # setting. When disabled, the endpoints are not registered (404).
+    # All endpoints are scope-gated via ``privacy.read`` (GET) and
+    # ``privacy.write`` (POST/PUT/DELETE) inside the router itself.
+    if getattr(settings, "privacy_zones_admin_enabled", False):
+        from harness.server.routes.privacy_zones import (
+            PrivacyZoneStore,
+            router as privacy_zones_router,
+        )
+        # Initialise the in-memory store eagerly so the first
+        # request doesn't pay the lazy-init cost. The store lives
+        # on ``app.state.privacy_zone_store`` for the lifetime of
+        # the process (no persistence to SQLite — Phase 5.3
+        # follow-up).
+        app.state.privacy_zone_store = PrivacyZoneStore()
+        app.include_router(
+            privacy_zones_router,
+            prefix="/api/v1/privacy",
+            tags=["privacy-zones"],
+        )
+        print("[harness] privacy_zones_admin: enabled (opt-in)")
+    else:
+        print("[harness] privacy_zones_admin: disabled by setting")
+
     return app
 
 

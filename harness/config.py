@@ -1855,6 +1855,115 @@ class Settings(BaseSettings):
         ),
     )
 
+    # === Phase 5.3 v1.25.0: Privacy Zones Admin CRUD API ===
+    # Master switch for the /api/v1/privacy/zones REST endpoints. When
+    # False (default), the endpoints are not mounted (404) — operators
+    # opt in to expose runtime CRUD management of privacy zone rules.
+    # The PrivacyZoneFilter continues to enforce rules loaded from
+    # Settings strings regardless of this flag; this only gates the
+    # HTTP admin surface for managing *additional* dynamic zones.
+    privacy_zones_admin_enabled: bool = Field(
+        default=False,
+        description=(
+            "Phase 5.3 v1.25.0: master switch for the privacy zones "
+            "admin CRUD REST API (``/api/v1/privacy/zones``). When "
+            "False, the endpoints return 404 (admin surface not "
+            "mounted). When True, endpoints are scope-gated via "
+            "``privacy.read`` (GET) and ``privacy.write`` (POST/PUT/"
+            "DELETE). Default False (opt-in) — operators who want "
+            "runtime CRUD management flip this to True."
+        ),
+    )
+
+    # === Phase 6.1A v1.26.0: Heuristic Tier Selector ===
+    # Lightweight heuristic routing that runs BEFORE the confidence-
+    # based cascade. Returns T1/T2/T3 or None (fall through to the
+    # confidence cascade). See ``TierSelector.select_heuristic``.
+    tier_routing_heuristic_enabled: bool = Field(
+        default=True,
+        description=(
+            "Phase 6.1A v1.26.0: master switch for the heuristic "
+            "tier selector. When True, ``TierSelector.select_heuristic`` "
+            "is consulted before the confidence cascade; when False, "
+            "it returns ``None`` unconditionally (fall-through to "
+            "explicit ``model:`` config). Default True."
+        ),
+    )
+    tier_routing_t1_max_prompt_chars: int = Field(
+        default=500,
+        ge=1,
+        description=(
+            "Phase 6.1A: maximum prompt length (chars) for T1 "
+            "eligibility. Prompts longer than this skip T1. "
+            "Default 500."
+        ),
+    )
+    tier_routing_t1_max_context_tokens: int = Field(
+        default=4000,
+        ge=1,
+        description=(
+            "Phase 6.1A: maximum context size (tokens) for T1 "
+            "eligibility. Contexts larger than this skip T1. "
+            "Default 4000."
+        ),
+    )
+    tier_routing_t3_min_prompt_chars: int = Field(
+        default=5000,
+        ge=1,
+        description=(
+            "Phase 6.1A: minimum prompt length (chars) that forces "
+            "T3. Prompts this long are routed to the premium tier "
+            "directly. Default 5000."
+        ),
+    )
+    tier_routing_t3_min_context_tokens: int = Field(
+        default=32000,
+        ge=1,
+        description=(
+            "Phase 6.1A: minimum context size (tokens) that forces "
+            "T3. Large contexts get the premium tier to maximise "
+            "quality. Default 32000."
+        ),
+    )
+    tier_routing_complexity_keywords: list[str] = Field(
+        default_factory=lambda: [
+            "reasoning", "analyze", "prove", "derive", "evaluate",
+        ],
+        description=(
+            "Phase 6.1A: case-insensitive keywords that trigger T3 "
+            "routing when present in the prompt. Indicates a complex "
+            "task that benefits from the premium tier. Default: "
+            "['reasoning', 'analyze', 'prove', 'derive', 'evaluate']."
+        ),
+    )
+
+    # === Phase 6.2: Plugin subsystem ===
+    plugins_enabled: bool = Field(
+        default=False,
+        description=(
+            "Phase 6.2: master switch for the plugin subsystem. When False, "
+            "no plugins are loaded or executed. Default False — plugins run "
+            "in subprocess sandboxes and operators must explicitly opt in."
+        ),
+    )
+    plugins_dir: Path = Field(
+        default=Path(".harness/plugins"),
+        description=(
+            "Phase 6.2: directory containing plugin .py files. Resolved "
+            "relative to settings.project_root. Plugins outside this "
+            "directory are not discovered by the registry."
+        ),
+    )
+    plugins_allowed: str = Field(
+        default="",
+        description=(
+            "Phase 6.2: comma-separated whitelist of allowed plugin names "
+            "(without .py extension) and/or scopes. Empty string = all "
+            "plugins in plugins_dir are allowed (open dev mode). Example: "
+            "``weather,github-read,slack-write``."
+        ),
+    )
+
     @model_validator(mode="after")
     def _cascade_thresholds_ordered(self) -> "Settings":
         """Guard against a misconfigured cascade + Phase 2.4 split strategy.
