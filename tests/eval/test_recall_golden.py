@@ -129,8 +129,11 @@ def test_b3_recall_rejects_k_above_corpus(
     golden_facts: list[GoldenFact],
 ) -> None:
     """measure() raises if k > corpus size AND queries is non-empty."""
+    from harness.eval.retrieval import flatten_corpus
+
     corpus = session_to_corpus(seed_session_100)
-    metric = RecallMetric(k=len(corpus) + 1)
+    flat = flatten_corpus(corpus)
+    metric = RecallMetric(k=len(flat) + 1)
     q = GoldenQuery(
         id="Q_TEST", query="x", relevant_fact_ids=("F01",),
         irrelevant_fact_ids=(), category="factual_lookup", difficulty="easy",

@@ -55,6 +55,7 @@ memory = [
     "mem0ai>=0.1",
     "sentence-transformers>=2.3",
     "FlagEmbedding>=1.2",  # bge-reranker-v2-m3
+    "numpy>=1.26",  # Phase 4.13A L2VectorStore + Phase 5.2B BM25 reranker math
 ]
 eval = [
     "datasets>=2.16",
@@ -100,4 +101,5 @@ addopts = "-v --strict-markers"
 markers = [
     "real_llm: requires a real LLM API key in env (MINIMAX_API_KEY / ZHIPUAI_API_KEY / MOONSHOT_API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY). Skipped automatically when none is set.",
     "requires_onnx: requires a local ONNX embedding model (intfloat/multilingual-e5-small) at the configured EMBEDDINGS_DIR. Skipped automatically when the model files are not present.",
+    "smoke: integration smoke test (slow — boots the real FastAPI lifespan). Run explicitly: pytest -m smoke",
 ]

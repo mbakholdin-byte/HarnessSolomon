@@ -66,7 +66,11 @@ class HybridRetriever:
         self._fetch_k = max(1, fetch_k)
 
     async def retrieve(
-        self, query: str, k: int = 5,
+        self,
+        query: str,
+        k: int = 5,
+        *,
+        channels: list[str] | None = None,
     ) -> list[tuple[Memory, float]]:
         """Return top-k ``(Memory, rrf_score)`` pairs.
 
@@ -79,6 +83,15 @@ class HybridRetriever:
         with ``TypeError: unhashable type: 'list'`` because a sync
         call is not a coroutine. We now wrap sync retrievers via
         ``asyncio.to_thread`` so ``gather`` always receives awaitables.
+
+        Phase 5.2A v1.24.0: ``channels`` parameter filters the fused
+        result by ``Memory.metadata["channel"]`` AFTER RRF fusion.
+        When ``None`` (default), no filter is applied (backward compat).
+        When set to e.g. ``["user", "tool"]``, only Memories whose
+        ``metadata["channel"]`` is in the list are returned. The filter
+        is applied AFTER fusion (not before each retriever) because
+        RRF benefits from seeing the full ranked list — restricting
+        each retriever's input would lose cross-channel signal.
         """
         # Fetch from both retrievers concurrently.
         import asyncio
@@ -110,4 +123,32 @@ class HybridRetriever:
             id_to_mem[mid] = mem
         # Sort by score descending.
         ranked = sorted(scores.items(), key=lambda kv: -kv[1])
-        return [(id_to_mem[mid], score) for mid, score in ranked[:k]]
+        results = [(id_to_mem[mid], score) for mid, score in ranked[:k]]
+        # Phase 5.2A v1.24.0: apply channel filter AFTER fusion.
+        if channels is None:
+            return results
+        channels_set = set(channels)
+        return [
+            (mem, score) for mem, score in results
+            if mem.metadata.get("channel") in channels_set
+        ]
+
+    # Phase 5.2A v1.24.0: ``search`` is an alias for ``retrieve`` to
+    # match the naming used by the retrieval pipeline (``pipeline.py``
+    # calls ``.search()`` on retrievers). Both names accept the
+    # ``channels`` parameter.
+    async def search(
+        self,
+        query: str,
+        k: int = 5,
+        *,
+        channels: list[str] | None = None,
+    ) -> list[tuple[Memory, float]]:
+        """Alias for :meth:`retrieve` (Phase 5.2A v1.24.0).
+
+        Some call sites (``harness.memory.retrieval.pipeline``) invoke
+        ``.search()`` on the retriever. This alias keeps the
+        ``HybridRetriever`` Protocol-compatible with both ``retrieve``
+        and ``search`` call sites.
+        """
+        return await self.retrieve(query, k=k, channels=channels)

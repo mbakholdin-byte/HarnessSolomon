@@ -82,8 +82,9 @@ async def corpus_with_embeddings(
 ) -> list["Memory"]:
     """Seed session + pre-computed embeddings in Memory.metadata."""
     from harness.memory.schema import Memory
+    from harness.eval.retrieval import flatten_corpus
 
-    base_corpus = session_to_corpus(seed_session_100)
+    base_corpus = flatten_corpus(session_to_corpus(seed_session_100))
     texts = [m.content for m in base_corpus]
     vecs = await onnx_embedder.embed_documents(texts)
     emb_version = onnx_embedder.model_id

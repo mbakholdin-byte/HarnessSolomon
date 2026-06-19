@@ -171,8 +171,11 @@ def test_b2_precision_rejects_k_above_corpus(
     golden_facts: list[GoldenFact],
 ) -> None:
     """measure() raises if k > corpus size AND queries is non-empty."""
+    from harness.eval.retrieval import flatten_corpus
+
     corpus = session_to_corpus(seed_session_100)
-    metric = PrecisionMetric(k=len(corpus) + 1)
+    flat = flatten_corpus(corpus)
+    metric = PrecisionMetric(k=len(flat) + 1)
     # Use a minimal GoldenQuery to trigger the corpus check (empty
     # queries path is a valid no-op and skips the check).
     q = GoldenQuery(

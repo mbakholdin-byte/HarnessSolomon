@@ -39,6 +39,14 @@ from harness.eval.retrieval import (
     RecallResult,
     session_to_corpus,
 )
+from harness.eval.filler import (
+    FillerDetector,
+    FillerDetectorConfig,
+)
+from harness.eval.reranker import (
+    LengthNormalizedReranker,
+    RerankerConfig,
+)
 from harness.eval.compaction_loss import (
     CompactionLossMetric,
     LossResult,
@@ -59,6 +67,10 @@ __all__ = [
     "PrecisionResult",
     "RecallMetric",
     "RecallResult",
+    "FillerDetector",
+    "FillerDetectorConfig",
+    "LengthNormalizedReranker",
+    "RerankerConfig",
     "CompactionLossMetric",
     "LossResult",
     "EvalRunner",

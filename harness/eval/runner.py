@@ -18,6 +18,8 @@ Usage::
 """
 from __future__ import annotations
 
+from typing import Union
+
 from harness.eval.compaction_loss import CompactionLossMetric, LossResult
 from harness.eval.golden import GoldenFact, GoldenQuery
 from harness.eval.retention import ContextRetentionMetric, RetentionResult
@@ -29,6 +31,10 @@ from harness.eval.retrieval import (
     session_to_corpus,
 )
 from harness.memory.schema import Memory
+
+# Phase 5.2A v1.24.0: corpus may be a channel-separated dict OR a
+# legacy flat list. Both metric classes accept either shape.
+CorpusInput = Union[dict[str, list[Memory]], list[Memory]]
 
 
 class EvalRunner:
@@ -65,32 +71,48 @@ class EvalRunner:
 
     async def run_precision(
         self,
-        corpus: list[Memory],
+        corpus: CorpusInput,
         queries: list[GoldenQuery],
         facts: list[GoldenFact],
         k: int = 5,
         threshold_target: float = 0.7,
+        *,
+        channels: list[str] | None = None,
     ) -> PrecisionResult:
         """Run B2 — precision@k (default k=5).
 
         Sync metric wrapped in async for runner interface consistency.
+
+        Phase 5.2A v1.24.0: ``corpus`` may be a channel-separated dict
+        (from ``session_to_corpus``) or a legacy flat list. ``channels``
+        optionally filters which channels contribute to the BM25 corpus.
         """
-        metric = PrecisionMetric(k=k, threshold_target=threshold_target)
+        metric = PrecisionMetric(
+            k=k, threshold_target=threshold_target, channels=channels,
+        )
         return metric.measure(corpus, queries, facts)
 
     async def run_recall(
         self,
-        corpus: list[Memory],
+        corpus: CorpusInput,
         queries: list[GoldenQuery],
         facts: list[GoldenFact],
         k: int = 20,
         threshold_target: float = 0.85,
+        *,
+        channels: list[str] | None = None,
     ) -> RecallResult:
         """Run B3 — recall@k (default k=20).
 
         Sync metric wrapped in async for runner interface consistency.
+
+        Phase 5.2A v1.24.0: ``corpus`` may be a channel-separated dict
+        (from ``session_to_corpus``) or a legacy flat list. ``channels``
+        optionally filters which channels contribute to the BM25 corpus.
         """
-        metric = RecallMetric(k=k, threshold_target=threshold_target)
+        metric = RecallMetric(
+            k=k, threshold_target=threshold_target, channels=channels,
+        )
         return metric.measure(corpus, queries, facts)
 
 

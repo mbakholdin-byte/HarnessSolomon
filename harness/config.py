@@ -1825,6 +1825,36 @@ class Settings(BaseSettings):
         ),
     )
 
+    # === Phase 5.2B v1.24.0: Eval pipeline — filler + reranker ===
+    eval_filler_filter_enabled: bool = Field(
+        default=True,
+        description=(
+            "Phase 5.2B: when True, the PrecisionMetric pipeline "
+            "drops filler documents (LLM preambles, too-short / "
+            "too-long turns) before precision@k scoring. Disable "
+            "for corpora where every turn is a candidate fact."
+        ),
+    )
+    eval_reranker_enabled: bool = Field(
+        default=True,
+        description=(
+            "Phase 5.2B: when True, the PrecisionMetric pipeline "
+            "applies length-normalised re-ranking after BM25 "
+            "retrieval so extreme-length outliers don't dominate "
+            "the top-K. Disable to measure raw BM25 precision."
+        ),
+    )
+    eval_filler_max_doc_len: int = Field(
+        default=2000,
+        ge=100,
+        description=(
+            "Phase 5.2B: documents longer than this (chars) are "
+            "treated as fillers by FillerDetector. Catches log "
+            "dumps, stack traces pasted whole, etc. Lower for "
+            "tight corpora; raise for long-form documents."
+        ),
+    )
+
     @model_validator(mode="after")
     def _cascade_thresholds_ordered(self) -> "Settings":
         """Guard against a misconfigured cascade + Phase 2.4 split strategy.

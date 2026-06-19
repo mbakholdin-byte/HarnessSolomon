@@ -218,7 +218,7 @@ def load_session_messages(path: Path) -> list[dict[str, Any]]:
 
 def fact_id_to_relevant_memory_id(
     facts: list[GoldenFact],
-    corpus: list[Memory],
+    corpus: "list[Memory] | dict[str, list[Memory]]",
 ) -> dict[str, str]:
     """Map ``GoldenFact.id`` → single ``Memory.id`` via phrase substring.
 
@@ -243,10 +243,16 @@ def fact_id_to_relevant_memory_id(
     205 messages = ~10K operations, sub-millisecond on the standard
     fixture.
 
+    Phase 5.2A v1.24.0: ``corpus`` may be a channel-separated dict
+    (from ``session_to_corpus``) or a legacy flat list. When a dict
+    is passed, ALL channels in the dict are scanned (the mapping
+    needs to find the fact regardless of which channel it lives in).
+
     Args:
         facts: Marked facts in the seed session.
-        corpus: ``Memory`` records built from the same seed session
-            (one Memory per message, in order). The B-mini pattern is
+        corpus: Either a flat ``list[Memory]`` (legacy) or a
+            channel-separated ``dict[str, list[Memory]]`` (Phase 5.2A).
+            The B-mini pattern is
             ``Memory(id=f"m{i}", content=json.dumps(msg), ...)``.
 
     Returns:
@@ -255,11 +261,18 @@ def fact_id_to_relevant_memory_id(
         100-turn session), the fact maps to an empty string and the
         metric skips that query.
     """
+    # Phase 5.2A v1.24.0: normalise dict corpus → flat list.
+    if isinstance(corpus, dict):
+        flat: list[Memory] = []
+        for mems in corpus.values():
+            flat.extend(mems)
+    else:
+        flat = list(corpus)
     result: dict[str, str] = {}
     for f in facts:
         phrase_lower = f.phrase.lower()
         match: str | None = None
-        for m in corpus:
+        for m in flat:
             if phrase_lower in m.content.lower():
                 match = m.id
                 break
