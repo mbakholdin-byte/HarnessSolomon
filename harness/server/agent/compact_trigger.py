@@ -36,6 +36,8 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
+from harness.hooks.runner import safe_fire  # Phase 4.13A v1.23.0: OnCompaction hook
+
 if TYPE_CHECKING:  # pragma: no cover
     from harness.context.compaction import CompactResult
 
@@ -135,6 +137,53 @@ class CompactTrigger:
                 "cache_hit": result.cache_hit,
             },
         )
+        # Phase 4.13A v1.23.0: OnCompaction hook. Hot-path safe_fire —
+        # fired AFTER the audit entry so a hook ``block`` decision is
+        # purely advisory (the compact already ran). The payload matches
+        # the Phase 4.13A spec:
+        # ``{session_id, agent_id, pre_tokens, post_tokens, ratio,
+        #    trigger_reason}`` plus the schema-required
+        # ``summary_preview`` / ``saved_tokens`` so advisory schema
+        # validation in ``OnCompactionPayload`` passes.
+        pre_tokens = int(result.original_tokens)
+        post_tokens = int(result.compacted_tokens)
+        ratio = (
+            post_tokens / pre_tokens
+            if pre_tokens > 0
+            else 0.0
+        )
+        try:
+            await safe_fire(
+                "OnCompaction",
+                session_id=session_id,
+                agent_id="",
+                payload={
+                    # Phase 4.13A spec fields.
+                    "session_id": session_id,
+                    "agent_id": "",
+                    "pre_tokens": pre_tokens,
+                    "post_tokens": post_tokens,
+                    "ratio": round(ratio, 4),
+                    "trigger_reason": (
+                        "manual" if not bypass_cache else "manual_bypass_cache"
+                    ),
+                    # Schema-required fields (OnCompactionPayload).
+                    "summary_preview": (
+                        result.summary_preview[:200]
+                        if result.summary_preview
+                        else ""
+                    ),
+                    "saved_tokens": int(result.saved_tokens),
+                    # Diagnostic.
+                    "cache_hit": bool(result.cache_hit),
+                },
+            )
+        except Exception:  # noqa: BLE001 — hook failure must never break compact
+            logger.debug(
+                "OnCompaction safe_fire failed for session=%s",
+                session_id,
+                exc_info=True,
+            )
         return result
 
     def _safe_audit(self, event: str, payload: dict[str, Any]) -> None:

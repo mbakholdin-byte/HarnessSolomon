@@ -2232,6 +2232,84 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     obs_stats_p.set_defaults(func=_cmd_observability_stats_impl)
+    # === Phase 4.13B v1.23.0: ``observability webhooks dlq`` ===
+    # Subcommand for listing + replaying the outbound webhook DLQ.
+    # Reuses the same base-url / token / json flags as the other
+    # observability subcommands for consistency.
+    from harness.cli_observability import (
+        _cmd_webhooks_dlq as _cmd_webhooks_dlq_impl,
+    )
+    obs_webhooks_p = obs_sub.add_parser(
+        "webhooks",
+        help=(
+            "Outbound webhook admin (Phase 4.13B v1.23.0). "
+            "Subcommand: dlq."
+        ),
+    )
+    obs_webhooks_sub = obs_webhooks_p.add_subparsers(
+        dest="webhooks_command"
+    )
+    obs_dlq_p = obs_webhooks_sub.add_parser(
+        "dlq",
+        help="List or replay outbound webhook DLQ entries.",
+    )
+    obs_dlq_sub = obs_dlq_p.add_subparsers(dest="dlq_action")
+    # dlq list
+    obs_dlq_list_p = obs_dlq_sub.add_parser(
+        "list", help="List recent unreplayed DLQ entries (default).",
+    )
+    obs_dlq_list_p.add_argument(
+        "--limit", type=int, default=100,
+        help="Max entries (default 100, server caps at 1000).",
+    )
+    obs_dlq_list_p.add_argument(
+        "--include-replayed", action="store_true",
+        help="Also show already-replayed entries (audit history).",
+    )
+    obs_dlq_list_p.add_argument(
+        "--base-url", default="http://127.0.0.1:8765",
+        help="Harness server base URL (default %(default)s).",
+    )
+    obs_dlq_list_p.add_argument(
+        "--token", default="",
+        help="Admin API token (required when auth_required=True).",
+    )
+    obs_dlq_list_p.add_argument(
+        "--json", action="store_true",
+        help="Emit raw JSON response.",
+    )
+    obs_dlq_list_p.set_defaults(
+        func=_cmd_webhooks_dlq_impl, dlq_action="list",
+    )
+    # dlq replay
+    obs_dlq_replay_p = obs_dlq_sub.add_parser(
+        "replay", help="Re-send a DLQ entry's payload with the current secret.",
+    )
+    obs_dlq_replay_p.add_argument(
+        "dlq_id", type=int, help="DLQ entry id (from `dlq list`).",
+    )
+    obs_dlq_replay_p.add_argument(
+        "--base-url", default="http://127.0.0.1:8765",
+        help="Harness server base URL (default %(default)s).",
+    )
+    obs_dlq_replay_p.add_argument(
+        "--token", default="",
+        help="Admin API token (required when auth_required=True).",
+    )
+    obs_dlq_replay_p.add_argument(
+        "--json", action="store_true",
+        help="Emit raw JSON response.",
+    )
+    obs_dlq_replay_p.set_defaults(
+        func=_cmd_webhooks_dlq_impl, dlq_action="replay",
+    )
+    # Default dlq action when bare `observability webhooks dlq`.
+    obs_dlq_p.set_defaults(
+        func=_cmd_webhooks_dlq_impl, dlq_action="list",
+    )
+    obs_webhooks_p.set_defaults(
+        func=_cmd_webhooks_dlq_impl, dlq_action="list",
+    )
     # If no subcommand, default to "log" (most common entry point).
     obs_p.set_defaults(func=_cmd_observability_log_impl)
 

@@ -36,11 +36,17 @@ When ``t1_model`` is empty / None (e.g. CI without Ollama), T1 is
 """
 from __future__ import annotations
 
+import asyncio
+import logging
+import time
 from dataclasses import dataclass
 
 from pydantic import BaseModel, Field
 
 from harness.config import settings
+from harness.hooks.runner import safe_fire  # Phase 4.13A v1.23.0: OnRoutingDecision
+
+logger = logging.getLogger(__name__)
 
 
 # === Constants ===
@@ -191,6 +197,91 @@ class TierSelector:
                 f"→ T3 ({self.t3_model})"
             ),
         )
+
+    # === Phase 4.13A v1.23.0: select() with OnRoutingDecision hook ========
+
+    def select(
+        self,
+        confidence: float,
+        *,
+        fallback: bool = False,
+        prompt_tokens: int = 0,
+        session_id: str = "",
+        agent_id: str = "",
+    ) -> CascadeDecision:
+        """Phase 4.13A: ``select_tier`` + ``OnRoutingDecision`` fire.
+
+        This is the **instrumented** entry point for tier selection.
+        It delegates to :meth:`select_tier` for the actual decision
+        logic (so all unit tests of the threshold cascade keep
+        working unchanged), measures the selection latency, and
+        fires the ``OnRoutingDecision`` hook with the Phase 4.13A
+        payload:
+
+            {session_id, agent_id, prompt_tokens, selected_tier,
+             model_id, latency_ms, cost_usd}
+
+        Cost is left at ``0.0`` here — the TierSelector has no
+        access to the cost table. The hook consumer (or a follow-up
+        ``emit_llm_call``) is responsible for computing the actual
+        USD cost from ``model_id`` + ``prompt_tokens``.
+
+        Hot-path: ``safe_fire`` is async; this method is sync. We
+        schedule the fire via ``loop.create_task`` when a running
+        event loop is available, and swallow the ``RuntimeError``
+        otherwise (tests, CLI, REPL). The selection decision itself
+        is returned synchronously and never blocked by the hook.
+
+        Args:
+            confidence: Router self-confidence in ``[0, 1]``.
+            fallback:   ``True`` if the router fell back.
+            prompt_tokens: Prompt size for the upcoming LLM call
+                (informational; ``0`` when unknown).
+            session_id:   Session id (propagated to the hook).
+            agent_id:     Agent id (propagated to the hook).
+
+        Returns:
+            The :class:`CascadeDecision` from :meth:`select_tier`.
+        """
+        start = time.monotonic()
+        decision = self.select_tier(confidence, fallback=fallback)
+        latency_ms = round((time.monotonic() - start) * 1000.0, 3)
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(
+                safe_fire(
+                    "OnRoutingDecision",
+                    session_id=session_id,
+                    agent_id=agent_id,
+                    payload={
+                        # Phase 4.13A spec fields.
+                        "session_id": session_id,
+                        "agent_id": agent_id,
+                        "prompt_tokens": int(prompt_tokens),
+                        "selected_tier": decision.tier,
+                        "model_id": decision.chosen_model,
+                        "latency_ms": latency_ms,
+                        "cost_usd": 0.0,
+                        # Diagnostic fields for hook consumers.
+                        "confidence": float(confidence),
+                        "fallback": bool(fallback),
+                        "reason": decision.reason,
+                    },
+                )
+            )
+        except RuntimeError:
+            # No running event loop — fire-and-forget is not possible.
+            # We intentionally do NOT call ``asyncio.run`` here because
+            # the sync contract of ``select`` must not block on a hook
+            # that may have transports with non-trivial latency.
+            pass
+        except Exception:  # noqa: BLE001 — hot path must never break
+            logger.debug(
+                "OnRoutingDecision safe_fire failed for tier=%s",
+                decision.tier,
+                exc_info=True,
+            )
+        return decision
 
 
 # === Convenience: one-call helper ===

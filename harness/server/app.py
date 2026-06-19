@@ -756,6 +756,26 @@ def create_app() -> FastAPI:
         print("[harness] observability_admin: enabled (scope=observability.read)")
     else:
         print("[harness] observability_admin: disabled by setting")
+    # Phase 4.13B v1.23.0: outbound webhook admin endpoints
+    # (POST /api/v1/webhooks/{url}/enable for re-enabling auto-disabled
+    # URLs). Mounted at /api/v1 so the path matches the existing
+    # agents_webhooks receiver namespace. The DLQ list + replay
+    # endpoints live under observability_admin (above) because they
+    # share the OBSERVABILITY_READ scope for listing.
+    if getattr(settings, "webhook_admin_enabled", True):
+        from harness.server.routes.webhooks_admin import (
+            router as webhooks_admin_router,
+        )
+        app.include_router(
+            webhooks_admin_router,
+            prefix="/api/v1",
+            tags=["webhooks-admin"],
+        )
+        print(
+            "[harness] webhooks_admin: enabled (scope=webhooks.admin)"
+        )
+    else:
+        print("[harness] webhooks_admin: disabled by setting")
     # Phase 2.2: merge-queue HTTP API. Phase 1.6: routes now require
     # ``agents.read`` via ``Depends(require_scope(Scope.AGENTS_READ))``.
     app.include_router(agents_jobs_router, prefix="/api/v1/agents", tags=["agents"])

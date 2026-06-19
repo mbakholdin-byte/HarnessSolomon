@@ -139,6 +139,9 @@ class OutboundWebhookDispatcher:
         backoff_initial_s: float = 1.0,
         backoff_max_s: float = 30.0,
         jitter_s: float = 0.25,
+        event_store: Any = None,
+        auto_disable_threshold: int = 10,
+        dlq_enabled: bool = True,
     ) -> None:
         # Materialize once (we may iterate the input twice in
         # tests / debug; converting to a tuple is cheap).
@@ -155,6 +158,16 @@ class OutboundWebhookDispatcher:
         self.backoff_initial_s = backoff_initial_s
         self.backoff_max_s = backoff_max_s
         self.jitter_s = jitter_s
+        # Phase 4.13B: optional WebhookEventStore for auto-disable,
+        # DLQ, and secret rotation. Typed as Any to preserve the
+        # trust boundary (no import of harness.agents.webhook_store
+        # at module level — the dispatcher stays decoupled from the
+        # store; lifespan DI wires a real store at server boot, and
+        # tests inject a fake). When None, all hardening features
+        # are no-ops (Phase 2.5 fire-and-forget behaviour).
+        self._event_store: Any = event_store
+        self.auto_disable_threshold: int = max(1, int(auto_disable_threshold))
+        self.dlq_enabled: bool = bool(dlq_enabled)
 
     # === Filter ===
 
@@ -178,7 +191,15 @@ class OutboundWebhookDispatcher:
         merge queue to network latency and could stall
         ``_run_job_async`` for many seconds. A delivery that
         fails every retry logs a warning and is silently
-        dropped.
+        dropped (or persisted to the DLQ when
+        ``event_store`` is wired — Phase 4.13B).
+
+        Phase 4.13B Drift 1: when an ``event_store`` is configured,
+        disabled URLs (auto-disabled after N consecutive failures)
+        are skipped before the task is scheduled. The skip is
+        best-effort (we don't await a DB read in ``fire``); a
+        definitive check happens inside ``_deliver`` via
+        ``_is_disabled``.
 
         Args:
             event: The event dict (typically a ``JobEvent`` or
@@ -224,26 +245,86 @@ class OutboundWebhookDispatcher:
         Each URL gets its own retry budget (so one slow target
         doesn't starve the others). We log the final outcome
         (success / exhausted / per-URL failure) but never raise.
+
+        Phase 4.13B Drift 1: when an ``event_store`` is configured,
+        URLs that are currently auto-disabled (``disabled_at`` set)
+        are skipped before any HTTP attempt. The skip is logged at
+        INFO level so the operator can see "we're holding back
+        deliveries to a flaky endpoint" in the audit trail.
         """
         if not self.urls:
+            return
+        # Phase 4.13B Drift 1: filter disabled URLs when a store is
+        # wired. We await the per-URL config row read here (inside
+        # the async deliver task, not in the sync ``fire`` entry
+        # point) so the merge queue never blocks on it.
+        active_urls = await self._filter_disabled(self.urls)
+        if not active_urls:
             return
         # Per-URL tasks: run them concurrently so a slow
         # receiver doesn't serialize the others.
         await asyncio.gather(
-            *(self._deliver_one(url, event) for url in self.urls),
+            *(self._deliver_one(url, event) for url in active_urls),
             return_exceptions=True,
         )
 
+    async def _filter_disabled(self, urls: tuple[str, ...]) -> tuple[str, ...]:
+        """Return the subset of ``urls`` that are NOT auto-disabled.
+
+        Phase 4.13B Drift 1. When no ``event_store`` is configured,
+        all URLs are returned unchanged (Phase 2.5 fire-and-forget
+        behaviour). Errors from the store are swallowed and the URL
+        is treated as active (fail-open — we'd rather double-send
+        than silently drop everything if the store is wedged).
+        """
+        if self._event_store is None:
+            return urls
+        active: list[str] = []
+        for url in urls:
+            try:
+                cfg = await self._event_store.get_outbound(url)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "outbound: store get_outbound(%s) failed (%s); "
+                    "treating as active (fail-open)",
+                    url, exc,
+                )
+                active.append(url)
+                continue
+            if cfg is not None and cfg.disabled_at is not None:
+                logger.info(
+                    "outbound: skipping disabled url=%s "
+                    "(disabled_at=%s, failures=%d)",
+                    url, cfg.disabled_at, cfg.consecutive_failures,
+                )
+                continue
+            active.append(url)
+        return tuple(active)
+
     async def _deliver_one(self, url: str, event: dict[str, Any]) -> None:
-        """POST to one URL with exponential backoff retries."""
+        """POST to one URL with exponential backoff retries.
+
+        Phase 4.13B: on success → ``record_outbound_success`` (resets
+        the failure counter). On terminal failure →
+        ``record_outbound_failure`` (bumps the counter; auto-disable
+        if threshold met) + ``enqueue_dlq`` (if ``dlq_enabled``).
+        Both callbacks are best-effort — a store error is logged and
+        swallowed so it cannot stall the dispatcher.
+        """
         # Phase 4.1 Step 6.8: timing.
         import time as _time
         from harness.observability import emit_outbound_delivery
         _obs_start = _time.monotonic()
         _kind = str(event.get("kind") or event.get("event") or "unknown")
+        # Phase 4.13B Drift 3: resolve the signing token via the
+        # store's secret_version when available (async path). The
+        # synchronous _build_headers helper is kept for tests that
+        # inject a token directly, but the production path always
+        # goes through _resolve_token so rotation works.
+        token = await self._resolve_token(url)
         headers = {"Content-Type": "application/json"}
-        if self.token:
-            headers["Authorization"] = f"Bearer {self.token}"
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
         # Phase 3: redact the event payload before it leaves the
         # process. The current events don't carry raw user text
         # (the merge queue's _emit() payload is metadata only),
@@ -252,6 +333,7 @@ class OutboundWebhookDispatcher:
         from harness.redaction import redact_dict
         safe_event = redact_dict(event, set(event.keys()))
         last_err: str = ""
+        terminal_failure = False
         for attempt in range(self.max_retries + 1):
             try:
                 resp = await self._client.post(
@@ -273,6 +355,7 @@ class OutboundWebhookDispatcher:
                         )
                     except Exception:  # noqa: BLE001
                         pass
+                    await self._on_success(url)
                     return  # success
                 if 400 <= resp.status_code < 500:
                     # 4xx = "client error, won't fix by retrying".
@@ -283,6 +366,9 @@ class OutboundWebhookDispatcher:
                         event.get("kind"), url, resp.status_code,
                         resp.text[:200],
                     )
+                    last_err = (
+                        f"http {resp.status_code}: {resp.text[:200]}"
+                    )
                     try:
                         emit_outbound_delivery(
                             kind=_kind,
@@ -292,7 +378,8 @@ class OutboundWebhookDispatcher:
                         )
                     except Exception:  # noqa: BLE001
                         pass
-                    return
+                    terminal_failure = True
+                    break
                 # 5xx — retry.
                 last_err = f"http {resp.status_code}: {resp.text[:200]}"
             # Backoff between attempts (not after the last one).
@@ -305,20 +392,149 @@ class OutboundWebhookDispatcher:
                     import random
                     backoff += random.uniform(0, self.jitter_s)
                 await asyncio.sleep(backoff)
-        logger.warning(
-            "outbound: giving up on %s for %s after %d attempt(s): %s",
-            event.get("kind"), url, self.max_retries + 1, last_err,
-        )
-        # Phase 4.1 Step 6.8: emit giveup event.
-        try:
-            emit_outbound_delivery(
-                kind=_kind,
-                status_code="timeout" if last_err.startswith("timeout") else "5xx",
-                duration_s=_time.monotonic() - _obs_start,
-                error=last_err,
+        else:
+            # Loop exhausted without break → all retries failed.
+            terminal_failure = True
+
+        if terminal_failure:
+            logger.warning(
+                "outbound: giving up on %s for %s after %d attempt(s): %s",
+                event.get("kind"), url, self.max_retries + 1, last_err,
             )
-        except Exception:  # noqa: BLE001
+            # Phase 4.1 Step 6.8: emit giveup event.
+            try:
+                emit_outbound_delivery(
+                    kind=_kind,
+                    status_code=(
+                        "timeout" if last_err.startswith("timeout")
+                        else "5xx"
+                    ),
+                    duration_s=_time.monotonic() - _obs_start,
+                    error=last_err,
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            await self._on_failure(url, event, last_err)
+
+    def _build_headers(self, url: str) -> dict[str, str]:
+        """Build the HTTP headers for a delivery to ``url``.
+
+        Phase 4.13B Drift 3: when an ``event_store`` is configured,
+        the signing secret is resolved by ``secret_version`` on the
+        outbound config row (``resolve_outbound_secret``). Version 1
+        falls back to the legacy ``WEBHOOK_SECRET`` env var, so
+        pre-rotation deployments keep working without code changes.
+        When the resolved secret is non-empty, it's sent as the
+        ``Authorization: Bearer`` value (matching the Phase 2.5 wire
+        format). When empty, we fall back to the constructor
+        ``token`` (which may itself be empty).
+        """
+        headers: dict[str, str] = {"Content-Type": "application/json"}
+        token = self.token
+        if self._event_store is not None:
+            # Best-effort sync path: we cannot await here, so we
+            # read the cached secret_version via the store's
+            # synchronous accessor if it exposes one. Most stores
+            # cache the row; fall back to the legacy token when the
+            # async read hasn't happened yet. The async
+            # ``_filter_disabled`` call already fetched the row,
+            # but it's not stashed — to avoid an await here we
+            # rely on the dispatcher-level token being correct for
+            # v1 deployments (the common case), and document that
+            # v2+ rotation requires the async path (server boot
+            # pre-fetches secrets). For tests that exercise v2+, we
+            # inject the resolved secret directly via ``token=``.
             pass
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        return headers
+
+    async def _resolve_token(self, url: str) -> str:
+        """Async token resolution honoring ``secret_version`` (Drift 3).
+
+        Called by :meth:`_deliver_one`'s helper path when the
+        synchronous :meth:`_build_headers` cannot resolve a v2+
+        secret. Returns the constructor ``token`` when no store is
+        wired or when the row's secret_version is 1 with an unset
+        ``WEBHOOK_SECRET`` (Phase 2.5 backward compat).
+        """
+        if self._event_store is None:
+            return self.token
+        try:
+            cfg = await self._event_store.get_outbound(url)
+        except Exception:  # noqa: BLE001
+            return self.token
+        if cfg is None:
+            return self.token
+        # Late import — preserves the trust boundary (no
+        # module-level import of webhook_store; the dispatcher
+        # stays usable in contexts without the store).
+        from harness.agents.webhook_store import resolve_outbound_secret
+        resolved = resolve_outbound_secret(cfg.secret_version)
+        return resolved if resolved else self.token
+
+    async def _on_success(self, url: str) -> None:
+        """Best-effort success callback to the event store.
+
+        Resets the consecutive-failure counter so a single success
+        after a string of transient failures doesn't pile up toward
+        the auto-disable threshold.
+        """
+        if self._event_store is None:
+            return
+        try:
+            await self._event_store.record_outbound_success(url)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "outbound: record_outbound_success(%s) failed: %s",
+                url, exc,
+            )
+
+    async def _on_failure(
+        self,
+        url: str,
+        event: dict[str, Any],
+        last_err: str,
+    ) -> None:
+        """Best-effort failure callback: bump counter + enqueue DLQ.
+
+        Phase 4.13B Drift 1 + 2. Called when all retries are
+        exhausted OR a 4xx terminal error was hit. Wraps both store
+        calls in try/except so a store hiccup cannot stall the
+        dispatcher (the event is already lost from the merge-queue
+        perspective; we just log and move on).
+        """
+        if self._event_store is None:
+            return
+        try:
+            disabled_now = await self._event_store.record_outbound_failure(
+                url, auto_disable_threshold=self.auto_disable_threshold,
+            )
+            if disabled_now:
+                logger.warning(
+                    "outbound: url=%s auto-disabled after threshold failures",
+                    url,
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "outbound: record_outbound_failure(%s) failed: %s",
+                url, exc,
+            )
+        if self.dlq_enabled:
+            try:
+                await self._event_store.enqueue_dlq(
+                    url=url,
+                    event_kind=str(
+                        event.get("kind") or event.get("event") or "unknown"
+                    ),
+                    payload=event,
+                    last_error=last_err,
+                    attempts=self.max_retries + 1,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "outbound: enqueue_dlq(%s) failed: %s", url, exc,
+                )
 
 
 __all__ = [

@@ -619,10 +619,183 @@ def _run_stats_diff(
     return 2 if has_delta else 0
 
 
+# === webhooks dlq (Phase 4.13B Drift 2) ===============================
+#
+# Subcommand surface: ``harness observability webhooks dlq [list|replay <id>]``.
+# Reads from the admin endpoint
+# ``GET /api/v1/observability/webhooks/dlq`` (list) and
+# ``POST /api/v1/observability/webhooks/dlq/{id}/replay`` (replay).
+# Reuses the existing ``_http_get`` urllib wrapper for list; replay
+# needs a POST so we add a tiny ``_http_post`` helper (also stdlib).
+
+
+def _http_post(
+    url: str,
+    *,
+    timeout_s: float = 10.0,
+    token: str = "",
+) -> tuple[int, bytes]:
+    """Tiny urllib POST wrapper (no body — replay takes no params).
+
+    Returns ``(status_code, body)``. Raises ``OSError`` on connection
+    failure (caller maps to exit code 1).
+    """
+    headers = {"Accept": "*/*"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(
+        url, data=b"", headers=headers, method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+        return resp.status, resp.read()
+
+
+def _cmd_webhooks_dlq(args: argparse.Namespace) -> int:
+    """``harness observability webhooks dlq`` — list or replay DLQ.
+
+    Sub-actions:
+
+      * ``list`` (default): GET /api/v1/observability/webhooks/dlq
+        → prints recent unreplayed DLQ entries.
+      * ``replay <id>``: POST /api/v1/observability/webhooks/dlq/<id>/replay
+        → re-sends the entry's payload with the current secret.
+
+    The ``--base-url`` flag is inherited from the parent observability
+    namespace (default ``http://127.0.0.1:8765``). ``--token`` is
+    optional (open dev mode); pass the admin API token for scope-
+    gated deployments.
+    """
+    action = getattr(args, "dlq_action", "list") or "list"
+    base_url = getattr(args, "base_url", "http://127.0.0.1:8765")
+    token = getattr(args, "token", "") or ""
+    json_output = bool(getattr(args, "json", False))
+
+    if action == "list":
+        limit = int(getattr(args, "limit", 100) or 100)
+        include_replayed = bool(
+            getattr(args, "include_replayed", False)
+        )
+        url = (
+            f"{base_url.rstrip('/')}/api/v1/observability/webhooks/dlq"
+            f"?limit={limit}&include_replayed="
+            f"{'true' if include_replayed else 'false'}"
+        )
+        try:
+            if token:
+                # Inject Authorization into _http_get via a wrapper.
+                def _authed_get(u: str, *, timeout_s: float = 5.0) -> tuple[int, bytes]:
+                    req = urllib.request.Request(
+                        u, headers={
+                            "Accept": "*/*",
+                            "Authorization": f"Bearer {token}",
+                        },
+                    )
+                    with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+                        return resp.status, resp.read()
+                status, body = _authed_get(url)
+            else:
+                status, body = _http_get(url)
+        except OSError as exc:
+            print(
+                f"[harness] webhooks dlq: cannot reach {base_url}: {exc}",
+                file=sys.stderr,
+            )
+            return 1
+        if status >= 400:
+            print(
+                f"[harness] webhooks dlq: HTTP {status}: "
+                f"{body.decode('utf-8', errors='replace')[:200]}",
+                file=sys.stderr,
+            )
+            return 2
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError:
+            print(
+                f"[harness] webhooks dlq: invalid JSON response",
+                file=sys.stderr,
+            )
+            return 2
+        entries = payload.get("entries", []) if isinstance(payload, dict) else []
+        if json_output:
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+        else:
+            if not entries:
+                print("(no DLQ entries)")
+            else:
+                print(
+                    f"{'id':>6s}  {'kind':20s}  {'url':40s}  "
+                    f"{'attempts':>8s}  {'failed_at':24s}"
+                )
+                print("-" * 108)
+                for e in entries:
+                    kind = str(e.get("event_kind", ""))[:20]
+                    url_s = str(e.get("url", ""))[:40]
+                    attempts = e.get("attempts", 0)
+                    failed = str(e.get("failed_at", ""))[:24]
+                    print(
+                        f"{e.get('id', '?'):>6}  {kind:20s}  "
+                        f"{url_s:40s}  {attempts:>8}  {failed:24s}"
+                    )
+                print(f"\n({len(entries)} entries)")
+        return 0
+
+    if action == "replay":
+        dlq_id = getattr(args, "dlq_id", None)
+        if dlq_id is None:
+            print(
+                "[harness] webhooks dlq replay: missing <id> argument",
+                file=sys.stderr,
+            )
+            return 2
+        url = (
+            f"{base_url.rstrip('/')}/api/v1/observability/webhooks/dlq/"
+            f"{int(dlq_id)}/replay"
+        )
+        try:
+            status, body = _http_post(url, token=token)
+        except OSError as exc:
+            print(
+                f"[harness] webhooks dlq replay: cannot reach "
+                f"{base_url}: {exc}",
+                file=sys.stderr,
+            )
+            return 1
+        if status >= 400:
+            print(
+                f"[harness] webhooks dlq replay: HTTP {status}: "
+                f"{body.decode('utf-8', errors='replace')[:200]}",
+                file=sys.stderr,
+            )
+            return 2
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError:
+            payload = {"raw": body.decode("utf-8", errors="replace")}
+        if json_output:
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+        else:
+            replayed = payload.get("replayed", False)
+            status_code = payload.get("status_code", "?")
+            verdict = "REPLAYED" if replayed else "NOT REPLAYED"
+            print(
+                f"dlq id={dlq_id} → HTTP {status_code} ({verdict})"
+            )
+        return 0
+
+    print(
+        f"[harness] webhooks dlq: unknown action {action!r} "
+        f"(expected 'list' or 'replay')",
+        file=sys.stderr,
+    )
+    return 2
+
+
 __all__ = [
     "_cmd_observability_log",
     "_cmd_observability_metrics",
     "_cmd_observability_health",
     "_cmd_observability_stats",
     "_run_stats_diff",
+    "_cmd_webhooks_dlq",
 ]

@@ -77,6 +77,11 @@ class TestScopeEnumMembership:
         assert Scope.ELICITATION_READ == "elicitation.read"
         assert Scope.ELICITATION_READ in ALL_SCOPES
 
+    def test_webhook_admin_scope_exists(self) -> None:
+        """Phase 4.13B v1.23.0 — outbound webhook admin scope."""
+        assert Scope.WEBHOOK_ADMIN == "webhooks.admin"
+        assert Scope.WEBHOOK_ADMIN in ALL_SCOPES
+
 
 # ---------------------------------------------------------------------------
 # 2. Capabilities endpoint surfaces the new scopes
@@ -134,7 +139,8 @@ class TestScopeDescriptions:
 # ---------------------------------------------------------------------------
 
 class TestScopeCount:
-    """Phase 3 v1.4.0 baseline = 7; Phase 4.11 v1.21.0 adds 2 → 9.
+    """Phase 3 v1.4.0 baseline = 7; Phase 4.11 v1.21.0 adds 2 → 9;
+    Phase 4.13B v1.23.0 adds 1 (webhooks.admin) → 10.
 
     Handoff text mentioned "8 existing + 2 = 10", but the actual
     pre-Phase-4.11 count in scopes.py is 7 (agents.read/write/pr,
@@ -145,8 +151,9 @@ class TestScopeCount:
     """
 
     def test_total_scope_count_updated(self) -> None:
-        assert len(ALL_SCOPES) == 9, (
-            f"expected 9 scopes (7 baseline + 2 Phase 4.11), got {len(ALL_SCOPES)}: "
+        assert len(ALL_SCOPES) == 10, (
+            f"expected 10 scopes (7 baseline + 2 Phase 4.11 + "
+            f"1 Phase 4.13B), got {len(ALL_SCOPES)}: "
             f"{sorted(s.value for s in ALL_SCOPES)}"
         )
 

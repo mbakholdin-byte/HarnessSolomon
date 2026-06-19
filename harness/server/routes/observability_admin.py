@@ -229,4 +229,191 @@ async def admin_audit_recent(
     return [_strip_pii(entry) for entry in entries]
 
 
+# === Outbound webhook DLQ (Phase 4.13B Drift 2) ========================
+#
+# The DLQ (dead-letter queue) holds outbound deliveries that exhausted
+# all retries. Operators list + replay via these endpoints. The
+# :class:`~harness.agents.webhook_store.WebhookEventStore` is DI'd via
+# ``app.state.webhook_event_store`` (same handle the
+# :class:`~harness.agents.outbound.OutboundWebhookDispatcher` uses).
+# Replays are gated by ``Scope.WEBHOOK_ADMIN`` (mutation); listing is
+# ``Scope.OBSERVABILITY_READ`` (read-only, mirrors the audit endpoint).
+
+
+def _dlq_entry_to_safe_dict(entry: Any) -> dict[str, Any]:
+    """Serialise a :class:`DlqEntry` with PII stripping.
+
+    The payload is the original event dict (already redacted by the
+    dispatcher before it was enqueued — see
+    :func:`harness.redaction.redact_dict`). We additionally drop any
+    preview-style keys that a misconfigured upstream redactor might
+    have left in, so the admin surface is defence-in-depth even if
+    the dispatcher's redaction pass missed a field.
+    """
+    payload = entry.payload if isinstance(entry.payload, dict) else {}
+    safe_payload = {
+        k: v for k, v in payload.items() if k not in _PII_AUDIT_KEYS
+    }
+    return {
+        "id": entry.id,
+        "webhook_id": entry.webhook_id,
+        "url": entry.url,
+        "event_kind": entry.event_kind,
+        "payload": safe_payload,
+        "last_error": entry.last_error,
+        "failed_at": entry.failed_at,
+        "replayed_at": entry.replayed_at,
+        "attempts": entry.attempts,
+    }
+
+
+def _get_dlq_store(request: Request) -> Any:
+    """Pull the :class:`WebhookEventStore` from ``app.state``.
+
+    Returns 503 when the store is not configured (Phase 2.5
+    fire-and-forget mode — outbound hardening is disabled).
+    """
+    store = getattr(request.app.state, "webhook_event_store", None)
+    if store is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "webhook_event_store is not configured; outbound DLQ "
+                "is unavailable on this server."
+            ),
+        )
+    return store
+
+
+@router.get("/webhooks/dlq")
+async def admin_webhooks_dlq_list(
+    request: Request,
+    limit: int = Query(
+        default=100,
+        ge=1,
+        le=1000,
+        description=(
+            "Max DLQ entries to return. Default 100, hard cap 1000. "
+            "Only entries that have NOT been replayed are returned "
+            "(pass ?include_replayed=true for the full audit history)."
+        ),
+    ),
+    include_replayed: bool = Query(
+        default=False,
+        description=(
+            "When True, also return entries that have been replayed "
+            "(audit history). Default False (only pending)."
+        ),
+    ),
+    _token: Any = Depends(require_scope(Scope.OBSERVABILITY_READ)),
+) -> dict[str, Any]:
+    """List recent outbound webhook DLQ entries (Phase 4.13B Drift 2).
+
+    Returns ``{"entries": [...], "count": N, "limit": limit,
+    "include_replayed": bool}``. Each entry is serialised with PII
+    stripping (preview fields removed from the payload). The store
+    is the single source of truth — there is no in-memory cache.
+    """
+    store = _get_dlq_store(request)
+    entries = await store.list_dlq(
+        limit=limit, include_replayed=include_replayed,
+    )
+    return {
+        "entries": [_dlq_entry_to_safe_dict(e) for e in entries],
+        "count": len(entries),
+        "limit": limit,
+        "include_replayed": include_replayed,
+    }
+
+
+@router.post("/webhooks/dlq/{dlq_id}/replay")
+async def admin_webhooks_dlq_replay(
+    dlq_id: int,
+    request: Request,
+    _token: Any = Depends(require_scope(Scope.WEBHOOK_ADMIN)),
+) -> dict[str, Any]:
+    """Replay a single DLQ entry (Phase 4.13B Drift 2).
+
+    Re-sends the original payload to the URL using the CURRENT
+    signing secret (honouring ``secret_version`` on the outbound
+    config row). On success, the entry is marked ``replayed_at``
+    and will not appear in the default list (``?include_replayed=
+    false``). On failure, the entry is left untouched (the operator
+    can retry).
+
+    Requires ``Scope.WEBHOOK_ADMIN`` (mutation, not just read).
+
+    Returns:
+        ``{"dlq_id": id, "replayed": bool, "status_code": int}``.
+        ``replayed`` is True when the resend returned 2xx AND the
+        store marked the row replayed.
+    """
+    store = _get_dlq_store(request)
+    entry = await store.get_dlq_entry(int(dlq_id))
+    if entry is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"DLQ entry id={dlq_id} not found.",
+        )
+    if entry.replayed_at is not None:
+        # Idempotent: already replayed. Don't resend.
+        return {
+            "dlq_id": entry.id,
+            "replayed": False,
+            "status_code": 200,
+            "detail": "already replayed",
+        }
+
+    # Resolve the current signing secret (honours secret_version).
+    import httpx
+    from harness.agents.webhook_store import resolve_outbound_secret
+
+    cfg = await store.get_outbound(entry.url)
+    secret_version = cfg.secret_version if cfg else 1
+    secret = resolve_outbound_secret(secret_version)
+
+    headers = {"Content-Type": "application/json"}
+    if secret:
+        headers["Authorization"] = f"Bearer {secret}"
+
+    # Use the dispatcher's client when available (shares connection
+    # pool + timeout config); fall back to a one-shot client.
+    dispatcher = getattr(request.app.state, "outbound_dispatcher", None)
+    client = (
+        getattr(dispatcher, "_client", None)
+        if dispatcher is not None
+        else None
+    )
+    owns_client = client is None
+    if owns_client:
+        client = httpx.AsyncClient(timeout=10.0)
+
+    try:
+        resp = await client.post(
+            entry.url, json=entry.payload, headers=headers,
+        )
+        status_code = resp.status_code
+    finally:
+        if owns_client and not client.is_closed:
+            await client.aclose()
+
+    replayed = False
+    if 200 <= status_code < 300:
+        replayed = await store.mark_dlq_replayed(entry.id)
+        logger.info(
+            "observability_admin: dlq replay id=%s url=%s → %d (replayed=%s)",
+            entry.id, entry.url, status_code, replayed,
+        )
+    else:
+        logger.warning(
+            "observability_admin: dlq replay id=%s url=%s → %d (not marked)",
+            entry.id, entry.url, status_code,
+        )
+    return {
+        "dlq_id": entry.id,
+        "replayed": replayed,
+        "status_code": status_code,
+    }
+
+
 __all__ = ["router"]

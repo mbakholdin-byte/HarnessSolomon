@@ -33,6 +33,7 @@ Qdrant get full coverage from the SQLite path.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import sqlite3
@@ -43,9 +44,79 @@ from typing import Any, Protocol, runtime_checkable
 import aiosqlite
 import numpy as np
 
+from harness.hooks.runner import safe_fire  # Phase 4.13A v1.23.0: OnMemoryWrite hook
 from .scratchpad import NoteLevel
 
 logger = logging.getLogger(__name__)
+
+
+# === Phase 4.13A v1.23.0: OnMemoryWrite helper ============================
+#
+# Both L2 store backends share a single helper to fire the
+# ``OnMemoryWrite`` event. The payload follows the schema in
+# ``harness.hooks.schemas.OnMemoryWritePayload`` (``layer``, ``key_hash``,
+# ``scope``, ``size_bytes``) plus the Phase 4.13A-specific fields
+# (``session_id``, ``agent_id``, ``key``, ``value_size``, ``timestamp``).
+# The Pydantic schema is ``extra="ignore"`` so the additional fields
+# survive advisory validation without raising.
+#
+# Hot-path: ``safe_fire`` is non-blocking in an asyncio context (it is
+# scheduled via ``loop.create_task``) and swallow-and-log outside a
+# running loop, so the L2 upsert path is never blocked by the hook.
+
+def _fire_on_memory_write(
+    *,
+    note_id: int,
+    vector: list[float],
+    payload: dict[str, Any],
+) -> None:
+    """Fire ``OnMemoryWrite`` for an L2 store upsert (best-effort).
+
+    Args:
+        note_id:  The numeric note id (Qdrant point id / SQLite row id).
+        vector:   The persisted vector — used ONLY to compute
+            ``value_size`` (``len(vector)``); the raw vector is NEVER
+            placed in the payload (PII / size risk).
+        payload:  The Qdrant payload / SQLite ``embedding_payload``
+            dict. ``session_id`` and ``agent_id`` are surfaced if
+            present, but the raw dict itself is NOT placed in the
+            event payload — only a short ``key_hash`` is emitted.
+    """
+    key = str(note_id)
+    key_hash = hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
+    session_id = str(payload.get("session_id", "")) if isinstance(payload, dict) else ""
+    agent_id = str(payload.get("agent_id", "")) if isinstance(payload, dict) else ""
+    size_bytes = len(vector) * 4  # float32 → 4 bytes per element
+    event_payload = {
+        # Schema-required fields (see OnMemoryWritePayload).
+        "layer": "L2",
+        "key_hash": key_hash,
+        "scope": agent_id or session_id or "scratchpad",
+        "size_bytes": size_bytes,
+        # Phase 4.13A v1.23.0 fields (extra on the schema, ignored by
+        # advisory validation but surfaced for hook consumers).
+        "session_id": session_id,
+        "agent_id": agent_id,
+        # ``note_id`` (numeric scratchpad row id) — NOT a raw secret.
+        # The schema explicitly forbids a raw ``key`` field (PII
+        # regression guard); note_id is a benign identifier.
+        "note_id": int(note_id),
+        "value_size": size_bytes,
+        "timestamp": time.time(),
+    }
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(
+            safe_fire("OnMemoryWrite", payload=event_payload)
+        )
+    except RuntimeError:
+        # No running event loop (tests, CLI, REPL). Swallow silently —
+        # the upsert itself MUST proceed regardless of hook availability.
+        pass
+    except Exception:  # noqa: BLE001 — hot path must never break on hook
+        logger.debug(
+            "OnMemoryWrite fire failed for note_id=%s", note_id, exc_info=True,
+        )
 
 
 # === Protocol ===
@@ -181,6 +252,10 @@ class SqliteL2Store:
                 (blob, payload_json, int(note_id)),
             )
             await db.commit()
+        # Phase 4.13A v1.23.0: OnMemoryWrite hook (hot-path safe_fire).
+        _fire_on_memory_write(
+            note_id=note_id, vector=vector, payload=payload,
+        )
 
     async def search(
         self,
@@ -355,6 +430,10 @@ class QdrantL2Store:
             self._client.upsert,
             collection_name=self._collection,
             points=[point],
+        )
+        # Phase 4.13A v1.23.0: OnMemoryWrite hook (hot-path safe_fire).
+        _fire_on_memory_write(
+            note_id=note_id, vector=vector, payload=payload,
         )
 
     async def search(
