@@ -48,6 +48,7 @@ dev = [
     "black>=24.1",
     "mypy>=1.8",
     "pre-commit>=3.6",
+    "asgi-lifespan>=2.0",  # Phase 4.14+ smoke + Phase 5.3+ privacy tests
 ]
 memory = [
     "qdrant-client>=1.7",

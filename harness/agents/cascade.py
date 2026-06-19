@@ -131,6 +131,79 @@ class TierSelector:
                 f"confidence_high ({self.confidence_high})"
             )
 
+    # === Phase 6.1A v1.26.0: Heuristic tier selector ================
+    # Lightweight heuristic routing that runs BEFORE the confidence-
+    # based cascade. Returns T1 / T2 / T3 or None (fall through to
+    # the confidence cascade). The heuristic uses only prompt length,
+    # context size, tool-call presence, and keyword matching — no LLM
+    # calls, no I/O. Cost: O(len(prompt)) for keyword scan.
+
+    def select_heuristic(
+        self,
+        prompt: str,
+        context_size: int = 0,
+        *,
+        has_tool_calls: bool = False,
+    ) -> str | None:
+        """Heuristic tier routing — runs before the confidence cascade.
+
+        Rules (checked in order, first match wins):
+
+          1. **T1** (cheap local) if:
+             - ``len(prompt) < t1_max_prompt_chars`` AND
+             - ``context_size < t1_max_context_tokens`` AND
+             - NOT ``has_tool_calls``
+
+          2. **T3** (premium) if:
+             - ``len(prompt) > t3_min_prompt_chars`` OR
+             - ``context_size > t3_min_context_tokens`` OR
+             - prompt contains any complexity keyword
+
+          3. **T2** (mid-tier) as the default for everything else.
+
+        Returns ``None`` when ``tier_routing_heuristic_enabled`` is
+        ``False`` — the caller then falls through to the explicit
+        ``model:`` from config (current Phase 2.1 behaviour).
+
+        Args:
+            prompt:          The user prompt text.
+            context_size:    Current context window usage in tokens
+                             (0 when unknown — treated as "small").
+            has_tool_calls:  ``True`` if the prompt includes tool-call
+                             results or the agent loop expects tool
+                             calls in this turn. Disqualifies T1
+                             (tool calls need a capable model).
+
+        Returns:
+            One of ``"T1"``, ``"T2"``, ``"T3"``, or ``None`` when
+            the heuristic is disabled.
+        """
+        if not getattr(settings, "tier_routing_heuristic_enabled", True):
+            return None
+
+        prompt_len = len(prompt)
+
+        # T1: short prompt, small context, no tools.
+        if (
+            prompt_len < settings.tier_routing_t1_max_prompt_chars
+            and context_size < settings.tier_routing_t1_max_context_tokens
+            and not has_tool_calls
+        ):
+            return TIER_T1
+
+        # T3: long prompt, huge context, or complexity keywords.
+        prompt_lower = prompt.lower()
+        keywords = getattr(settings, "tier_routing_complexity_keywords", [])
+        if (
+            prompt_len > settings.tier_routing_t3_min_prompt_chars
+            or context_size > settings.tier_routing_t3_min_context_tokens
+            or any(kw in prompt_lower for kw in keywords)
+        ):
+            return TIER_T3
+
+        # T2: everything else (medium prompts without complexity signals).
+        return TIER_T2
+
     def select_tier(
         self, confidence: float, *, fallback: bool = False
     ) -> CascadeDecision:

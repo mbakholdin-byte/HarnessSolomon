@@ -1,0 +1,876 @@
+{
+  "meta": {
+    "phase": "6.1B",
+    "corpus_size": 50,
+    "cost_model_usd_per_query": {
+      "T1": 0.001,
+      "T2": 0.005,
+      "T3": 0.02
+    },
+    "latency_model_ms": {
+      "T1": 120.0,
+      "T2": 450.0,
+      "T3": 1200.0
+    },
+    "timestamp": "2026-06-19T21:09:23"
+  },
+  "baseline": {
+    "strategy": "baseline",
+    "total_queries": 50,
+    "tier_distribution": {
+      "T1": 0,
+      "T2": 0,
+      "T3": 50
+    },
+    "total_cost_usd": 1.0,
+    "mean_accuracy": 1.0,
+    "cost_reduction_pct": 0.0,
+    "accuracy_drop_pct": 0.0,
+    "latency_p50_ms": 1200.0,
+    "latency_p95_ms": 1200.0,
+    "latency_p99_ms": 1200.0,
+    "outcomes": [
+      {
+        "query_id": "AUTO-01",
+        "strategy": "baseline",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1200.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "AUTO-02",
+        "strategy": "baseline",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1200.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "AUTO-03",
+        "strategy": "baseline",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1200.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "AUTO-04",
+        "strategy": "baseline",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1200.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "AUTO-05",
+        "strategy": "baseline",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1200.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "AUTO-06",
+        "strategy": "baseline",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1200.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "AUTO-07",
+        "strategy": "baseline",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1200.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "AUTO-08",
+        "strategy": "baseline",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1200.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "AUTO-09",
+        "strategy": "baseline",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1200.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "AUTO-10",
+        "strategy": "baseline",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1200.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "AUTO-11",
+        "strategy": "baseline",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1200.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "AUTO-12",
+        "strategy": "baseline",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1200.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "AUTO-13",
+        "strategy": "baseline",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1200.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "AUTO-14",
+        "strategy": "baseline",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1200.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "AUTO-15",
+        "strategy": "baseline",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1200.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "AUTO-16",
+        "strategy": "baseline",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1200.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "AUTO-17",
+        "strategy": "baseline",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1200.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "AUTO-18",
+        "strategy": "baseline",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1200.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "AUTO-19",
+        "strategy": "baseline",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1200.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "AUTO-20",
+        "strategy": "baseline",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1200.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "AUTO-21",
+        "strategy": "baseline",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1200.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "AUTO-22",
+        "strategy": "baseline",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1200.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "AUTO-23",
+        "strategy": "baseline",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1200.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "AUTO-24",
+        "strategy": "baseline",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1200.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "AUTO-25",
+        "strategy": "baseline",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1200.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "AUTO-26",
+        "strategy": "baseline",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1200.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "AUTO-27",
+        "strategy": "baseline",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1200.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "AUTO-28",
+        "strategy": "baseline",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1200.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "AUTO-29",
+        "strategy": "baseline",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1200.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "AUTO-30",
+        "strategy": "baseline",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1200.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "Q01",
+        "strategy": "baseline",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1200.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "Q02",
+        "strategy": "baseline",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1200.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "Q03",
+        "strategy": "baseline",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1200.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "Q04",
+        "strategy": "baseline",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1200.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "Q05",
+        "strategy": "baseline",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1200.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "Q06",
+        "strategy": "baseline",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1200.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "Q07",
+        "strategy": "baseline",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1200.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "Q08",
+        "strategy": "baseline",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1200.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "Q09",
+        "strategy": "baseline",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1200.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "Q10",
+        "strategy": "baseline",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1200.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "Q11",
+        "strategy": "baseline",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1200.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "Q12",
+        "strategy": "baseline",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1200.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "Q13",
+        "strategy": "baseline",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1200.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "Q14",
+        "strategy": "baseline",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1200.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "Q15",
+        "strategy": "baseline",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1200.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "Q16",
+        "strategy": "baseline",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1200.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "Q17",
+        "strategy": "baseline",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1200.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "Q18",
+        "strategy": "baseline",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1200.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "Q19",
+        "strategy": "baseline",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1200.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "Q20",
+        "strategy": "baseline",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1200.0,
+        "accuracy": 1.0
+      }
+    ]
+  },
+  "heuristic": {
+    "strategy": "heuristic",
+    "total_queries": 50,
+    "tier_distribution": {
+      "T1": 31,
+      "T2": 0,
+      "T3": 19
+    },
+    "total_cost_usd": 0.411,
+    "mean_accuracy": 0.952,
+    "cost_reduction_pct": 58.9,
+    "accuracy_drop_pct": 4.800000000000004,
+    "latency_p50_ms": 121.0,
+    "latency_p95_ms": 1201.0,
+    "latency_p99_ms": 1201.0,
+    "outcomes": [
+      {
+        "query_id": "AUTO-01",
+        "strategy": "heuristic",
+        "tier": "T1",
+        "cost_usd": 0.001,
+        "latency_ms": 121.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "AUTO-02",
+        "strategy": "heuristic",
+        "tier": "T1",
+        "cost_usd": 0.001,
+        "latency_ms": 121.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "AUTO-03",
+        "strategy": "heuristic",
+        "tier": "T1",
+        "cost_usd": 0.001,
+        "latency_ms": 121.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "AUTO-04",
+        "strategy": "heuristic",
+        "tier": "T1",
+        "cost_usd": 0.001,
+        "latency_ms": 121.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "AUTO-05",
+        "strategy": "heuristic",
+        "tier": "T1",
+        "cost_usd": 0.001,
+        "latency_ms": 121.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "AUTO-06",
+        "strategy": "heuristic",
+        "tier": "T1",
+        "cost_usd": 0.001,
+        "latency_ms": 121.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "AUTO-07",
+        "strategy": "heuristic",
+        "tier": "T1",
+        "cost_usd": 0.001,
+        "latency_ms": 121.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "AUTO-08",
+        "strategy": "heuristic",
+        "tier": "T1",
+        "cost_usd": 0.001,
+        "latency_ms": 121.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "AUTO-09",
+        "strategy": "heuristic",
+        "tier": "T1",
+        "cost_usd": 0.001,
+        "latency_ms": 121.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "AUTO-10",
+        "strategy": "heuristic",
+        "tier": "T1",
+        "cost_usd": 0.001,
+        "latency_ms": 121.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "AUTO-11",
+        "strategy": "heuristic",
+        "tier": "T1",
+        "cost_usd": 0.001,
+        "latency_ms": 121.0,
+        "accuracy": 0.85
+      },
+      {
+        "query_id": "AUTO-12",
+        "strategy": "heuristic",
+        "tier": "T1",
+        "cost_usd": 0.001,
+        "latency_ms": 121.0,
+        "accuracy": 0.85
+      },
+      {
+        "query_id": "AUTO-13",
+        "strategy": "heuristic",
+        "tier": "T1",
+        "cost_usd": 0.001,
+        "latency_ms": 121.0,
+        "accuracy": 0.85
+      },
+      {
+        "query_id": "AUTO-14",
+        "strategy": "heuristic",
+        "tier": "T1",
+        "cost_usd": 0.001,
+        "latency_ms": 121.0,
+        "accuracy": 0.85
+      },
+      {
+        "query_id": "AUTO-15",
+        "strategy": "heuristic",
+        "tier": "T1",
+        "cost_usd": 0.001,
+        "latency_ms": 121.0,
+        "accuracy": 0.85
+      },
+      {
+        "query_id": "AUTO-16",
+        "strategy": "heuristic",
+        "tier": "T1",
+        "cost_usd": 0.001,
+        "latency_ms": 121.0,
+        "accuracy": 0.85
+      },
+      {
+        "query_id": "AUTO-17",
+        "strategy": "heuristic",
+        "tier": "T1",
+        "cost_usd": 0.001,
+        "latency_ms": 121.0,
+        "accuracy": 0.85
+      },
+      {
+        "query_id": "AUTO-18",
+        "strategy": "heuristic",
+        "tier": "T1",
+        "cost_usd": 0.001,
+        "latency_ms": 121.0,
+        "accuracy": 0.85
+      },
+      {
+        "query_id": "AUTO-19",
+        "strategy": "heuristic",
+        "tier": "T1",
+        "cost_usd": 0.001,
+        "latency_ms": 121.0,
+        "accuracy": 0.85
+      },
+      {
+        "query_id": "AUTO-20",
+        "strategy": "heuristic",
+        "tier": "T1",
+        "cost_usd": 0.001,
+        "latency_ms": 121.0,
+        "accuracy": 0.85
+      },
+      {
+        "query_id": "AUTO-21",
+        "strategy": "heuristic",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1201.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "AUTO-22",
+        "strategy": "heuristic",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1201.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "AUTO-23",
+        "strategy": "heuristic",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1201.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "AUTO-24",
+        "strategy": "heuristic",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1201.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "AUTO-25",
+        "strategy": "heuristic",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1201.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "AUTO-26",
+        "strategy": "heuristic",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1201.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "AUTO-27",
+        "strategy": "heuristic",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1201.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "AUTO-28",
+        "strategy": "heuristic",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1201.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "AUTO-29",
+        "strategy": "heuristic",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1201.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "AUTO-30",
+        "strategy": "heuristic",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1201.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "Q01",
+        "strategy": "heuristic",
+        "tier": "T1",
+        "cost_usd": 0.001,
+        "latency_ms": 121.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "Q02",
+        "strategy": "heuristic",
+        "tier": "T1",
+        "cost_usd": 0.001,
+        "latency_ms": 121.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "Q03",
+        "strategy": "heuristic",
+        "tier": "T1",
+        "cost_usd": 0.001,
+        "latency_ms": 121.0,
+        "accuracy": 0.85
+      },
+      {
+        "query_id": "Q04",
+        "strategy": "heuristic",
+        "tier": "T1",
+        "cost_usd": 0.001,
+        "latency_ms": 121.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "Q05",
+        "strategy": "heuristic",
+        "tier": "T1",
+        "cost_usd": 0.001,
+        "latency_ms": 121.0,
+        "accuracy": 0.85
+      },
+      {
+        "query_id": "Q06",
+        "strategy": "heuristic",
+        "tier": "T1",
+        "cost_usd": 0.001,
+        "latency_ms": 121.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "Q07",
+        "strategy": "heuristic",
+        "tier": "T1",
+        "cost_usd": 0.001,
+        "latency_ms": 121.0,
+        "accuracy": 0.85
+      },
+      {
+        "query_id": "Q08",
+        "strategy": "heuristic",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1201.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "Q09",
+        "strategy": "heuristic",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1201.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "Q10",
+        "strategy": "heuristic",
+        "tier": "T1",
+        "cost_usd": 0.001,
+        "latency_ms": 121.0,
+        "accuracy": 0.85
+      },
+      {
+        "query_id": "Q11",
+        "strategy": "heuristic",
+        "tier": "T1",
+        "cost_usd": 0.001,
+        "latency_ms": 121.0,
+        "accuracy": 0.85
+      },
+      {
+        "query_id": "Q12",
+        "strategy": "heuristic",
+        "tier": "T1",
+        "cost_usd": 0.001,
+        "latency_ms": 121.0,
+        "accuracy": 0.85
+      },
+      {
+        "query_id": "Q13",
+        "strategy": "heuristic",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1201.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "Q14",
+        "strategy": "heuristic",
+        "tier": "T1",
+        "cost_usd": 0.001,
+        "latency_ms": 121.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "Q15",
+        "strategy": "heuristic",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1201.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "Q16",
+        "strategy": "heuristic",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1201.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "Q17",
+        "strategy": "heuristic",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1201.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "Q18",
+        "strategy": "heuristic",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1201.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "Q19",
+        "strategy": "heuristic",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1201.0,
+        "accuracy": 1.0
+      },
+      {
+        "query_id": "Q20",
+        "strategy": "heuristic",
+        "tier": "T3",
+        "cost_usd": 0.02,
+        "latency_ms": 1201.0,
+        "accuracy": 1.0
+      }
+    ]
+  },
+  "dod": {
+    "B1_t1_ratio": {
+      "value": 0.62,
+      "threshold": 0.6,
+      "pass": true
+    },
+    "B2_accuracy_drop_pct": {
+      "value": 4.8,
+      "threshold": 5.0,
+      "pass": true
+    },
+    "B3_cost_reduction_pct": {
+      "value": 58.9,
+      "threshold": 40.0,
+      "pass": true
+    },
+    "B4_latency_p95_regression_pct": {
+      "value": 0.0833,
+      "threshold": 20.0,
+      "pass": true
+    },
+    "all_pass": true
+  }
+}
