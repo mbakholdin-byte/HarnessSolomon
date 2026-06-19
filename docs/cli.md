@@ -1,4 +1,6 @@
-# CLI Reference — Solomon Harness v1.22.0+
+# CLI Reference — Solomon Harness v1.0.0+
+
+> Last updated: 2026-06-19, v1.0.0 final. CLI entry point: `harness` или `python -m harness`.
 
 > `harness` (или `python -m harness`) — command-line entry point. Subcommands покрывают server lifecycle, sub-agent management, hooks inspection, observability, auth, elicitation, context, sessions, reload, webhooks DLQ.
 

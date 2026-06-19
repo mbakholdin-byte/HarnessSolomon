@@ -1,4 +1,6 @@
-# Outbound Webhooks — Solomon Harness v1.23.0+
+# Outbound Webhooks — Solomon Harness v1.0.0+
+
+> Last updated: 2026-06-19, v1.0.0 final. Includes Phase 4.13B hardening (auto-disable, DLQ admin, secret rotation).
 
 > **Phase 2.5 + 4.3 + 4.8 + 4.13B** — outbound webhook delivery с HMAC-SHA256 signing, retry с exponential backoff, dead-letter queue (DLQ), auto-disable circuit breaker, secret rotation, admin endpoints.
 

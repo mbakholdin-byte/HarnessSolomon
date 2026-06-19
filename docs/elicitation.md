@@ -1,4 +1,6 @@
-# Elicitation — Solomon Harness v1.22.0+
+# Elicitation — Solomon Harness v1.0.0+
+
+> Last updated: 2026-06-19, v1.0.0 final. RBAC: WS требует scope `elicitation.write`, long-poll требует `elicitation.read`, SSE требует `elicitation.read`.
 
 > **Phase 4.3–4.11** — интерактивный запрос к человеку. Hook event `Elicitation` публикует вопрос в `ElicitationBroker`, который ждёт ответ от подключённого клиента (или fallback на default_answer после timeout).
 >

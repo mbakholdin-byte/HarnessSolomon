@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import pytest
 from fastapi import FastAPI
+from asgi_lifespan import LifespanManager
 from httpx import ASGITransport, AsyncClient
 
 from harness.config import settings
@@ -94,9 +95,10 @@ class TestCapabilitiesSurface:
         self, isolated_settings: dict,
     ) -> None:
         app = _make_app_with_state()
-        transport = ASGITransport(app=app)
-        async with AsyncClient(transport=transport, base_url="http://t") as ac:
-            r = await ac.get("/api/v1/capabilities")
+        async with LifespanManager(app):
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://t") as ac:
+                r = await ac.get("/api/v1/capabilities")
         assert r.status_code == 200
         names = {s["name"] for s in r.json()["scopes_available"]}
         assert "observability.read" in names
@@ -105,9 +107,10 @@ class TestCapabilitiesSurface:
         self, isolated_settings: dict,
     ) -> None:
         app = _make_app_with_state()
-        transport = ASGITransport(app=app)
-        async with AsyncClient(transport=transport, base_url="http://t") as ac:
-            r = await ac.get("/api/v1/capabilities")
+        async with LifespanManager(app):
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://t") as ac:
+                r = await ac.get("/api/v1/capabilities")
         assert r.status_code == 200
         names = {s["name"] for s in r.json()["scopes_available"]}
         assert "elicitation.read" in names
@@ -151,9 +154,9 @@ class TestScopeCount:
     """
 
     def test_total_scope_count_updated(self) -> None:
-        assert len(ALL_SCOPES) == 10, (
-            f"expected 10 scopes (7 baseline + 2 Phase 4.11 + "
-            f"1 Phase 4.13B), got {len(ALL_SCOPES)}: "
+        assert len(ALL_SCOPES) == 11, (
+            f"expected 11 scopes (7 baseline + 2 Phase 4.11 + "
+            f"1 Phase 4.13B + 1 Phase 5.5/v1.0.0 elicitation.write), got {len(ALL_SCOPES)}: "
             f"{sorted(s.value for s in ALL_SCOPES)}"
         )
 

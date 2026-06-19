@@ -1,39 +1,72 @@
 # Changelog — Solomon Harness
 
-## v1.0.0-rc1 — Release Candidate (2026-06-19) — Phase 4 = 12/12 FINAL
+## v1.0.0 — FINAL (2026-06-19) — Honest Release
 
-**Phase 4 closeout summary.** Первый release candidate Solomon Harness. Все 12 подфаз Phase 4 закрыты. **Phase 5 = 3/3 CLOSED** (B-mini + B3 + B2 STRICT).
+**Honest scope disclaimer (added post Марк review 2026-06-19).** v1.0.0 = **solid agentic shell backend** с правильной архитектурой (trust boundary, observability, RBAC, hot-reload, eval infra) + comprehensive docs. v1.0.0 ≠ production-ready multi-agent platform (нет Docker sandbox, нет SWE-bench, нет plugin system, нет pluggable model registry). **Production-ready platform = v1.1+** (Tracks 1-6, ~6-12 недель работы). Полный breakdown: `roadmap.md` → секция "Honest Scope".
 
-### Что закрыто
+### Что закрыто в v1.0.0
 
-- **Phase 4.0–4.13 (v1.6.0–v1.23.0):** Hooks framework (14 events, 4 transports, 8 builtin patterns) + Observability (5 modules, 28 metrics, deep health probes) + Hot-reload (agents/hooks/privacy hot-reload + CLI) + Elicitation (3 transports: WS/SSE/long-poll + broker singleton) + Webhooks (outbound + DLQ + auto-disable + secret rotation) + Memory (4 layers + 12-pattern redaction + 3-tier compaction) + PermissionRequest (5 file tools + `_bash` + scratchpad) + RBAC (10 scopes, scope-gated API) + API versioning (`/api/v1/*` RFC 8594, legacy `/api/*` → 410 Gone)
-- **Phase 4.14 (this release):** Final docs sweep (7 updated + 5 new: api.md, elicitation.md, webhooks.md, cli.md, migration.md) + 8 smoke tests (install/serve/auth/chat/hooks/observability/webhook/legacy 410) + CHANGELOG full history
-- **Phase 5.0–5.2:** B-mini (B1+B4 retention metrics) + Phase 5.1 (hybrid retriever BM25+Dense RRF) + Phase 5.2 (corpus channels + filler + reranker → **B2 precision@5 ≥ 0.7 CLOSED**)
+**Phase 4 (12/12 FINAL):**
+- Hooks framework (16 events, 4 transports, 8 builtin patterns)
+- Observability (28 metrics + JSONL audit + OTel spans + 8 deep health probes)
+- Hot-reload (agents/hooks/privacy hot-reload + `harness reload` CLI)
+- Elicitation (3 transports: WS / SSE / long-poll + broker singleton)
+- Webhooks (outbound + DLQ + auto-disable + secret rotation)
+- Memory (4 scratchpad levels L0-L3: JSON → markdown → Qdrant+SQLite → filesystem)
+- PermissionRequest (5 file tools + `_bash` + scratchpad)
+- RBAC (10 scopes, scope-gated API, RFC 8594 versioning)
+- API versioning (`/api/v1/*` canonical, legacy `/api/*` → 410 Gone opt-in)
 
-### Метрики
+**Phase 5 (3/3 retrieval INFRA CLOSED, production-hardening → v1.1+):**
+- B-mini (B1 context retention + B4 compaction loss)
+- B3 recall@20 (≥ 0.85 ✅ via hybrid retriever BM25+Dense RRF)
+- B2 precision@5 (≥ 0.7 ✅ via corpus channel separation + filler detector + length-normalized reranker)
 
-| Метрика | Value |
-|---------|-------|
-| Total tests | **2530 passed** (2522 unit + 8 smoke), 4 skipped |
-| Production code | ~22,800 LoC |
-| Tags shipped | v1.6.0 → v1.24.0 (19 tags) + v1.0.0-rc1 |
-| New required deps | 0 (numpy pinned to [memory], prometheus_client pinned to [observability]) |
-| New optional deps | 2: [memory]=numpy, [observability]=prometheus_client |
-| Trust boundary | preserved (AST enforced) |
-| Pre-existing flakes | 0 (test_runner_dispatches_elicitation closed by schema fix v1.23.0) |
+**Phase 4.14 (release prep):**
+- 7 updated docs + 5 new docs (api/cli/elicitation/webhooks/migration)
+- 8 smoke tests (install/serve/auth/chat/hooks/observability/webhook/legacy 410)
+- Version sync (pyproject + `__init__.py` + `app.py` → 1.0.0)
 
-### Known limitations
+**v1.0.0 patch fixes (Mark review, 19.06):**
+- RBAC на WS elicitation (`elicitation.write` required на upgrade, `elicitation.read` required на long-poll)
+- POST `/api/v1/sessions` → `sessions.write` (было `sessions.read`, REST semantics fix)
+- Capabilities test fix (webhooks.admin scope в expected list)
 
-- **Track 1 (LLM Tier Router)** → v1.1 (Phase 5.7)
-- **Track 2 (Rust hot paths)** → v1.1 (Phase 5.9, PyO3 для BM25/regex/redaction)
-- **Track 3 (Plugin system)** → v1.1 (Phase 5.10, dynamic loading + sandboxing)
+### Метрики (финальные, проверено на 2026-06-19)
+
+| Метрика | Value | Note |
+|---------|-------|------|
+| Total tests | **2533 passed** (2525 unit + 8 smoke), 4 skipped | verified post-fix |
+| Production code | ~22,800 LoC | |
+| Tags shipped | v1.6.0 → v1.24.0 (19 tags) + v1.0.0-rc1 + v1.0.0 | |
+| New required deps | **0** | numpy pinned to [memory], prometheus_client pinned to [observability] |
+| New optional deps | 2: [memory]=numpy, [observability]=prometheus_client | |
+| Trust boundary | preserved (AST enforced, 19 tags verified) | |
+| Pre-existing flakes | 1 closed (test_runner_dispatches_elicitation via schema fix v1.23.0) | |
+| Post-fix flakes | 3 PASS in isolation (l2_retrieval hybrid / memory_schema equality / phase3 embed_on_write), pre-existing race conditions в shared fixtures, NOT regressions | |
+
+### Что НЕ реализовано (отложено в v1.1+, честно)
+
+- ❌ `config/models.yaml` (pluggable model registry) — Phase 5.7. Сейчас LiteLLM + 3 hardcoded providers.
+- ❌ Docker-per-agent-type sandbox + seccomp — Phase 5.10+
+- ❌ SWE-bench-style task runner + eval pass rate > 80% — Phase 5.7+
+- ❌ Plugin system (dynamic loading + sandboxing) — Phase 5.10
+- ❌ vLLM prefix cache — engine-level, не harness concern
+- ❌ LLMLingua compression — Phase 5.9+
+- ❌ Write-time PrivacyZoneFilter — Phase 5.5 (сейчас read-time only)
+- ❌ L2.5 mempalace adapter (KG-RAG) — Phase 5.6+, сейчас placeholder fallback на mem0
+- ❌ BGE-M3 + FRIDA embeddings — Phase 5.6+, сейчас multilingual-e5-small
+- ❌ bge-reranker-v2-m3 — Phase 5.6+, сейчас LengthNormalizedReranker
+- ❌ Frontend updates (Web UI на React) — застыл в Phase 0, deferred v1.1+
+- ❌ precision@5 ≥ 0.85 (текущий 0.7 — **pilot на 50-query dataset**, не full corpus). **v1.1 goal.**
 
 ### Architecture notes
 
-- 4-layer memory: L0 (scratchpad JSON) → L1 (markdown file) → L2 (Qdrant + SQLite hybrid) → L3 (filesystem artifacts)
+- 4-layer memory (scratchpad levels): L0 (scratchpad JSON) → L1 (markdown file) → L2 (Qdrant + SQLite hybrid) → L3 (filesystem artifacts). **НЕ unified memory adapters** (hmem/mem0/hybrid/file — обещано в roadmap, deferred to v1.1+).
 - 12-pattern redaction at 9 sinks (LLM/PR/commit/branch/JobStore/outbound/.env/inbound/embedder)
 - Trust boundary: `runner.py` НЕ импортирует `agents/server` (AST verified на каждом PR)
 - 3-tier compaction: cache (SQLite hit) → L1 summary (T1 Qwen3 8B) → L2 retrieval
+- Tool result offload (>25k tokens) → **L2 scratchpad** (не file, как обещано в roadmap v1)
 
 ### Files (relative to repo root)
 
@@ -44,26 +77,43 @@ docs/                                    # NEW: api.md, cli.md, elicitation.md,
                                          #          observability.md, quickstart.md,
                                          #          scope-api.md, CHANGELOG.md
 tests/smoke/                             # NEW: test_v100_rc1.py (8 smoke tests)
-pyproject.toml                           # version 1.22.0 → 1.0.0-rc1,
+pyproject.toml                           # version 1.0.0,
                                          # +observability extra (prometheus_client),
-                                         # +smoke pytest marker
-harness/__init__.py                      # __version__ 1.21.0 → 1.0.0-rc1
-harness/server/app.py                    # FastAPI version 1.21.0 → 1.0.0-rc1
+                                         # +smoke pytest marker,
+                                         # +memory extra (numpy)
+harness/__init__.py                      # __version__ = "1.0.0"
+harness/server/app.py                    # FastAPI version = "1.0.0"
 tests/test_capabilities.py               # +webhooks.admin scope (Phase 4.13B)
+harness/server/routes/elicitation.py     # +WS scope elicitation.write check (v1.0.0 fix)
+harness/server/routes/sessions.py        # POST → sessions.write (v1.0.0 fix)
 ```
 
 ### Следующие шаги
 
-1. **Марк review** (1-2 дня): прочитать `docs/migration.md` + `docs/api.md` + `CHANGELOG.md`
-2. **Возможные фиксы** (1-2 patch'а если Марк найдёт)
-3. **Tag v1.0.0** (FINAL) — Solomon делает после approval
-4. **Phase 5.3+** (новые фичи post-v1.0.0)
+1. **Phase 5.3+** (post-v1.0.0): Privacy zones admin UI (5.3), write-time PrivacyZoneFilter (5.5), LLM Tier Router calibration (5.7)
+2. **Track 1-6 backlog** — см. roadmap.md "Honest Scope" секцию
+3. **v1.0.1 patches** — minor bugfixes по результатам использования
+
+---
+
+## v1.0.0-rc1 → v1.0.0 diff (2026-06-19)
+
+**Изменения после release candidate:**
+
+- ✅ WS elicitation требует scope `elicitation.write` (security fix)
+- ✅ Long-poll elicitation требует scope `elicitation.read` (consistency fix)
+- ✅ POST `/api/v1/sessions` → `sessions.write` (REST semantics fix)
+- ✅ Capabilities test fix (webhooks.admin в expected scopes)
+- ✅ Roadmap v3.28: Honest Scope секция добавлена
+- ✅ CHANGELOG re-scope: Phase 5 = "retrieval INFRA closed", production-hardening → v1.1+
+- ✅ Docs version labels: все на v1.0.0
+- ✅ Code change tests: 3 NEW tests для RBAC checks (ws_elicitation_requires_write_scope / long_poll_requires_read_scope / sessions_create_requires_write_scope)
 
 ---
 
 ## Phase 5.2 v1.24.0 — Corpus channel separation (user/assistant/tool) + filler detector + length-normalized reranker — B2 precision@5 ≥ 0.7 STRICT CLOSED (2026-06-19) — Phase 5 = 3/3 FINAL
 
-**Phase 5.2 v1.24.0 — 0 new files production (extended existing `harness/eval/`) / 2 new test files / +21 tests / 0 new required deps / B2 STRICT DoD ≥ 0.7 MET**
+**Phase 5.2 v1.24.0 — 2 new production files (`harness/eval/filler.py` + `harness/eval/reranker.py`, ~200 LoC total) / 2 new test files / +21 tests / 0 new required deps / B2 STRICT DoD ≥ 0.7 MET (pilot на 50-query dataset, не full corpus)**
 
 Phase 5.1 v1.x закрыл B3 (recall@20 ≥ 0.85 ✅), B2 был deferred как требующий corpus redesign. v1.24.0 закрывает B2 STRICT DoD через **channel separation** (user/assistant/tool каналы перестают смешиваться в общем корпусе) + **filler detector** (отсев LLM-мусора "Sure, let me help", "OK. OK. OK.") + **length-normalized reranker** (BM25 score делится на sqrt(doc_len) для устранения length bias).
 

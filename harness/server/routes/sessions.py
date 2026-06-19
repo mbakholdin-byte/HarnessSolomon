@@ -10,11 +10,13 @@ Endpoints (under /api):
 """
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
+from harness.server.auth.deps import require_scope
+from harness.server.auth.scopes import Scope
 from harness.server.db import sqlite as db_sqlite
 from harness.server.db.models import Message
 
@@ -46,8 +48,16 @@ async def list_sessions() -> list[dict]:
 
 
 @router.post("/sessions", status_code=status.HTTP_201_CREATED)
-async def create_session(req: CreateSessionRequest) -> dict:
-    """Create new session."""
+async def create_session(
+    req: CreateSessionRequest,
+    _token: Any = Depends(require_scope(Scope.SESSIONS_WRITE)),
+) -> dict:
+    """Create new session.
+
+    v1.0.0 security fix: requires ``sessions.write`` scope (was:
+    ``sessions.read`` — REST semantics violation). Creating a session
+    is a mutation, not a read.
+    """
     session = await db_sqlite.create_session(title=req.title, model=req.model)
     return _session_to_dict(session)
 
@@ -84,7 +94,11 @@ async def list_messages(session_id: str) -> list[dict]:
     "/sessions/{session_id}/messages",
     status_code=status.HTTP_201_CREATED,
 )
-async def add_message(session_id: str, req: AddMessageRequest) -> dict:
+async def add_message(
+    session_id: str,
+    req: AddMessageRequest,
+    _token: Any = Depends(require_scope(Scope.SESSIONS_WRITE)),
+) -> dict:
     """Add a message to a session.
 
     Also touches the session (updated_at + message_count++) and mirrors to JSONL.

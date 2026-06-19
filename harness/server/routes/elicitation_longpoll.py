@@ -35,8 +35,11 @@ import logging
 import time
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
+
+from harness.server.auth.scopes import Scope
+from harness.server.auth.deps import require_scope
 
 
 logger = logging.getLogger("harness.server.routes.elicitation_longpoll")
@@ -138,6 +141,7 @@ async def elicitation_poll(
         default=None,
         description="Optional session id (informational — broker is process-global).",
     ),
+    _token: Any = Depends(require_scope(Scope.ELICITATION_READ)),
 ) -> LongPollQuestion:
     """Long-poll the broker for the next pending question.
 
@@ -186,6 +190,7 @@ async def elicitation_poll(
 async def elicitation_answer(
     payload: LongPollAnswer,
     request: Request,
+    _token: Any = Depends(require_scope(Scope.ELICITATION_WRITE)),
 ) -> dict[str, Any]:
     """Submit an answer for a pending question.
 

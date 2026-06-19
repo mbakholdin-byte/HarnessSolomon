@@ -1,4 +1,6 @@
-# API Reference — Solomon Harness v1.22.0+
+# API Reference — Solomon Harness v1.0.0+
+
+> Last updated: 2026-06-19, v1.0.0 final. Endpoint coverage: `/api/v1/*` canonical, 10 scopes, RFC 8594 versioning.
 
 > Все `/api/v1/*` endpoints canonical. Legacy `/api/*` paths возвращают RFC 8594 deprecation headers (`Deprecation: true`, `Sunset: Wed, 31 Dec 2026 23:59:59 GMT`, `Link: </api/v1/...>; rel="successor-version"`). После 2026-12-31 legacy paths можно переключить на 410 Gone через `legacy_apis_gone_enabled=True` (opt-in, Phase 4.12 v1.22.0).
 

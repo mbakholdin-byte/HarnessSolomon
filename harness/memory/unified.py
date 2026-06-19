@@ -118,10 +118,14 @@ class UnifiedMemory:
         *,
         agent_id: str = "solomon",
         embedder: Any = None,
+        privacy_zones: Any = None,
     ) -> None:
         if not agent_id or not isinstance(agent_id, str):
             raise ValueError(f"agent_id must be a non-empty string, got {agent_id!r}")
         self.agent_id = agent_id
+        # v1.0.0 (Phase 5.5): write-time privacy filter. Optional — when
+        # None, writes proceed unconditionally (backward compat).
+        self.privacy_zones = privacy_zones
         # Phase 3: optional embedder. When set, ``write()`` computes
         # the embedding and stores it in ``metadata.embedding`` so a
         # future ``DenseRetriever`` can use it. When None, ``write()``
@@ -199,6 +203,29 @@ class UnifiedMemory:
             memory.provenance.append(
                 ProvenanceEntry(layer="L_meta", source="unified", id=self.agent_id)
             )
+
+        # Phase 5.5 (v1.0.0 fix): write-time PrivacyZoneFilter.
+        # Sensitive memories (matched against `privacy_zones` patterns) are
+        # BLOCKED at write-time — they don't reach any adapter. This
+        # complements the existing read-time filter (Phase 3 v1.5.0) which
+        # only filters file tool outputs from reaching the LLM context.
+        # Rationale: sensitive files should never be auto-memorised.
+        privacy_zones = getattr(self, "privacy_zones", None)
+        if privacy_zones is not None:
+            try:
+                from harness.privacy.zones import PrivacyZoneFilter
+                if isinstance(privacy_zones, PrivacyZoneFilter):
+                    _source_path = memory.metadata.get("source_path", "")
+                    _zone_match = privacy_zones.match(_source_path)
+                    if _zone_match and _zone_match.action == "block":
+                        import logging
+                        logging.getLogger(__name__).info(
+                            "write-time privacy block: %s (zone=%s)",
+                            _source_path, _zone_match.pattern,
+                        )
+                        return  # do NOT write to any layer
+            except ImportError:
+                pass  # privacy zones not available — allow write
 
         # Phase 4.4+ v1.14.0: OnMemoryWrite hook (post-redaction, pre-persist)
         # Per review #8: payload uses key_hash, NOT key in clear — PII risk.

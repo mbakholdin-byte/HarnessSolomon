@@ -13,6 +13,7 @@ Endpoints under test:
 from __future__ import annotations
 
 import pytest
+from asgi_lifespan import LifespanManager
 from httpx import ASGITransport, AsyncClient
 
 from harness.config import settings
@@ -22,16 +23,24 @@ from harness.server.db import sqlite as db_sqlite
 
 @pytest.fixture
 async def client(monkeypatch: pytest.MonkeyPatch, tmp_path) -> AsyncClient:
-    """Test client with isolated data dir."""
+    """Test client with isolated data dir.
+
+    v1.0.0 fix: trigger FastAPI lifespan so ``app.state.auth_required``
+    and ``app.state.token_store`` are initialised. Without lifespan,
+    scope checks return 503 (TokenStore not initialised). Also disable
+    auth_required so legacy sessions tests don't need a token.
+    """
     data_dir = tmp_path / "harness-data"
     monkeypatch.setattr(settings, "session_dir", data_dir / "sessions")
     monkeypatch.setattr(settings, "db_path", data_dir / "harness.db")
+    monkeypatch.setattr(settings, "auth_required", False)
     db_sqlite._db_initialized = False
 
     app = create_app()
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
-        yield ac
+    async with LifespanManager(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            yield ac
 
 
 # === GET /api/sessions — list ===

@@ -16,6 +16,7 @@ from unittest.mock import patch
 
 import pytest
 from fastapi import FastAPI
+from asgi_lifespan import LifespanManager
 from fastapi.testclient import TestClient
 
 from harness.config import Settings
@@ -151,23 +152,41 @@ class TestElicitationBroker:
 # === 2. Elicitation WebSocket route tests ===
 
 class TestElicitationWebSocket:
-    def _make_app(self) -> FastAPI:
+    def _make_app(self, token: str = "") -> FastAPI:
         from harness.server.routes.elicitation import router as elicitation_router
 
         app = FastAPI()
         app.include_router(elicitation_router, prefix="/api/v1/elicitation")
+
+        # v1.0.0 fix: WS upgrade requires elicitation.write scope. Create
+        # a minimal fake TokenStore that accepts any non-empty token
+        # with the required scope, so the existing WS tests can keep
+        # connecting via TestClient without rewriting each test.
+        if token:
+            from harness.server.auth.scopes import Scope
+
+            class _FakeRecord:
+                is_active = True
+                scopes = frozenset({Scope.ELICITATION_WRITE})
+
+            class _FakeStore:
+                async def lookup(self, plaintext: str) -> _FakeRecord | None:
+                    return _FakeRecord() if plaintext == token else None
+
+            app.state.token_store = _FakeStore()
+
         return app
 
     def test_ws_connect_sends_hello(self) -> None:
-        client = TestClient(self._make_app())
-        with client.websocket_connect("/api/v1/elicitation/ws") as ws:
+        client = TestClient(self._make_app(token="t"))
+        with client.websocket_connect("/api/v1/elicitation/ws?token=t") as ws:
             msg = ws.receive_json()
             assert msg["action"] == "connected"
             assert "stats" in msg
 
     def test_ws_list_empty(self) -> None:
-        client = TestClient(self._make_app())
-        with client.websocket_connect("/api/v1/elicitation/ws") as ws:
+        client = TestClient(self._make_app(token="t"))
+        with client.websocket_connect("/api/v1/elicitation/ws?token=t") as ws:
             ws.receive_json()  # hello
             ws.send_text(json.dumps({"action": "list"}))
             resp = ws.receive_json()
@@ -175,8 +194,8 @@ class TestElicitationWebSocket:
             assert resp["questions"] == []
 
     def test_ws_ping_pong(self) -> None:
-        client = TestClient(self._make_app())
-        with client.websocket_connect("/api/v1/elicitation/ws") as ws:
+        client = TestClient(self._make_app(token="t"))
+        with client.websocket_connect("/api/v1/elicitation/ws?token=t") as ws:
             ws.receive_json()  # hello
             ws.send_text(json.dumps({"action": "ping"}))
             resp = ws.receive_json()
@@ -189,7 +208,7 @@ class TestElicitationWebSocket:
         Async version: the broker.wait() can run on the running loop
         while the TestClient drives the WS handshake.
         """
-        client = TestClient(self._make_app())
+        client = TestClient(self._make_app(token="t"))
         broker = ElicitationBroker.get()
         qid = broker.publish(
             question="Delete?",
@@ -205,7 +224,7 @@ class TestElicitationWebSocket:
         # Yield so waiter reaches the future-creation point.
         await asyncio.sleep(0.05)
 
-        with client.websocket_connect("/api/v1/elicitation/ws") as ws:
+        with client.websocket_connect("/api/v1/elicitation/ws?token=t") as ws:
             ws.receive_json()  # hello
             # Poll loop pushes the question within 500ms.
             got_q = False
@@ -229,7 +248,7 @@ class TestElicitationWebSocket:
         assert result == "yes"
 
     def test_ws_close_when_disabled(self) -> None:
-        client = TestClient(self._make_app())
+        client = TestClient(self._make_app(token="t"))
         # Settings is read at WS accept time, so we patch the
         # Settings() call inside the route.
         with patch("harness.config.Settings") as mock_settings:
@@ -238,14 +257,14 @@ class TestElicitationWebSocket:
             # TestClient raises WebSocketDisconnect on connect.
             from starlette.websockets import WebSocketDisconnect
             with pytest.raises(WebSocketDisconnect) as exc_info:
-                with client.websocket_connect("/api/v1/elicitation/ws") as ws:
+                with client.websocket_connect("/api/v1/elicitation/ws?token=t") as ws:
                     ws.receive_json()
             # WebSocket close code 1008 = policy violation.
             assert exc_info.value.code == 1008
 
     def test_ws_invalid_json_returns_error(self) -> None:
-        client = TestClient(self._make_app())
-        with client.websocket_connect("/api/v1/elicitation/ws") as ws:
+        client = TestClient(self._make_app(token="t"))
+        with client.websocket_connect("/api/v1/elicitation/ws?token=t") as ws:
             ws.receive_json()  # hello
             ws.send_text("not json")
             resp = ws.receive_json()
@@ -253,8 +272,8 @@ class TestElicitationWebSocket:
             assert "invalid JSON" in resp["error"]
 
     def test_ws_unknown_action_returns_error(self) -> None:
-        client = TestClient(self._make_app())
-        with client.websocket_connect("/api/v1/elicitation/ws") as ws:
+        client = TestClient(self._make_app(token="t"))
+        with client.websocket_connect("/api/v1/elicitation/ws?token=t") as ws:
             ws.receive_json()  # hello
             ws.send_text(json.dumps({"action": "frobnicate"}))
             resp = ws.receive_json()

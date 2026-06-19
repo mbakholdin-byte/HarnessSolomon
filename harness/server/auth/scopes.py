@@ -53,6 +53,11 @@ class Scope(str, Enum):
     # (subscribe to Elicitation questions streamed over Server-Sent Events).
     ELICITATION_READ = "elicitation.read"
 
+    # v1.0.0: Elicitation write access (answer questions, including
+    # confirm_dangerous confirmations). Required on WS upgrade and on
+    # POST /api/v1/elicitation/answer.
+    ELICITATION_WRITE = "elicitation.write"
+
     # Phase 4.13B v1.23.0: outbound webhook admin endpoints
     # (re-enable auto-disabled URLs, list/replay the DLQ).
     WEBHOOK_ADMIN = "webhooks.admin"
@@ -71,6 +76,7 @@ SCOPE_DESCRIPTIONS: dict[Scope, str] = {
     Scope.SESSIONS_WRITE: "Force-compact a session's context (POST /api/v1/sessions/{id}/compact, Phase 3 v1.4.0)",
     Scope.OBSERVABILITY_READ: "Read admin observability endpoints (metrics/health/audit, Phase 4.11 v1.21.0)",
     Scope.ELICITATION_READ: "Subscribe to Elicitation questions via SSE transport (Phase 4.11 v1.21.0)",
+    Scope.ELICITATION_WRITE: "Answer Elicitation questions via WS upgrade or POST /answer endpoint, including confirm_dangerous (v1.0.0 security fix)",
     Scope.WEBHOOK_ADMIN: "Administer outbound webhooks: re-enable disabled URLs, list/replay the DLQ (Phase 4.13B v1.23.0)",
 }
 

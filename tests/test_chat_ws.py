@@ -22,11 +22,13 @@ The tests use ``TestClient`` (which supports WebSocket via
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
 import pytest
+from asgi_lifespan import LifespanManager
 from fastapi.testclient import TestClient
 
 from harness.config import settings
@@ -73,18 +75,26 @@ class FakeRouter:
 # === Fixtures ===
 
 @pytest.fixture
-def client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> TestClient:
-    """Test client with isolated data dir + isolated project_root."""
+def client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[TestClient]:
+    """Test client with isolated data dir + isolated project_root.
+
+    v1.0.0 fix: use ``with TestClient(app) as client`` so the FastAPI
+    lifespan runs and ``app.state.token_store`` + ``app.state.auth_required``
+    are initialised. Also disable ``auth_required`` so legacy chat tests
+    don't need a Bearer token.
+    """
     data_dir = tmp_path / "harness-data"
     project_root = tmp_path / "ws-project-root"
     project_root.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(settings, "session_dir", data_dir / "sessions")
     monkeypatch.setattr(settings, "db_path", data_dir / "harness.db")
     monkeypatch.setattr(settings, "project_root", project_root)
+    monkeypatch.setattr(settings, "auth_required", False)
     db_sqlite._db_initialized = False
 
     app = create_app()
-    return TestClient(app)
+    with TestClient(app) as client:
+        yield client
 
 
 def _create_session(client: TestClient, title: str = "ws-test", model: str = "MiniMax-M2.7") -> str:

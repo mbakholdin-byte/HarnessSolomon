@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from asgi_lifespan import LifespanManager
 from fastapi.testclient import TestClient
 from httpx import ASGITransport, AsyncClient
 
@@ -121,10 +122,16 @@ async def client(
     Use for REST calls: ``GET /api/sessions``, ``POST /api/sessions``,
     etc. The chat WebSocket tests prefer the sync ``TestClient`` (below)
     because starlette's WebSocket testing API is sync.
+
+    v1.0.0 fix: trigger the FastAPI lifespan so ``app.state.auth_required``
+    and ``app.state.token_store`` are initialised. ASGITransport alone
+    does NOT run the lifespan — without it, ``require_scope`` cannot see
+    the auth-required flag and 503s on every authenticated route.
     """
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
-        yield ac
+    async with LifespanManager(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            yield ac
 
 
 @pytest.fixture

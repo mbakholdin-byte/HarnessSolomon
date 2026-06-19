@@ -1,6 +1,7 @@
 # Migration Guide — v0.x → v1.0 — Solomon Harness
 
-> Гайд для обновления с ранних версий (Phase 0 MVP v0.1.0) до v1.0.0-rc1+ (Phase 4.14). Описывает breaking changes, deprecated paths, новые обязательные шаги.
+> Гайд для обновления с ранних версий (Phase 0 MVP v0.1.0) до v1.0.0 final (Phase 4.14). Описывает breaking changes, deprecated paths, новые обязательные шаги.
+> Last updated: 2026-06-19, v1.0.0 final.
 
 ## TL;DR
 
@@ -226,4 +227,4 @@ Solomon Harness не имеет formal rollback procedure. Если upgrade сл
 ---
 
 **Версия документа:** v1.22.0 (2026-06-19)
-**Target release:** v1.0.0-rc1 (Phase 4.14 final closeout)
+**Target release:** v1.0.0 final (Phase 4.14 closeout, 2026-06-19)

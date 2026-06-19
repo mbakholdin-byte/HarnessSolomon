@@ -23,6 +23,7 @@ from typing import Any
 
 import pytest
 from fastapi import FastAPI
+from asgi_lifespan import LifespanManager
 from fastapi.testclient import TestClient
 
 from harness.elicitation import ElicitationBroker
@@ -60,6 +61,21 @@ def _make_app(
     app.state.hooks_elicitation_longpoll_enabled = enabled
     app.state.hooks_elicitation_longpoll_timeout_s = timeout_s
     app.state.hooks_elicitation_longpoll_interval_s = interval_s
+
+    # v1.0.0 fix: /poll needs elicitation.read, /answer needs
+    # elicitation.write. Inject a permissive fake store so the legacy
+    # tests can keep working without per-test token plumbing.
+    from harness.server.auth.scopes import Scope
+
+    class _FakeRecord:
+        is_active = True
+        scopes = frozenset({Scope.ELICITATION_READ, Scope.ELICITATION_WRITE})
+
+    class _FakeStore:
+        async def lookup(self, plaintext: str) -> _FakeRecord | None:
+            return _FakeRecord() if plaintext else None
+
+    app.state.token_store = _FakeStore()
     return app
 
 
@@ -68,7 +84,7 @@ class TestElicitationLongPoll:
 
     def test_longpoll_returns_pending_question(self) -> None:
         """Publish a question, GET /poll, expect 200 with the question."""
-        client = TestClient(_make_app(timeout_s=2.0))
+        client = TestClient(_make_app(timeout_s=2.0)); client.headers.update({"Authorization": "Bearer x"})
         broker = ElicitationBroker.get()
         qid = broker.publish(
             question="Run rm -rf /tmp/foo?",
@@ -86,7 +102,7 @@ class TestElicitationLongPoll:
 
     def test_longpoll_returns_404_when_no_question(self) -> None:
         """No pending question → 404 with detail=no_pending_question."""
-        client = TestClient(_make_app(timeout_s=0.1, interval_s=0.02))
+        client = TestClient(_make_app(timeout_s=0.1, interval_s=0.02)); client.headers.update({"Authorization": "Bearer x"})
         resp = client.get("/api/v1/elicitation/poll")
         assert resp.status_code == 404, resp.text
         body = resp.json()
@@ -95,7 +111,7 @@ class TestElicitationLongPoll:
     @pytest.mark.asyncio
     async def test_longpoll_resolves_on_answer_post(self) -> None:
         """POST /answer → broker.wait() future resolves with the value."""
-        client = TestClient(_make_app(timeout_s=2.0))
+        client = TestClient(_make_app(timeout_s=2.0)); client.headers.update({"Authorization": "Bearer x"})
         broker = ElicitationBroker.get()
         qid = broker.publish(
             question="Approve deployment?",
@@ -128,7 +144,7 @@ class TestElicitationLongPoll:
 
     def test_longpoll_disabled_when_setting_false(self) -> None:
         """hooks_elicitation_longpoll_enabled=False → 403 on both endpoints."""
-        client = TestClient(_make_app(enabled=False))
+        client = TestClient(_make_app(enabled=False)); client.headers.update({"Authorization": "Bearer x"})
 
         resp_get = client.get("/api/v1/elicitation/poll")
         assert resp_get.status_code == 403, resp_get.text
@@ -151,6 +167,7 @@ class TestElicitationLongPoll:
         client = TestClient(
             _make_app(timeout_s=1.0, interval_s=0.05),
         )
+        client.headers.update({"Authorization": "Bearer x"})
         # No publish — nothing to poll for.
         import time as _time
 
