@@ -1,11 +1,11 @@
 /**
- * Phase 5.3 v1.25.0 — API client for /api/v1/privacy/zones.
+ * WI-02: Privacy Zones API — refactored to use shared ``APIClient``.
  *
- * Thin wrapper around fetch(). No external dependencies — works in
- * any React project (Next.js, CRA, Vite). The ``apiBase`` defaults
- * to ``/api/v1/privacy`` and can be overridden via the ``baseURL``
- * parameter to ``createPrivacyApiClient``.
+ * Backend: ``/api/v1/privacy/zones`` (Phase 5.3 v1.25.0).
+ * Requires ``privacy.read`` (GET) / ``privacy.write`` (POST/PUT/DELETE) scopes.
  */
+
+import { api } from "./client";
 
 export type ZoneAction = "block" | "redact" | "skip";
 
@@ -38,88 +38,31 @@ export interface PrivacyZoneListResponse {
   total: number;
 }
 
-export interface PrivacyApiClient {
-  list(): Promise<PrivacyZoneListResponse>;
-  get(zoneId: string): Promise<PrivacyZone>;
-  create(body: PrivacyZoneCreate): Promise<PrivacyZone>;
-  update(zoneId: string, body: PrivacyZoneUpdate): Promise<PrivacyZone>;
-  remove(zoneId: string): Promise<void>;
-}
+const BASE = "/privacy/zones";
 
-export function createPrivacyApiClient(
-  baseURL: string = "/api/v1/privacy",
-  getToken?: () => string | null,
-): PrivacyApiClient {
-  const headers = (extra?: Record<string, string>): HeadersInit => {
-    const h: Record<string, string> = {
-      "Content-Type": "application/json",
-      ...extra,
-    };
-    const token = getToken?.();
-    if (token) {
-      h["Authorization"] = `Bearer ${token}`;
-    }
-    return h;
-  };
+export const privacyZonesAPI = {
+  /** List all REST-managed privacy zones (oldest first). */
+  list(): Promise<PrivacyZoneListResponse> {
+    return api.get<PrivacyZoneListResponse>(BASE);
+  },
 
-  const handle = async <T>(res: Response): Promise<T> => {
-    if (!res.ok) {
-      let detail = `HTTP ${res.status}`;
-      try {
-        const body = await res.json();
-        detail = body.detail ?? detail;
-      } catch {
-        // ignore JSON parse errors
-      }
-      throw new Error(detail);
-    }
-    if (res.status === 204) {
-      return undefined as unknown as T;
-    }
-    return res.json() as Promise<T>;
-  };
+  /** Get a single zone by id. 404 if not found. */
+  get(zoneId: string): Promise<PrivacyZone> {
+    return api.get<PrivacyZone>(`${BASE}/${zoneId}`);
+  },
 
-  return {
-    async list(): Promise<PrivacyZoneListResponse> {
-      const res = await fetch(`${baseURL}/zones`, {
-        method: "GET",
-        headers: headers(),
-      });
-      return handle<PrivacyZoneListResponse>(res);
-    },
+  /** Create a new zone. Returns 201. */
+  create(body: PrivacyZoneCreate): Promise<PrivacyZone> {
+    return api.post<PrivacyZone>(BASE, body);
+  },
 
-    async get(zoneId: string): Promise<PrivacyZone> {
-      const res = await fetch(`${baseURL}/zones/${zoneId}`, {
-        method: "GET",
-        headers: headers(),
-      });
-      return handle<PrivacyZone>(res);
-    },
+  /** Update an existing zone (partial — only provided fields). */
+  update(zoneId: string, body: PrivacyZoneUpdate): Promise<PrivacyZone> {
+    return api.put<PrivacyZone>(`${BASE}/${zoneId}`, body);
+  },
 
-    async create(body: PrivacyZoneCreate): Promise<PrivacyZone> {
-      const res = await fetch(`${baseURL}/zones`, {
-        method: "POST",
-        headers: headers(),
-        body: JSON.stringify(body),
-      });
-      return handle<PrivacyZone>(res);
-    },
-
-    async update(zoneId: string, body: PrivacyZoneUpdate): Promise<PrivacyZone> {
-      const res = await fetch(`${baseURL}/zones/${zoneId}`, {
-        method: "PUT",
-        headers: headers(),
-        body: JSON.stringify(body),
-      });
-      return handle<PrivacyZone>(res);
-    },
-
-    async remove(zoneId: string): Promise<void> {
-      const res = await fetch(`${baseURL}/zones/${zoneId}`, {
-        method: "DELETE",
-        headers: headers(),
-      });
-      await handle<void>(res);
-    },
-  };
-}
+  /** Delete a zone. Returns 204 (``null``). */
+  delete(zoneId: string): Promise<void> {
+    return api.delete<void>(`${BASE}/${zoneId}`);
+  },
+};

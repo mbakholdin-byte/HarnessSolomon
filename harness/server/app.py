@@ -17,8 +17,10 @@ from typing import Any
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
-from harness.config import settings
+from harness.config import settings, PROJECT_ROOT
 
 
 @asynccontextmanager
@@ -648,7 +650,7 @@ def create_app() -> FastAPI:
     """Build FastAPI app with middleware and routers."""
     app = FastAPI(
         title="Solomon Harness",
-        version="1.0.0-rc1",
+        version="1.30.0",
         description=(
             "Open-source agentic shell — Web MVP (Phase 0) + "
             "sub-agent system (Phase 2.0+2.1) + GitHub PR integration (Phase 2.2) "
@@ -914,6 +916,47 @@ def create_app() -> FastAPI:
         print("[harness] privacy_zones_admin: enabled (opt-in)")
     else:
         print("[harness] privacy_zones_admin: disabled by setting")
+
+    # === Web UI mount (WI-07) ===
+    # Mount the built Vite SPA at /ui. The dist directory is at
+    # ``PROJECT_ROOT / settings.web_dist_path`` (default: web/dist).
+    # Static assets (JS/CSS) are served from /ui/assets; every other
+    # /ui/* path falls back to index.html (SPA client-side routing).
+    _web_dist = PROJECT_ROOT / settings.web_dist_path
+    if settings.web_ui_enabled and _web_dist.exists() and (_web_dist / "index.html").exists():
+        _assets_dir = _web_dist / "assets"
+        _prefix = settings.web_ui_route_prefix
+
+        # Mount static assets at /ui/assets
+        if _assets_dir.exists():
+            app.mount(
+                f"{_prefix}/assets",
+                StaticFiles(directory=str(_assets_dir), html=False),
+                name="web_ui_assets",
+            )
+
+        # SPA fallback: /ui and /ui/{path:path} → index.html
+        @app.get(f"{_prefix}/{{path:path}}", include_in_schema=False)
+        async def _ui_spa_fallback(path: str = ""):
+            _index_path = _web_dist / "index.html"
+            return FileResponse(_index_path)
+
+        @app.get(_prefix, include_in_schema=False)
+        async def _ui_spa_index():
+            _index_path = _web_dist / "index.html"
+            return FileResponse(_index_path)
+
+        print(f"[harness] web_ui: mounted {_prefix} → {_web_dist}")
+    else:
+        if not settings.web_ui_enabled:
+            print("[harness] web_ui: not mounted (web_ui_enabled=False)")
+        elif not _web_dist.exists():
+            print(f"[harness] web_ui: not mounted (dist dir missing: {_web_dist})")
+        else:
+            print(
+                f"[harness] web_ui: not mounted "
+                f"(index.html missing in {_web_dist})"
+            )
 
     return app
 

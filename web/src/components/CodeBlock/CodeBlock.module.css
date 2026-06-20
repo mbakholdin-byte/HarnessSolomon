@@ -1,0 +1,83 @@
+.wrapper {
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #1e1e1e;
+  font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  background: #2d2d2d;
+  border-bottom: 1px solid #3e3e3e;
+}
+
+.lang {
+  font-size: 12px;
+  color: #aaa;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.copyBtn {
+  background: #3e3e3e;
+  border: none;
+  border-radius: 4px;
+  color: #ccc;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 3px 10px;
+}
+
+.copyBtn:hover {
+  background: #555;
+  color: #fff;
+}
+
+.pre {
+  margin: 0;
+  padding: 14px 16px;
+  overflow-x: auto;
+}
+
+.code {
+  color: #d4d4d4;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Basic syntax highlighting via CSS */
+.code.language-json .string,
+.code.language-json .number,
+.code.language-json .boolean { color: #ce9178; }
+
+.code.language-ts .keyword,
+.code.language-tsx .keyword,
+.code.language-typescript .keyword { color: #569cd6; }
+
+.code.language-ts .string,
+.code.language-tsx .string,
+.code.language-typescript .string { color: #ce9178; }
+
+.code.language-sh .comment,
+.code.language-bash .comment { color: #6a9955; }
+
+.code.language-py .keyword,
+.code.language-python .keyword { color: #569cd6; }
+
+.code.language-py .string,
+.code.language-python .string { color: #ce9178; }
+
+.code.language-py .comment,
+.code.language-python .comment { color: #6a9955; }
+
+.code.language-yaml .key,
+.code.language-yml .key { color: #9cdcfe; }
+
+.code.language-html .tag { color: #569cd6; }
+.code.language-css .property { color: #9cdcfe; }

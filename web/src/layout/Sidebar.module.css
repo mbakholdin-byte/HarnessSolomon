@@ -1,0 +1,105 @@
+.sidebar {
+  width: 250px;
+  min-height: 100vh;
+  background: #1a1a2e;
+  color: #e0e0e0;
+  display: flex;
+  flex-direction: column;
+  transition: width 0.2s ease;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.collapsed {
+  width: 56px;
+}
+
+.logo {
+  padding: 16px;
+  font-size: 16px;
+  font-weight: 700;
+  color: #fff;
+  border-bottom: 1px solid #2a2a4e;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  white-space: nowrap;
+  min-height: 24px;
+}
+
+.logoIcon {
+  font-size: 18px;
+  width: 24px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.logoText {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.toggle {
+  background: none;
+  border: none;
+  color: #888;
+  cursor: pointer;
+  padding: 4px 8px;
+  font-size: 16px;
+  margin-left: auto;
+  border-radius: 4px;
+  line-height: 1;
+}
+
+.toggle:hover {
+  color: #ccc;
+  background: #2a2a4e;
+}
+
+.nav {
+  list-style: none;
+  margin: 0;
+  padding: 8px 0;
+  flex: 1;
+}
+
+.navItem {
+  margin: 0;
+  padding: 0;
+}
+
+.navLink {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  color: #b0b0c0;
+  text-decoration: none;
+  font-size: 14px;
+  transition: background 0.15s, color 0.15s;
+  border-left: 3px solid transparent;
+  white-space: nowrap;
+}
+
+.navLink:hover {
+  background: #2a2a4e;
+  color: #fff;
+}
+
+.active {
+  background: #2a2a4e;
+  color: #fff;
+  border-left-color: #4fc3f7;
+}
+
+.navIcon {
+  font-size: 16px;
+  width: 24px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.navLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

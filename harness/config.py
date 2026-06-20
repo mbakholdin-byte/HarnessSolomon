@@ -1987,6 +1987,33 @@ class Settings(BaseSettings):
         ),
     )
 
+    # === Web UI (WI-07) ===
+    web_ui_enabled: bool = Field(
+        default=True,
+        description=(
+            "Master switch for the built-in Web UI. When True AND "
+            "``web_dist_path / 'index.html'`` exists, the FastAPI app "
+            "mounts ``/ui`` as a StaticFiles + SPA fallback. Set False "
+            "to disable the UI mount entirely (e.g. headless deployments)."
+        ),
+    )
+    web_dist_path: Path = Field(
+        default=Path("web/dist"),
+        description=(
+            "Directory containing the built Web UI (the Vite output). "
+            "Resolved relative to the project root. Must contain "
+            "``index.html`` and an ``assets/`` directory."
+        ),
+    )
+    web_ui_route_prefix: str = Field(
+        default="/ui",
+        description=(
+            "URL prefix under which the Web UI is served. Default "
+            "``/ui``. Serves the SPA at ``/ui`` and static assets at "
+            "``/ui/assets/``."
+        ),
+    )
+
     @model_validator(mode="after")
     def _cascade_thresholds_ordered(self) -> "Settings":
         """Guard against a misconfigured cascade + Phase 2.4 split strategy.

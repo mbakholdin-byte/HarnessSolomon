@@ -1,0 +1,158 @@
+.page {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.title {
+  margin: 0 0 20px;
+  font-size: 22px;
+  font-weight: 700;
+  color: #111;
+}
+
+.tabs {
+  display: flex;
+  border-bottom: 2px solid #e0e0e0;
+  margin-bottom: 20px;
+}
+
+.tab {
+  padding: 8px 16px;
+  border: none;
+  background: none;
+  font-size: 14px;
+  font-weight: 500;
+  color: #666;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.tab:hover {
+  color: #1976d2;
+}
+
+.tabActive {
+  composes: tab;
+  color: #1976d2;
+  border-bottom-color: #1976d2;
+  font-weight: 600;
+}
+
+.errorBlock {
+  color: #c62828;
+  background: #ffebee;
+  padding: 12px;
+  border-radius: 4px;
+  margin-bottom: 16px;
+  font-size: 14px;
+}
+
+.loading {
+  text-align: center;
+  padding: 40px;
+  color: #666;
+  font-size: 15px;
+}
+
+.metricsGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.metricCard {
+  background: #fff;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  padding: 16px;
+  text-align: center;
+}
+
+.metricValue {
+  font-size: 28px;
+  font-weight: 700;
+  color: #1976d2;
+  margin: 0 0 4px;
+}
+
+.metricLabel {
+  font-size: 13px;
+  color: #777;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.metricHelp {
+  font-size: 11px;
+  color: #aaa;
+  margin-top: 4px;
+}
+
+.healthList {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.healthItem {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 14px;
+  border-bottom: 1px solid #f0f0f0;
+  font-size: 14px;
+}
+
+.healthItem:last-child {
+  border-bottom: none;
+}
+
+.healthName {
+  font-weight: 500;
+  color: #333;
+}
+
+.healthLatency {
+  font-size: 12px;
+  color: #999;
+  margin-left: 8px;
+}
+
+.healthError {
+  font-size: 12px;
+  color: #c62828;
+  margin-left: 8px;
+}
+
+.filters {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 16px;
+  align-items: center;
+}
+
+.filterSelect {
+  padding: 6px 10px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-size: 13px;
+  background: #fff;
+  outline: none;
+}
+
+.filterInput {
+  padding: 6px 10px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-size: 13px;
+  outline: none;
+}
+
+.filterInput:focus,
+.filterSelect:focus {
+  border-color: #1976d2;
+}

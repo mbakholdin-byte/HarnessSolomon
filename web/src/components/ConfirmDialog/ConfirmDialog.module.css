@@ -1,0 +1,40 @@
+.message {
+  margin: 0 0 20px 0;
+  font-size: 14px;
+  line-height: 1.6;
+  color: #333;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.cancelBtn {
+  padding: 8px 18px;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  background: #f5f5f5;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.cancelBtn:hover {
+  background: #e8e8e8;
+}
+
+.confirmBtn {
+  padding: 8px 18px;
+  border: none;
+  border-radius: 6px;
+  background: #d32f2f;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.confirmBtn:hover {
+  background: #b71c1c;
+}

@@ -1,0 +1,108 @@
+.page {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+}
+
+.title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 700;
+  color: #111;
+}
+
+.errorBlock {
+  color: #c62828;
+  background: #ffebee;
+  padding: 12px;
+  border-radius: 4px;
+  margin-bottom: 16px;
+  font-size: 14px;
+}
+
+.loading {
+  text-align: center;
+  padding: 40px;
+  color: #666;
+  font-size: 15px;
+}
+
+.configSection {
+  margin-bottom: 16px;
+}
+
+.configTitle {
+  font-size: 14px;
+  font-weight: 600;
+  color: #333;
+  margin: 0 0 6px;
+}
+
+.configRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 0;
+  border-bottom: 1px solid #f0f0f0;
+  font-size: 14px;
+}
+
+.configRow:last-child {
+  border-bottom: none;
+}
+
+.configLabel {
+  color: #555;
+}
+
+.configValue {
+  color: #111;
+  font-weight: 500;
+}
+
+.toggleGroup {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.enableBtn {
+  padding: 6px 14px;
+  background: #2e7d32;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.enableBtn:hover {
+  background: #1b5e20;
+}
+
+.disableBtn {
+  padding: 6px 14px;
+  background: #c62828;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.disableBtn:hover {
+  background: #b71c1c;
+}
+
+.clickableRow {
+  cursor: pointer;
+}

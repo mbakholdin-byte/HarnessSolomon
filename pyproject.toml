@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "solomon-harness"
-version = "1.0.0-rc1"
+version = "1.30.0"
 description = "Open-source agentic harness for local LLM"
 readme = "README.md"
 license = "MIT"
@@ -114,4 +114,5 @@ markers = [
     "real_llm: requires a real LLM API key in env (MINIMAX_API_KEY / ZHIPUAI_API_KEY / MOONSHOT_API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY). Skipped automatically when none is set.",
     "requires_onnx: requires a local ONNX embedding model (intfloat/multilingual-e5-small) at the configured EMBEDDINGS_DIR. Skipped automatically when the model files are not present.",
     "smoke: integration smoke test (slow — boots the real FastAPI lifespan). Run explicitly: pytest -m smoke",
+    "slow: slow test (npm build, heavy I/O, or network). Run explicitly: pytest -m slow",
 ]
