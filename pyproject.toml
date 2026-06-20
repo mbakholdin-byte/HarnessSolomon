@@ -65,6 +65,14 @@ eval = [
 observability = [
     "prometheus_client>=0.20",  # Phase 4.14 smoke test + production /metrics endpoint
 ]
+# Phase 6.4 v1.29.0 — Rust fast paths (AhoCorasick redaction + in-memory BM25).
+# Installs the prebuilt wheel from ./harness-perf. The Python wrappers in
+# ``harness/privacy/zones.py`` and ``harness/memory/retrieval/bm25_fast.py``
+# detect the wheel at import time and fall back to pure Python when it is
+# absent, so this extra is strictly opt-in for latency-sensitive deployments.
+perf = [
+    "harness-perf>=0.1.0",  # PyO3 cdylib: aho-corasick multi-pattern replace + BM25
+]
 
 [project.scripts]
 harness = "harness.cli:main"

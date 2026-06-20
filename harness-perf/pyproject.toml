@@ -1,0 +1,24 @@
+[build-system]
+requires = ["maturin>=1.5,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "harness-perf"
+version = "0.1.0"
+description = "Rust fast paths for Harness: AhoCorasick multi-pattern redaction + in-memory BM25"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "Solomon", email = "solomon@mark.local" }]
+keywords = ["rust", "pyo3", "bm25", "aho-corasick", "redaction"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Rust",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+module-name = "harness_perf"

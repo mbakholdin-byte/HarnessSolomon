@@ -26,6 +26,11 @@ build/
 .DS_Store
 Thumbs.db
 
+# Rust (Phase 6.4)
+harness-perf/target/
+harness-perf/dist/
+harness-perf/*.egg-info/
+
 # Harness
 data/
 sessions/

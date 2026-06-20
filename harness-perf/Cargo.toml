@@ -1,0 +1,22 @@
+[package]
+name = "harness-perf"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+authors = ["Solomon <solomon@mark.local>"]
+description = "Rust fast paths for Harness (PyO3): AhoCorasick multi-pattern redaction + in-memory BM25"
+license = "MIT"
+publish = false
+
+[lib]
+name = "harness_perf"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pyo3 = { version = "0.22", features = ["extension-module"] }
+aho-corasick = "1.1"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
