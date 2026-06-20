@@ -1937,30 +1937,41 @@ class Settings(BaseSettings):
         ),
     )
 
-    # === Phase 6.2: Plugin subsystem ===
+    # === Phase 6.2A v1.27.0: Plugin loader v0 ===
+    # User-extensible plugin system. Plugins are plain ``*.py`` files
+    # in ``plugins_dir`` that expose a ``register(registry)`` function.
+    # The loader scans the directory at server startup and exec's each
+    # plugin in a restricted globals namespace (no ``harness.agents`` /
+    # ``harness.server`` imports — enforced by an AST pre-scan). See
+    # :mod:`harness.plugins.loader` for the implementation.
     plugins_enabled: bool = Field(
         default=False,
         description=(
-            "Phase 6.2: master switch for the plugin subsystem. When False, "
-            "no plugins are loaded or executed. Default False — plugins run "
-            "in subprocess sandboxes and operators must explicitly opt in."
+            "Phase 6.2A v1.27.0: master switch for the plugin loader. "
+            "When False (default — opt-in), the lifespan startup does "
+            "NOT scan ``plugins_dir`` and no plugin code is executed. "
+            "Flip to True to enable. Plugins are untrusted user code; "
+            "the loader restricts their globals namespace and AST-"
+            "blocks imports of ``harness.agents`` / ``harness.server``."
         ),
     )
     plugins_dir: Path = Field(
         default=Path(".harness/plugins"),
         description=(
-            "Phase 6.2: directory containing plugin .py files. Resolved "
-            "relative to settings.project_root. Plugins outside this "
-            "directory are not discovered by the registry."
+            "Phase 6.2A v1.27.0: directory scanned for ``*.py`` plugin "
+            "files. Resolved relative to ``settings.project_root``. "
+            "Default ``.harness/plugins`` (project-local, user-editable). "
+            "Non-existent directory is silently skipped (no error)."
         ),
     )
-    plugins_allowed: str = Field(
-        default="",
+    plugins_allowed: list[str] = Field(
+        default_factory=list,
         description=(
-            "Phase 6.2: comma-separated whitelist of allowed plugin names "
-            "(without .py extension) and/or scopes. Empty string = all "
-            "plugins in plugins_dir are allowed (open dev mode). Example: "
-            "``weather,github-read,slack-write``."
+            "Phase 6.2A v1.27.0: whitelist of plugin stems allowed to "
+            "load. Empty list (default) = ALL discovered plugins are "
+            "allowed. Set to e.g. ``['example_logger', 'my_metrics']`` "
+            "to load only those, silently skipping the rest. Stems are "
+            "the ``*.py`` filename without extension."
         ),
     )
 

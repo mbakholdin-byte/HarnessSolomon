@@ -544,6 +544,42 @@ async def lifespan(app: FastAPI):
     except Exception:  # noqa: BLE001 — best-effort
         pass
 
+    # Phase 6.2A v1.27.0: Plugin loader. Opt-in via ``plugins_enabled``.
+    # Loads *.py files from ``plugins_dir`` (resolved against
+    # ``settings.project_root``) into the :class:`PluginRegistry`
+    # singleton. Each plugin runs in a restricted globals namespace;
+    # imports of ``harness.agents`` / ``harness.server`` are AST-blocked.
+    # Failures (per-plugin) are logged and skipped — startup never aborts.
+    if settings.plugins_enabled:
+        try:
+            from harness.plugins import get_registry
+            from harness.plugins.loader import load_plugins_from_dir
+
+            _plugins_dir = (
+                settings.project_root / settings.plugins_dir
+                if not settings.plugins_dir.is_absolute()
+                else settings.plugins_dir
+            )
+            _allowed = settings.plugins_allowed or None
+            _plugin_registry = get_registry()
+            _loaded = load_plugins_from_dir(
+                _plugins_dir,
+                registry=_plugin_registry,
+                allowed=_allowed,
+            )
+            app.state.plugin_registry = _plugin_registry
+            print(
+                f"[harness] plugins: loaded {len(_loaded)} plugin(s) "
+                f"from {_plugins_dir}"
+            )
+        except Exception as exc:  # noqa: BLE001 — best-effort
+            print(
+                f"[harness] plugins: disabled (init failed: "
+                f"{type(exc).__name__}: {exc})"
+            )
+    else:
+        print("[harness] plugins: disabled (plugins_enabled=False)")
+
     yield
     # shutdown: close the outbound dispatcher's HTTP client.
     # ``outbound`` may not exist if the runner init failed (in
