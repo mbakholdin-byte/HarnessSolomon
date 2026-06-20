@@ -1,5 +1,40 @@
 # Changelog — Solomon Harness
 
+## v1.31.0 (Phase 7.3) — 2026-06-20
+
+### Backend
+- REST /api/v1/hooks — admin endpoints (list, get, enable, disable)
+- REST /api/v1/plugins — admin endpoints (list, get, enable, disable)
+- Audit log: date range filter (from/to ISO 8601) + CSV/JSON export
+- WebSocket /api/v1/observability/ws — bidirectional, metrics push every 1s
+- MetricsBroker: in-memory pub/sub with backpressure
+- MetricsCollector: background task, PrometheusMetrics + HealthChecker snapshots
+
+### Frontend
+- AuditPage: date range picker, CSV/JSON download, pagination
+- HooksPage: WebSocket live state (real-time on/off toggle)
+- PluginsPage: WebSocket live state
+- ObservabilityPage: WebSocket real-time metrics + health
+- DateRangePicker component (reusable)
+- ObservabilityWS client (auto-reconnect, heartbeat)
+
+### Infrastructure
+- Rust ed25519 signature verify (harness-perf, ed25519-dalek 2.x)
+- Python fallback (cryptography lib)
+- Trust boundary AST: 3 new checks (hooks_admin, plugins_admin, observability_ws)
+- New scopes: hooks.admin, plugins.admin
+- New settings: ws_metrics_interval_s, ws_heartbeat_s, ws_max_backlog
+
+### Tests
+- 8 REST endpoints → 14 new Python tests
+- 6 audit export tests
+- 23 WebSocket tests (11 broker + 12 integration)
+- 12 frontend tests (4 audit page + 3 WS + 5 trust boundary)
+- 7 signature tests (Rust + Python)
+- Total: ~50 new tests, 0 regressions
+
+---
+
 ## v1.0.0 — FINAL (2026-06-19) — Honest Release
 
 **Honest scope disclaimer (added post Марк review 2026-06-19).** v1.0.0 = **solid agentic shell backend** с правильной архитектурой (trust boundary, observability, RBAC, hot-reload, eval infra) + comprehensive docs. v1.0.0 ≠ production-ready multi-agent platform (нет Docker sandbox, нет SWE-bench, нет plugin system, нет pluggable model registry). **Production-ready platform = v1.1+** (Tracks 1-6, ~6-12 недель работы). Полный breakdown: `roadmap.md` → секция "Honest Scope".

@@ -1,0 +1,128 @@
+.page {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.title {
+  margin: 0 0 20px;
+  font-size: 22px;
+  font-weight: 700;
+  color: #111;
+}
+
+/* ── Toolbar ─────────────────────────────────────────────────────── */
+
+.toolbar {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+
+.formatGroup {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.formatLabel {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  color: #444;
+  cursor: pointer;
+  user-select: none;
+}
+
+.downloadBtn {
+  padding: 8px 18px;
+  background: #1976d2;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.downloadBtn:hover {
+  background: #1565c0;
+}
+
+.downloadBtn:disabled {
+  background: #90caf9;
+  cursor: not-allowed;
+}
+
+/* ── States ──────────────────────────────────────────────────────── */
+
+.errorBlock {
+  color: #c62828;
+  background: #ffebee;
+  padding: 12px;
+  border-radius: 4px;
+  margin-bottom: 16px;
+  font-size: 14px;
+}
+
+.loading {
+  text-align: center;
+  padding: 40px;
+  color: #666;
+  font-size: 15px;
+}
+
+.empty {
+  text-align: center;
+  padding: 40px;
+  color: #999;
+  font-size: 15px;
+  font-style: italic;
+}
+
+/* ── Table overrides ─────────────────────────────────────────────── */
+
+.timestampCell {
+  font-size: 12px;
+  white-space: nowrap;
+  color: #555;
+}
+
+/* ── Pagination ──────────────────────────────────────────────────── */
+
+.pagination {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.pageBtn {
+  padding: 6px 14px;
+  background: #fff;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-size: 13px;
+  cursor: pointer;
+  color: #333;
+}
+
+.pageBtn:hover:not(:disabled) {
+  background: #f5f5f5;
+  border-color: #999;
+}
+
+.pageBtn:disabled {
+  color: #ccc;
+  cursor: not-allowed;
+}
+
+.pageInfo {
+  font-size: 13px;
+  color: #666;
+}

@@ -1,0 +1,29 @@
+.wrapper {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #444;
+}
+
+.input {
+  padding: 6px 10px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-size: 13px;
+  outline: none;
+  background: #fff;
+  color: #111;
+}
+
+.input:focus {
+  border-color: #1976d2;
+}

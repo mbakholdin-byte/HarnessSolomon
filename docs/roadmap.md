@@ -2,7 +2,7 @@
 
 **Проект:** Solomon Harness
 **Цель:** open-source агентская оболочка с multi-model (T1/T2/T3), сильнее Claude Code и OpenCode
-**Дата:** 12.06.2026 (v1.0), 13.06.2026 (v1.1 — multi-model), 13.06.2026 (v1.2 — Web + облачный MVP), 15.06.2026 (v2.0 — sync v0.4.0), 15.06.2026 (v2.10 — Phase 3 v1.5.0 closeout), **15.06.2026 (v2.11 — Phase 4 status audit)**, **16.06.2026 (v3.0 — Phase 3 = 12/12 FINAL, Phase 4 = 0/12 NOT STARTED)**
+**Дата:** 12.06.2026 (v1.0), 13.06.2026 (v1.1 — multi-model), 13.06.2026 (v1.2 — Web + облачный MVP), 15.06.2026 (v2.0 — sync v0.4.0), 15.06.2026 (v2.10 — Phase 3 v1.5.0 closeout), **15.06.2026 (v2.11 — Phase 4 status audit)**, **16.06.2026 (v3.0 — Phase 3 = 12/12 FINAL, Phase 4 = 0/12 NOT STARTED)**, **20.06.2026 (v3.30 — Phase 7.3 SHIPPED, Plugin Marketplace next)**
 **Автор:** Соломон
 **Заказчик:** Марк
 **Текущий tag:** `v1.5.0` (HEAD `ec8beaf`, 15.06.2026)
@@ -534,6 +534,27 @@ UX, web-обёртка, интеграции с IDE.
 
 ---
 
+## Phase 7.3 — SHIPPED (v1.31.0, 20.06.2026)
+
+### Что закрыто
+- REST /api/v1/hooks admin (4 endpoints: list, get, enable, disable)
+- REST /api/v1/plugins admin (4 endpoints: list, get, enable, disable)
+- Audit log date range filter + CSV/JSON export
+- WebSocket MetricsBroker + /api/v1/observability/ws (full duplex, metrics push 1s)
+- AuditPage, HooksPage, PluginsPage, ObservabilityPage — WebSocket live state
+- DateRangePicker component (reusable) + ObservabilityWS client
+- Rust ed25519 signature verify (harness-perf) + Python fallback
+- Trust boundary AST: 3 new checks (hooks_admin, plugins_admin, observability_ws)
+- ~50 new tests, 0 regressions
+
+### Следующие версии (Phase 7.4+)
+- **v1.32.0** — Plugin Marketplace (next)
+- **v1.33.0** — Tier Router calibration
+- **v1.34.0** — Embeddings swap
+- **v1.35.0** — Cross-encoder + B5 eval
+
+---
+
 ## Следующие шаги (что делать прямо сейчас)
 
 1. **Создать репо:** `C:\MyAI\06_Harness\` (рядом с 05_TaskGraph)
@@ -545,6 +566,6 @@ UX, web-обёртка, интеграции с IDE.
 
 ---
 
-**Roadmap версия:** 1.0
-**Дата:** 12.06.2026
-**Следующий review:** после завершения Фазы 0 (через 2 недели)
+**Roadmap версия:** 3.30
+**Дата:** 20.06.2026
+**Следующий review:** Phase 7.4 — Plugin Marketplace (v1.32.0)

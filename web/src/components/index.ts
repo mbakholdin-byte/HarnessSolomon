@@ -8,3 +8,5 @@ export { Badge } from './Badge/Badge';
 export type { BadgeProps, BadgeVariant } from './Badge/Badge';
 export { ConfirmDialog } from './ConfirmDialog/ConfirmDialog';
 export type { ConfirmDialogProps } from './ConfirmDialog/ConfirmDialog';
+export { DateRangePicker } from './DateRangePicker/DateRangePicker';
+export type { DateRangePickerProps } from './DateRangePicker/DateRangePicker';

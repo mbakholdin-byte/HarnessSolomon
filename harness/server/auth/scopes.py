@@ -67,6 +67,12 @@ class Scope(str, Enum):
     PRIVACY_READ = "privacy.read"
     PRIVACY_WRITE = "privacy.write"
 
+    # v1.31.0: hooks admin endpoints (GET/POST /api/v1/hooks/*)
+    HOOKS_ADMIN = "hooks.admin"
+
+    # v1.31.0: plugins admin endpoints (GET/POST /api/v1/plugins/*)
+    PLUGINS_ADMIN = "plugins.admin"
+
 
 ALL_SCOPES: frozenset[Scope] = frozenset(Scope)
 
@@ -85,6 +91,8 @@ SCOPE_DESCRIPTIONS: dict[Scope, str] = {
     Scope.WEBHOOK_ADMIN: "Administer outbound webhooks: re-enable disabled URLs, list/replay the DLQ (Phase 4.13B v1.23.0)",
     Scope.PRIVACY_READ: "Read privacy zone rules (GET /api/v1/privacy/zones*, Phase 5.3 v1.25.0)",
     Scope.PRIVACY_WRITE: "Create / update / delete privacy zone rules (POST/PUT/DELETE /api/v1/privacy/zones, Phase 5.3 v1.25.0)",
+    Scope.HOOKS_ADMIN: "Administer hooks: list, inspect, enable, disable (GET/POST /api/v1/hooks/*, v1.31.0)",
+    Scope.PLUGINS_ADMIN: "Administer plugins: list, inspect, enable, disable (GET/POST /api/v1/plugins/*, v1.31.0)",
 }
 
 

@@ -12,6 +12,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: '/privacy-zones', label: 'Privacy Zones', icon: '🔒' },
   { to: '/hooks', label: 'Hooks', icon: '🪝' },
   { to: '/observability', label: 'Observability', icon: '📊' },
+  { to: '/audit', label: 'Audit', icon: '📋' },
   { to: '/plugins', label: 'Plugins', icon: '🧩' },
   { to: '/settings', label: 'Settings', icon: '⚙️' },
 ];

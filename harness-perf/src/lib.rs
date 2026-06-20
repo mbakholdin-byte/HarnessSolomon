@@ -1,8 +1,10 @@
 //! Harness perf — Rust fast paths for Python harness (PyO3).
 //!
-//! Two hot paths exposed to Python:
+//! Four hot paths exposed to Python:
 //!   * [`redact::redact_patterns`] — AhoCorasick multi-pattern replace.
 //!   * [`bm25::bm25_search`] — in-memory BM25 ranking (k1=1.5, b=0.75).
+//!   * [`ed25519_verify::verify_signature`] — Ed25519 signature verification.
+//!   * [`ed25519_verify::generate_keypair`] — Ed25519 keypair generation.
 //!
 //! Trust boundary: this crate does NOT depend on any `harness.*` code.
 //! All inputs come through plain Python primitives (`&str`, `Vec<String>`).
@@ -33,17 +35,20 @@
 )]
 
 pub mod bm25;
+pub mod ed25519_verify;
 pub mod redact;
 
 use pyo3::prelude::*;
 
 /// Python-facing module: ``import harness_perf``.
 ///
-/// Exposes two functions. See the per-module docstrings for semantics.
+/// Exposes four functions. See the per-module docstrings for semantics.
 #[pymodule]
 fn harness_perf(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(redact::redact_patterns, m)?)?;
     m.add_function(wrap_pyfunction!(bm25::bm25_search, m)?)?;
+    m.add_function(wrap_pyfunction!(ed25519_verify::py_verify_signature, m)?)?;
+    m.add_function(wrap_pyfunction!(ed25519_verify::py_generate_keypair, m)?)?;
     m.add("__doc__", "Rust fast paths for Harness (PyO3).")?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())

@@ -1,11 +1,14 @@
 /**
- * WI-04: Observability page — metrics, audit log, and health dashboard.
+ * WI-05: Observability page — metrics, audit log, and health dashboard.
  *
- * Tab-based layout showing system metrics as cards, a filterable audit
- * log table, and a deep health probe report with status badges.
+ * Tab-based layout: Metrics | Audit Log | Health.
+ *
+ * WI-05: WebSocket integration — replaces polling for metrics + health.
+ * Both metrics and health arrive in real-time via WS (topics: "metrics",
+ * "health"), updating every ~1s. Audit tab remains REST-based.
  */
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
   observAPI,
   type SystemMetrics,
@@ -13,9 +16,19 @@ import {
   type HealthStatus,
 } from "../api/observability";
 import { APIError } from "../api/types";
+import { ObservabilityWS } from "../api/ws";
 import { Table, Badge } from "../components";
 import type { TableColumn } from "../components";
 import styles from "./ObservabilityPage.module.css";
+
+/* ── Constants ────────────────────────────────────────────────────── */
+
+const AUTH_TOKEN_KEY = "auth_token";
+
+function getWsUrl(): string {
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${protocol}//${window.location.host}/api/v1/observability/ws`;
+}
 
 /* ── Types ───────────────────────────────────────────────────────── */
 
@@ -52,7 +65,10 @@ export function ObservabilityPage(): JSX.Element {
   const [healthLoading, setHealthLoading] = useState(false);
   const [healthError, setHealthError] = useState<string | null>(null);
 
-  /* ── Fetch data for active tab ─────────────────────────────────── */
+  // WebSocket ref
+  const wsRef = useRef<ObservabilityWS | null>(null);
+
+  /* ── Fetch data for active tab (initial one-time) ───────────────── */
 
   const fetchMetrics = useCallback(async (): Promise<void> => {
     setMetricsLoading(true);
@@ -125,6 +141,40 @@ export function ObservabilityPage(): JSX.Element {
     }
   }, [activeTab, metrics, auditEntries.length, health, fetchMetrics, fetchAuditLog, fetchHealth]);
 
+  /* ── WebSocket for real-time metrics + health ───────────────────── */
+
+  useEffect(() => {
+    const token = localStorage.getItem(AUTH_TOKEN_KEY) || "";
+    const ws = new ObservabilityWS(getWsUrl(), token);
+    wsRef.current = ws;
+
+    ws.onMessage((msg: Record<string, unknown>) => {
+      // Real-time metrics update
+      if (msg.type === "metrics" && msg.data) {
+        setMetrics(msg.data as SystemMetrics);
+        setMetricsError(null);
+      }
+
+      // Real-time health probe update
+      if (msg.type === "health" && msg.data) {
+        setHealth(msg.data as HealthStatus);
+        setHealthError(null);
+      }
+    });
+
+    ws.connect()
+      .then(() => {
+        ws.subscribe(["metrics", "health"]);
+      })
+      .catch(() => {
+        // WS connection failed — REST fallback works.
+      });
+
+    return () => {
+      ws.disconnect();
+    };
+  }, []);
+
   /* ── Audit table columns ───────────────────────────────────────── */
 
   const auditColumns: TableColumn<AuditEntry>[] = [
@@ -194,7 +244,7 @@ export function ObservabilityPage(): JSX.Element {
           {metricsError && (
             <div className={styles.errorBlock}>{metricsError}</div>
           )}
-          {metricsLoading ? (
+          {metricsLoading && !metrics ? (
             <div className={styles.loading}>Loading metrics...</div>
           ) : metrics ? (
             <div className={styles.metricsGrid}>
@@ -254,7 +304,7 @@ export function ObservabilityPage(): JSX.Element {
           {healthError && (
             <div className={styles.errorBlock}>{healthError}</div>
           )}
-          {healthLoading ? (
+          {healthLoading && !health ? (
             <div className={styles.loading}>Checking health...</div>
           ) : health ? (
             <div>

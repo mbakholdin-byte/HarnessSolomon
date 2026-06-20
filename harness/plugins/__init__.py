@@ -71,6 +71,7 @@ class PluginRegistry:
         self._tools: dict[str, tuple[ToolHandler, dict[str, Any]]] = {}
         self._scopes: dict[str, str] = {}
         self._plugins: dict[str, PluginInfo] = {}
+        self._disabled: set[str] = set()
 
     # === Registration surface ===
 
@@ -113,6 +114,60 @@ class PluginRegistry:
     def register_plugin(self, info: PluginInfo) -> None:
         """Record that a plugin was loaded (called by the loader)."""
         self._plugins[info.name] = info
+        # If it was previously disabled, clear that state on re-load.
+        self._disabled.discard(info.name)
+
+    # === Lifecycle surface (v1.31.0) ===
+
+    def enable(self, name: str) -> bool:
+        """Re-enable a previously disabled plugin.
+
+        Removes ``name`` from the disabled set. The plugin must be
+        reloaded via the loader for its hooks/tools to become active
+        again — this method only clears the administrative block.
+        Returns True if the plugin was previously disabled, False
+        if it was already active or unknown.
+        """
+        if name in self._disabled:
+            self._disabled.discard(name)
+            return True
+        return False
+
+    def disable(self, name: str) -> bool:
+        """Disable a plugin: unload + mark disabled.
+
+        Removes the plugin from ``_plugins``, its hooks from
+        ``_hooks``, and its tools from ``_tools``. Adds ``name``
+        to the ``_disabled`` set so it cannot be re-loaded until
+        ``enable()`` is called. Returns True if the plugin was
+        loaded, False if it was already disabled or unknown.
+        """
+        if name not in self._plugins:
+            return False
+        # Remove the plugin record.
+        info = self._plugins.pop(name)
+        # Remove its hooks.
+        for hook_name in list(self._hooks.keys()):
+            self._hooks[hook_name] = [
+                (pn, h) for (pn, h) in self._hooks[hook_name]
+                if pn != name
+            ]
+            if not self._hooks[hook_name]:
+                del self._hooks[hook_name]
+        # Remove its tools.
+        for tool_name in list(info.tools):
+            self._tools.pop(tool_name, None)
+        # Mark disabled.
+        self._disabled.add(name)
+        return True
+
+    def get_plugin(self, name: str) -> PluginInfo | None:
+        """Return a single plugin by name, or None if not found."""
+        return self._plugins.get(name)
+
+    def is_disabled(self, name: str) -> bool:
+        """Return True if the plugin name is in the disabled set."""
+        return name in self._disabled
 
     # === Introspection surface ===
 

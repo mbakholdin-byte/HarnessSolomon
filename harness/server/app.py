@@ -12,6 +12,7 @@ and lets the dependency layer short-circuit auth in dev mode
 """
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -620,6 +621,38 @@ async def lifespan(app: FastAPI):
     else:
         print("[harness] plugins: disabled (plugins_enabled=False)")
 
+    # WI-04: MetricsBroker + background collector.
+    # Best-effort — if the broker fails to init, the WS route returns
+    # 503 but the rest of the server is unaffected.
+    from harness.observability.metrics_broker import MetricsBroker
+    from harness.observability.metrics_collector import start_metrics_collector
+    from harness.observability import get_observability
+
+    try:
+        _ws_max_backlog = getattr(settings, "ws_max_backlog", 100)
+        _ws_interval_s = getattr(settings, "ws_metrics_interval_s", 1.0)
+        broker = MetricsBroker(max_backlog=_ws_max_backlog)
+        app.state.metrics_broker = broker
+        obs = get_observability()
+        _collector_task = await start_metrics_collector(
+            broker=broker,
+            interval_s=_ws_interval_s,
+            health_checker=obs.health,
+            metrics_obj=obs.metrics,
+        )
+        app.state.metrics_collector_task = _collector_task
+        print(
+            f"[harness] metrics_broker: enabled "
+            f"(max_backlog={_ws_max_backlog}, interval={_ws_interval_s}s)"
+        )
+    except Exception as exc:  # noqa: BLE001 — best-effort
+        print(
+            f"[harness] metrics_broker: disabled (init failed: "
+            f"{type(exc).__name__}: {exc})"
+        )
+        app.state.metrics_broker = None
+        app.state.metrics_collector_task = None
+
     yield
     # shutdown: close the outbound dispatcher's HTTP client.
     # ``outbound`` may not exist if the runner init failed (in
@@ -640,6 +673,14 @@ async def lifespan(app: FastAPI):
         )
     except Exception:  # noqa: BLE001 — best-effort
         pass
+    # WI-04: stop the metrics collector background task.
+    _collector_task = getattr(app.state, "metrics_collector_task", None)
+    if _collector_task is not None:
+        _collector_task.cancel()
+        try:
+            await _collector_task
+        except asyncio.CancelledError:
+            pass
     # Phase 4.2: stop hot-reload watcher.
     watcher = getattr(app.state, "hot_reload_watcher", None)
     if watcher is not None:
@@ -650,7 +691,7 @@ def create_app() -> FastAPI:
     """Build FastAPI app with middleware and routers."""
     app = FastAPI(
         title="Solomon Harness",
-        version="1.30.0",
+        version="1.31.0",
         description=(
             "Open-source agentic shell — Web MVP (Phase 0) + "
             "sub-agent system (Phase 2.0+2.1) + GitHub PR integration (Phase 2.2) "
@@ -832,6 +873,23 @@ def create_app() -> FastAPI:
         print("[harness] observability_admin: enabled (scope=observability.read)")
     else:
         print("[harness] observability_admin: disabled by setting")
+    # WI-03 v1.31.0: audit log endpoint — date-range filter + CSV/JSON export.
+    # Mounted unconditionally (no enable flag) — the endpoint is scope-gated
+    # via ``Scope.OBSERVABILITY_READ`` inside the router itself.
+    from harness.server.routes.audit import router as audit_router
+    app.include_router(
+        audit_router,
+        prefix="/api/v1/audit",
+        tags=["audit"],
+    )
+    print("[harness] audit: enabled (scope=observability.read)")
+    # WI-04: WebSocket observability endpoint.
+    # Mounted unconditionally — the route returns 503 when the broker
+    # is not configured (lifespan init failed). Auth is via query param
+    # token rather than the standard Bearer header (WebSocket limitation).
+    from harness.server.routes.observability_ws import router as observability_ws_router
+    app.include_router(observability_ws_router, tags=["observability-ws"])
+    print("[harness] observability_ws: mounted /api/v1/observability/ws")
     # Phase 4.13B v1.23.0: outbound webhook admin endpoints
     # (POST /api/v1/webhooks/{url}/enable for re-enabling auto-disabled
     # URLs). Mounted at /api/v1 so the path matches the existing
@@ -916,6 +974,38 @@ def create_app() -> FastAPI:
         print("[harness] privacy_zones_admin: enabled (opt-in)")
     else:
         print("[harness] privacy_zones_admin: disabled by setting")
+
+    # v1.31.0: hooks admin REST API. Mounted when ``hooks_admin_enabled``
+    # is True (default). When False, endpoints are not registered (404).
+    # All endpoints are scope-gated via ``hooks.admin`` inside the router.
+    if getattr(settings, "hooks_admin_enabled", True):
+        from harness.server.routes.hooks_admin import (
+            router as hooks_admin_router,
+        )
+        app.include_router(
+            hooks_admin_router,
+            prefix="/api/v1",
+            tags=["hooks-admin"],
+        )
+        print("[harness] hooks_admin: enabled (scope=hooks.admin)")
+    else:
+        print("[harness] hooks_admin: disabled by setting")
+
+    # v1.31.0: plugins admin REST API. Mounted when ``plugins_admin_enabled``
+    # is True (default). When False, endpoints are not registered (404).
+    # All endpoints are scope-gated via ``plugins.admin`` inside the router.
+    if getattr(settings, "plugins_admin_enabled", True):
+        from harness.server.routes.plugins_admin import (
+            router as plugins_admin_router,
+        )
+        app.include_router(
+            plugins_admin_router,
+            prefix="/api/v1",
+            tags=["plugins-admin"],
+        )
+        print("[harness] plugins_admin: enabled (scope=plugins.admin)")
+    else:
+        print("[harness] plugins_admin: disabled by setting")
 
     # === Web UI mount (WI-07) ===
     # Mount the built Vite SPA at /ui. The dist directory is at

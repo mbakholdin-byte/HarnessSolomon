@@ -1,20 +1,34 @@
 /**
- * WI-04: Event Hooks page — admin interface for the hook subsystem.
+ * WI-05: Event Hooks page — admin interface for the hook subsystem.
  *
  * Lists all registered hook events, shows configuration details in a
  * modal, and provides enable/disable toggles.
+ *
+ * WI-05: WebSocket integration — replaces polling for live hook on/off state.
+ * Initial data loaded via REST; subsequent state changes arrive via WS
+ * (topic: "hooks").
  */
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   hooksAPI,
   type HookEvent,
   type HookConfig,
 } from "../api/hooks";
 import { APIError } from "../api/types";
+import { ObservabilityWS } from "../api/ws";
 import { Table, Modal, Badge } from "../components";
 import type { TableColumn } from "../components";
 import styles from "./HooksPage.module.css";
+
+/* ── Constants ────────────────────────────────────────────────────── */
+
+const AUTH_TOKEN_KEY = "auth_token";
+
+function getWsUrl(): string {
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${protocol}//${window.location.host}/api/v1/observability/ws`;
+}
 
 /* ── Helpers ─────────────────────────────────────────────────────── */
 
@@ -37,7 +51,10 @@ export function HooksPage(): JSX.Element {
   const [configError, setConfigError] = useState<string | null>(null);
   const [toggling, setToggling] = useState(false);
 
-  /* ── Data fetching ─────────────────────────────────────────────── */
+  // WebSocket ref
+  const wsRef = useRef<ObservabilityWS | null>(null);
+
+  /* ── Data fetching (initial load) ───────────────────────────────── */
 
   const fetchEvents = useCallback(async (): Promise<void> => {
     setLoading(true);
@@ -61,6 +78,42 @@ export function HooksPage(): JSX.Element {
   useEffect(() => {
     void fetchEvents();
   }, [fetchEvents]);
+
+  /* ── WebSocket for live hook state ──────────────────────────────── */
+
+  useEffect(() => {
+    const token = localStorage.getItem(AUTH_TOKEN_KEY) || "";
+    const ws = new ObservabilityWS(getWsUrl(), token);
+    wsRef.current = ws;
+
+    ws.onMessage((msg: Record<string, unknown>) => {
+      // Handle hook config state updates from backend
+      if (
+        msg.type === "hooks_config" &&
+        msg.data &&
+        typeof msg.data === "object"
+      ) {
+        const data = msg.data as Record<string, unknown>;
+        if (typeof data.enabled === "boolean") {
+          setConfig((prev) =>
+            prev ? { ...prev, enabled: data.enabled as boolean } : prev,
+          );
+        }
+      }
+    });
+
+    ws.connect()
+      .then(() => {
+        ws.subscribe(["hooks"]);
+      })
+      .catch(() => {
+        // WS connection failed — no UI feedback needed, REST fallback works.
+      });
+
+    return () => {
+      ws.disconnect();
+    };
+  }, []);
 
   /* ── Config modal ──────────────────────────────────────────────── */
 
@@ -95,7 +148,7 @@ export function HooksPage(): JSX.Element {
       } else {
         await hooksAPI.disable();
       }
-      // Refresh config after toggle
+      // Refresh config after toggle (WS will also push update)
       const cfg = await hooksAPI.getConfig();
       setConfig(cfg);
     } catch (err) {
@@ -150,10 +203,8 @@ export function HooksPage(): JSX.Element {
           data={events}
           defaultSortKey="name"
           defaultSortDirection="asc"
-          onSort={(key) => {
-            if (key === "name" && events.length > 0) {
-              // Sort handled internally by Table component
-            }
+          onSort={() => {
+            // Sort handled internally by Table component
           }}
         />
       )}

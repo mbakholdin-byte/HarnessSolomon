@@ -4,6 +4,7 @@ import PrivacyZonesPage from './pages/PrivacyZonesPage';
 import HooksPage from './pages/HooksPage';
 import ObservabilityPage from './pages/ObservabilityPage';
 import PluginsPage from './pages/PluginsPage';
+import AuditPage from './pages/AuditPage';
 import SettingsPage from './pages/SettingsPage';
 import LoginPage from './pages/LoginPage';
 
@@ -17,6 +18,7 @@ function App(): JSX.Element {
         <Route path="privacy-zones" element={<PrivacyZonesPage />} />
         <Route path="hooks" element={<HooksPage />} />
         <Route path="observability" element={<ObservabilityPage />} />
+        <Route path="audit" element={<AuditPage />} />
         <Route path="plugins" element={<PluginsPage />} />
         <Route path="settings" element={<SettingsPage />} />
       </Route>

@@ -15,6 +15,13 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 pyo3 = { version = "0.22", features = ["extension-module"] }
 aho-corasick = "1.1"
+# ed25519-dalek 2.x: verify + keygen. Features:
+#   rand_core — needed for SigningKey::generate (OsRng).
+# We use rand_core's OsRng directly (no need for the full "rand" crate).
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+# rand_core: re-exported by ed25519-dalek but we need OsRng directly.
+# Pin to 0.6.x to match ed25519-dalek's transitive dependency.
+rand_core = { version = "0.6", features = ["std"] }
 
 [profile.release]
 opt-level = 3

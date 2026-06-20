@@ -143,7 +143,9 @@ class TestScopeDescriptions:
 
 class TestScopeCount:
     """Phase 3 v1.4.0 baseline = 7; Phase 4.11 v1.21.0 adds 2 → 9;
-    Phase 4.13B v1.23.0 adds 1 (webhooks.admin) → 10.
+    Phase 4.13B v1.23.0 adds 1 (webhooks.admin) → 10;
+    v1.0.0 elicitation.write → 11; Phase 5.3 v1.25.0 privacy x2 → 13;
+    Phase 7.3 v1.31.0 hooks.admin + plugins.admin → 15.
 
     Handoff text mentioned "8 existing + 2 = 10", but the actual
     pre-Phase-4.11 count in scopes.py is 7 (agents.read/write/pr,
@@ -154,9 +156,10 @@ class TestScopeCount:
     """
 
     def test_total_scope_count_updated(self) -> None:
-        assert len(ALL_SCOPES) == 13, (
-            f"expected 13 scopes (7 baseline + 2 Phase 4.11 + "
-            f"1 Phase 4.13B + 1 v1.0.0 elicitation.write + 2 Phase 5.3 v1.25.0 privacy), got {len(ALL_SCOPES)}: "
+        assert len(ALL_SCOPES) == 15, (
+            f"expected 15 scopes (7 baseline + 2 Phase 4.11 + "
+            f"1 Phase 4.13B + 1 v1.0.0 elicitation.write + 2 Phase 5.3 v1.25.0 privacy + "
+            f"2 Phase 7.3 v1.31.0 hooks.admin/plugins.admin), got {len(ALL_SCOPES)}: "
             f"{sorted(s.value for s in ALL_SCOPES)}"
         )
 

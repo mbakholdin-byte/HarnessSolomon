@@ -285,6 +285,22 @@ class HookRegistry:
                         return True
             return False
 
+    async def enable(self, hook_id: str) -> bool:
+        """Convenience: enable a hook. Returns True if found."""
+        return await self.set_enabled(hook_id, True)
+
+    async def disable(self, hook_id: str) -> bool:
+        """Convenience: disable a hook. Returns True if found."""
+        return await self.set_enabled(hook_id, False)
+
+    def get_spec(self, hook_id: str) -> HookSpec | None:
+        """Return a single spec by id, or None if not found."""
+        for specs in self._specs.values():
+            for s in specs:
+                if s.hook_id == hook_id:
+                    return s
+        return None
+
     def for_event(self, event: EventType) -> list[HookSpec]:
         """Snapshot of specs for an event (sorted by priority, ascending)."""
         return list(self._specs.get(event, []))

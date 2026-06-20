@@ -1987,6 +1987,57 @@ class Settings(BaseSettings):
         ),
     )
 
+    # === v1.31.0: Hooks admin REST API ===
+    hooks_admin_enabled: bool = Field(
+        default=True,
+        description=(
+            "v1.31.0: master switch for the hooks admin REST API "
+            "(``/api/v1/hooks/*``). When False, the endpoints are not "
+            "mounted (404). Default True."
+        ),
+    )
+
+    # === v1.31.0: Plugins admin REST API ===
+    plugins_admin_enabled: bool = Field(
+        default=True,
+        description=(
+            "v1.31.0: master switch for the plugins admin REST API "
+            "(``/api/v1/plugins/*``). When False, the endpoints are not "
+            "mounted (404). Default True."
+        ),
+    )
+
+    # === WI-04: WebSocket MetricsBroker ===
+    ws_metrics_interval_s: float = Field(
+        default=1.0,
+        gt=0.0,
+        le=60.0,
+        description=(
+            "WI-04: interval (seconds) between metrics/health collection "
+            "cycles published to WebSocket clients via the MetricsBroker. "
+            "Default 1.0s."
+        ),
+    )
+    ws_heartbeat_s: float = Field(
+        default=30.0,
+        gt=0.0,
+        le=300.0,
+        description=(
+            "WI-04: WebSocket heartbeat timeout (seconds). If no ``ping`` "
+            "message is received from the client within this window, the "
+            "server closes the connection with code 4001. Default 30.0s."
+        ),
+    )
+    ws_max_backlog: int = Field(
+        default=100,
+        ge=1,
+        le=10000,
+        description=(
+            "WI-04: maximum messages per subscriber queue before the oldest "
+            "is dropped (backpressure). Default 100."
+        ),
+    )
+
     # === Web UI (WI-07) ===
     web_ui_enabled: bool = Field(
         default=True,

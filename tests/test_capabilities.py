@@ -93,7 +93,8 @@ class TestCapabilitiesEndpoint:
         self, isolated_settings: dict,
     ) -> None:
         """Phase 3 v1.4.0 added ``sessions.write``; Phase 4.11 v1.21.0 adds
-        ``observability.read`` and ``elicitation.read``.
+        ``observability.read`` and ``elicitation.read``; Phase 7.3 v1.31.0 adds
+        ``hooks.admin`` and ``plugins.admin`` (WI-01/02).
         """
         app = _make_app_with_state()
         transport = ASGITransport(app=app)
@@ -111,6 +112,8 @@ class TestCapabilitiesEndpoint:
             "webhooks.admin",      # Phase 4.13B v1.23.0
             "privacy.read",        # Phase 5.3 v1.25.0
             "privacy.write",       # Phase 5.3 v1.25.0
+            "hooks.admin",         # Phase 7.3 v1.31.0 WI-01
+            "plugins.admin",       # Phase 7.3 v1.31.0 WI-02
         }
         # Each scope has a non-empty description.
         for s in body["scopes_available"]:
