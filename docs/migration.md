@@ -1,7 +1,11 @@
-# Migration Guide — v0.x → v1.0 — Solomon Harness
+# Migration Guide — v0.x → v1.28.0 — Solomon Harness
 
-> Гайд для обновления с ранних версий (Phase 0 MVP v0.1.0) до v1.0.0 final (Phase 4.14). Описывает breaking changes, deprecated paths, новые обязательные шаги.
-> Last updated: 2026-06-19, v1.0.0 final.
+> Гайд для обновления с ранних версий (Phase 0 MVP v0.1.0) до v1.28.0 (Phase 6.3). Описывает breaking changes, deprecated paths, новые обязательные шаги.
+> Last updated: 2026-06-20, v1.28.0 (Phase 6.3 Plugin Dispatch).
+
+## TL;DR
+
+```bash
 
 ## TL;DR
 
@@ -228,3 +232,87 @@ Solomon Harness не имеет formal rollback procedure. Если upgrade сл
 
 **Версия документа:** v1.22.0 (2026-06-19)
 **Target release:** v1.0.0 final (Phase 4.14 closeout, 2026-06-19)
+
+---
+
+## v1.25 — Phase 5.3 Privacy Zones admin CRUD (2026-06-19)
+
+**New endpoints:**
+- `GET /api/v1/privacy/zones` — list zones (requires `privacy.read`)
+- `GET /api/v1/privacy/zones/{id}` — get zone
+- `POST /api/v1/privacy/zones` — create zone (requires `privacy.write`)
+- `PUT /api/v1/privacy/zones/{id}` — update zone
+- `DELETE /api/v1/privacy/zones/{id}` — delete zone
+
+**New scopes:** `privacy.read`, `privacy.write`
+
+**Settings:**
+- `privacy_zones_admin_enabled: bool = False` (opt-in, default OFF)
+
+**Migration:** if you want admin UI access — set the setting to True and grant operators the new scopes.
+
+---
+
+## v1.26 — Phase 6.1 LLM Tier Router (2026-06-19)
+
+**Heuristic cost reduction:**
+- Pilot 50-query: **cost reduction 58.9%** (target 40%)
+- T1 ratio: 62% (cheap model)
+- Latency p95: +0.08%
+
+**New settings (6):**
+- `tier_routing_heuristic_enabled` (default True)
+- `tier_routing_t1_max_prompt_chars`, `_t3_min_prompt_chars`
+- `tier_routing_t1_max_context_tokens`, `_t3_min_context_tokens`
+- `tier_routing_complexity_keywords`
+
+**No breaking changes** — heuristic is opt-in, defaults ON.
+
+---
+
+## v1.27 — Phase 6.2 Plugin system foundation (2026-06-19)
+
+**Plugin system:**
+- `harness/plugins/` directory created (PluginRegistry, loader, base, sandbox)
+- 3 settings: `plugins_enabled`, `plugins_dir`, `plugins_allowed`
+- Default `plugins_enabled=False` (opt-in)
+
+**Security:**
+- 3-layer trust boundary (AST pre-scan + restricted globals + subprocess sandbox)
+- Plugins can import `harness.privacy.zones`, `harness.config`, `harness.hooks`
+- Plugins **cannot** import `harness.agents`, `harness.server.routes`, etc.
+
+**Example plugin:** `.harness/plugins/example_logger.py` (OnToolUse → stderr)
+
+**Migration:** if you want to use plugins — set `plugins_enabled=True` and add plugin names to `plugins_allowed`.
+
+---
+
+## v1.28 — Phase 6.3 Plugin Dispatch Integration (2026-06-20)
+
+**Plugin hooks now ACTUALLY FIRE:**
+- `PluginDispatcher` bridges `PluginRegistry` → `HookRunner` (in-process)
+- Hooks fire on real events: `OnToolUse`, `OnSessionStart`, `OnMemoryWrite`, etc.
+- Per-callback exception isolation (logged, не падает Harness)
+- Payload shallow-copy enforcement
+
+**New setting:** `plugins_dispatch_enabled` (default True when `plugins_enabled=True`)
+
+**New example plugin:** `.harness/plugins/tool_logger.py` (logs tool calls to stderr)
+
+**Migration:** no breaking changes. Plugins registered via `register_hook()` now actually fire. Update your plugins to handle the actual payload schemas.
+
+See `docs/plugins.md` for the full plugin author guide.
+
+---
+
+## What you need to do
+
+| If you have... | Action |
+|----------------|--------|
+| Old Harness v0.x | Upgrade to v1.28.0, run `pip install --upgrade harness-solomon` |
+| Custom REST API client | Update to `/api/v1/*` paths (old `/api/*` returns 410 Gone) |
+| Hook listener | Migrate to new event names (see `docs/hooks.md`) |
+| Token without new scopes | Re-issue with `privacy.read`/`privacy.write` for Phase 5.3 |
+| Plugins from before v1.28 | Update to handle real payload schemas (now hooks actually fire) |
+
