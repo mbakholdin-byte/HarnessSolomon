@@ -1974,6 +1974,18 @@ class Settings(BaseSettings):
             "the ``*.py`` filename without extension."
         ),
     )
+    plugins_dispatch_enabled: bool = Field(
+        default=True,
+        description=(
+            "Phase 6.3 v1.28.0: master switch for the PluginDispatcher. "
+            "When True (default), the HookRunner invokes plugin "
+            "callbacks registered via PluginRegistry.register_hook in-"
+            "process. When False, the dispatcher is a no-op — hooks "
+            "fire as in Phase 6.1 even if plugins were loaded. Use "
+            "this to disable plugin dispatch at runtime without "
+            "unloading the plugins themselves (e.g. for debugging)."
+        ),
+    )
 
     @model_validator(mode="after")
     def _cascade_thresholds_ordered(self) -> "Settings":

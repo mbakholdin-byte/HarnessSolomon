@@ -131,6 +131,7 @@ class HookRunner:
         audit_sink: Any = None,
         rate_limiter: Any = None,
         circuit_breaker: Any = None,
+        plugin_dispatcher: Any = None,
     ) -> None:
         self._registry = registry
         self._default_timeout_ms = default_timeout_ms
@@ -148,6 +149,26 @@ class HookRunner:
         # None, the defences are disabled (all dispatches allowed).
         self._rate_limiter = rate_limiter
         self._circuit_breaker = circuit_breaker
+        # Phase 6.3 v1.28.0: PluginDispatcher bridge. When set, the
+        # runner invokes plugin callbacks (registered via the
+        # PluginRegistry) AFTER builtin hooks have fired. The dispatcher
+        # is injected via DI to preserve the trust boundary — runner.py
+        # does not import harness.plugins at module load. May be None
+        # (plugins disabled, or Phase 6.1 mode).
+        self._plugin_dispatcher = plugin_dispatcher
+
+    @property
+    def plugin_dispatcher(self) -> Any:
+        """The bound PluginDispatcher, or None when plugins are disabled."""
+        return self._plugin_dispatcher
+
+    def set_plugin_dispatcher(self, dispatcher: Any) -> None:
+        """Inject / replace / clear the PluginDispatcher at runtime.
+
+        Called by ``lifespan`` after constructing the dispatcher. Pass
+        ``None`` to disable plugin dispatch (Phase 6.1 behaviour).
+        """
+        self._plugin_dispatcher = dispatcher
 
     async def fire(self, context: HookContext) -> HookAggregate:
         """Dispatch all hooks for ``context.event``.
@@ -180,6 +201,32 @@ class HookRunner:
 
         _start = _time.monotonic()
         aggregate = await self._fire_impl(context)
+
+        # Phase 6.3 v1.28.0: invoke plugin callbacks AFTER builtin
+        # hooks have produced their aggregate (and regardless of
+        # whether any builtin hooks matched — plugins are observers).
+        # Plugin callbacks are fire-and-forget: they receive the
+        # payload but cannot mutate the runner's aggregate (the
+        # aggregate is already built). Failures inside callbacks are
+        # caught by the dispatcher and logged; they NEVER crash the
+        # runner. We dispatch on a SHALLOW COPY of the payload so a
+        # plugin cannot mutate the caller's dict. When the dispatcher
+        # is None (plugins disabled / Phase 6.1 mode), this is a
+        # single ``None`` check — zero overhead.
+        if self._plugin_dispatcher is not None:
+            try:
+                await self._plugin_dispatcher.dispatch(
+                    context.event,
+                    dict(context.payload),
+                )
+            except Exception as exc:  # noqa: BLE001 — defence in depth
+                logger.debug(
+                    "plugin_dispatcher.dispatch(%s) raised %s: %s — ignored",
+                    context.event,
+                    type(exc).__name__,
+                    exc,
+                )
+
         # Phase 4.1 Step 6.5: emit hook dispatch metric + log AFTER
         # the aggregate is built. decision ∈ {allow, block, modify}.
         try:

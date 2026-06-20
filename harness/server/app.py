@@ -550,6 +550,13 @@ async def lifespan(app: FastAPI):
     # singleton. Each plugin runs in a restricted globals namespace;
     # imports of ``harness.agents`` / ``harness.server`` are AST-blocked.
     # Failures (per-plugin) are logged and skipped — startup never aborts.
+    #
+    # Phase 6.3 v1.28.0: after loading, construct a PluginDispatcher
+    # and wire it into the global HookRunner so plugin callbacks fire
+    # alongside builtin hooks. ``plugins_dispatch_enabled`` is the
+    # runtime switch (default True) — set False to keep plugins loaded
+    # but silence their callbacks (useful for debugging).
+    app.state.plugin_dispatcher = None
     if settings.plugins_enabled:
         try:
             from harness.plugins import get_registry
@@ -572,6 +579,37 @@ async def lifespan(app: FastAPI):
                 f"[harness] plugins: loaded {len(_loaded)} plugin(s) "
                 f"from {_plugins_dir}"
             )
+
+            # Phase 6.3 v1.28.0: wire PluginDispatcher into HookRunner.
+            # The runner was set up earlier in lifespan and stored on
+            # ``app.state.hook_runner``; we inject the dispatcher via
+            # ``set_plugin_dispatcher`` so the runner invokes plugin
+            # callbacks after builtin hooks. When dispatch is disabled
+            # by setting, the dispatcher is constructed but flagged
+            # off (so a runtime flip via ``set_enabled`` works without
+            # re-wiring).
+            try:
+                from harness.plugins.dispatcher import PluginDispatcher
+                _hook_runner = getattr(app.state, "hook_runner", None)
+                _dispatcher = PluginDispatcher(
+                    _plugin_registry,
+                    _hook_runner,
+                    enabled=settings.plugins_dispatch_enabled,
+                )
+                _dispatcher.subscribe_all()
+                app.state.plugin_dispatcher = _dispatcher
+                if _hook_runner is not None:
+                    _hook_runner.set_plugin_dispatcher(_dispatcher)
+                print(
+                    f"[harness] plugin_dispatch: "
+                    f"{'enabled' if settings.plugins_dispatch_enabled else 'disabled by setting'} "
+                    f"(events={len(_dispatcher.subscribed_events)})"
+                )
+            except Exception as exc:  # noqa: BLE001 — best-effort
+                print(
+                    f"[harness] plugin_dispatch: disabled (init failed: "
+                    f"{type(exc).__name__}: {exc})"
+                )
         except Exception as exc:  # noqa: BLE001 — best-effort
             print(
                 f"[harness] plugins: disabled (init failed: "
