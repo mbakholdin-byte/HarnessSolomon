@@ -26,6 +26,9 @@ Public API (re-exported for convenience):
 - :class:`JobStore`          — ``harness.agents.jobs``     (Phase 2.1)
 - :class:`JobRecord`         — ``harness.agents.jobs``     (Phase 2.1)
 - :class:`JobEvent`          — ``harness.agents.jobs``     (Phase 2.1)
+- :class:`AgentContext`      — ``harness.agents.context``  (Phase 7.6)
+- :func:`get_context`        — ``harness.agents.context``  (Phase 7.6)
+- :func:`update_context`     — ``harness.agents.context``  (Phase 7.6)
 """
 from __future__ import annotations
 
@@ -51,4 +54,8 @@ __all__ = [
     "JobStore",
     "JobRecord",
     "JobEvent",
+    # Phase 7.6 — context tracking
+    "AgentContext",
+    "get_context",
+    "update_context",
 ]

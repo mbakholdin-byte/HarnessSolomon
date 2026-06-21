@@ -641,7 +641,7 @@ async def lifespan(app: FastAPI):
                 "A minimal plugin that logs 'Hello, World!' on every "
                 "tool invocation."
             ),
-            min_harness_version="1.33.0",
+            min_harness_version="1.34.0-alpha.1",
             permissions=["tools.log"],
             entry_point="hello_world.plugin",
             keywords=["example", "logging", "tutorial"],
@@ -654,7 +654,7 @@ async def lifespan(app: FastAPI):
                 "Git helper plugin: smart commit messages, branch "
                 "management, and PR templates."
             ),
-            min_harness_version="1.33.0",
+            min_harness_version="1.34.0-alpha.1",
             permissions=["git.read", "git.write"],
             entry_point="git_helper.plugin",
             homepage="https://github.com/example/git-helper",
@@ -668,7 +668,7 @@ async def lifespan(app: FastAPI):
             description=(
                 "Auto-format code with Black + Ruff on every save."
             ),
-            min_harness_version="1.33.0",
+            min_harness_version="1.34.0-alpha.1",
             permissions=["files.write"],
             entry_point="code_formatter.plugin",
             keywords=["formatting", "black", "ruff", "linting"],

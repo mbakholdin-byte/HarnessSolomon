@@ -168,7 +168,11 @@ class TierSelector:
         Args:
             prompt:          The user prompt text.
             context_size:    Current context window usage in tokens
-                             (0 when unknown — treated as "small").
+                             (0 when unknown — default). Callers should
+                             pass cumulative context from
+                             :func:`AgentContext.get_context_size()
+                             <harness.agents.context.AgentContext.get_context_size>`
+                             for better routing.
             has_tool_calls:  ``True`` if the prompt includes tool-call
                              results or the agent loop expects tool
                              calls in this turn. Disqualifies T1

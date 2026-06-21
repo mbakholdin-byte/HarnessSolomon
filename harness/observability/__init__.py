@@ -42,6 +42,7 @@ from harness.observability.health import (
     ProbeResult,
     ProbeStatus,
 )
+from harness.observability.llm_usage_log import LlmUsageLogger
 from harness.observability.logger import JsonlLogger
 from harness.observability.metrics import PrometheusMetrics
 from harness.observability.tracer import NoOpSpan, NoOpTracer, OTelTracer
@@ -51,6 +52,8 @@ __all__ = [
     "LogEvent",
     # Logger
     "JsonlLogger",
+    # Phase 7.6: LLM Usage NDJSON
+    "LlmUsageLogger",
     # Metrics
     "PrometheusMetrics",
     # Tracer

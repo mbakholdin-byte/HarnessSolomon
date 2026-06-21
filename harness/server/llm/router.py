@@ -21,6 +21,7 @@ from typing import Any, AsyncIterator
 from pydantic import BaseModel
 
 from harness.observability import emit_llm_call
+from harness.observability.llm_usage_log import LlmUsageLogger
 from harness.server.llm.models import DEFAULT_MAX_TOOLS, get_model
 
 logger = logging.getLogger(__name__)
@@ -100,6 +101,14 @@ class LLMRouter:
                 "Install litellm>=1.40 (already declared in pyproject.toml). "
                 f"Original error: {_IMPORT_ERROR}"
             )
+        self._usage_logger: LlmUsageLogger | None = None
+
+    def set_usage_logger(self, logger: LlmUsageLogger) -> None:
+        """Wire an NDJSON usage logger for Phase 7.6 calibration tracking.
+
+        Called at server startup (lifespan) after settings are loaded.
+        """
+        self._usage_logger = logger
 
     # --- non-streaming ---
 
@@ -188,6 +197,19 @@ class LLMRouter:
                 model_id=model,
                 cost_usd_override=result.cost,
             )
+            # Phase 7.6: NDJSON usage log for calibration
+            if self._usage_logger:
+                self._usage_logger.log_usage({
+                    "event": "llm_completion",
+                    "model": model,
+                    "tier": tier,
+                    "prompt_tokens": int(usage.get("prompt_tokens", 0) or 0),
+                    "completion_tokens": int(usage.get("completion_tokens", 0) or 0),
+                    "total_tokens": int(usage.get("total_tokens", 0) or 0),
+                    "cost_usd": result.cost,
+                    "duration_s": duration,
+                    "status": status,
+                })
         except Exception:  # noqa: BLE001 — observability must never break completion
             logger.debug("emit_llm_call failed", exc_info=True)
         return result
@@ -363,6 +385,15 @@ class LLMRouter:
                 model, call_kwargs["tools"]
             )
             call_kwargs["tools"] = self._wrap_tools_for_litellm(call_kwargs["tools"])
+        # Phase 4.1 Step 6.3: tier lookup (same pattern as completion())
+        tier = "T3"
+        try:
+            spec = get_model(model)
+            if spec is not None:
+                tier = spec.tier
+        except Exception:  # noqa: BLE001
+            pass
+        start = time.monotonic()
         # Aggregator state for the final 'done' event
         content_buf: list[str] = []
         # tool_calls_buf: list of (index, dict) for delta accumulation
@@ -406,6 +437,23 @@ class LLMRouter:
         if tool_calls_buf:
             tool_calls_final = [tool_calls_buf[i] for i in sorted(tool_calls_buf)]
         cost = self._compute_cost(model, usage_final) if usage_final else 0.0
+        duration = time.monotonic() - start
+        # Phase 7.6: NDJSON usage log for calibration (streaming path)
+        try:
+            if self._usage_logger and usage_final:
+                self._usage_logger.log_usage({
+                    "event": "llm_completion",
+                    "model": model,
+                    "tier": tier,
+                    "prompt_tokens": int(usage_final.get("prompt_tokens", 0) or 0),
+                    "completion_tokens": int(usage_final.get("completion_tokens", 0) or 0),
+                    "total_tokens": int(usage_final.get("total_tokens", 0) or 0),
+                    "cost_usd": cost,
+                    "duration_s": duration,
+                    "status": "ok",
+                })
+        except Exception:  # noqa: BLE001 — observability must never break streaming
+            logger.debug("usage log (streaming) failed", exc_info=True)
         yield StreamEvent(
             type="done",
             content="".join(content_buf),

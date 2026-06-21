@@ -1944,6 +1944,28 @@ class Settings(BaseSettings):
         ),
     )
 
+    # === Phase 7.6: Context Tracking ===
+    context_tracking_enabled: bool = Field(
+        default=True,
+        description=(
+            "Enable per-session cumulative context tracking for tier router. "
+            "When True, ``AgentContext`` accumulates prompt/completion tokens "
+            "across turns and provides ``get_context_size()`` for "
+            "``TierSelector.select_heuristic(context_size=...)``. "
+            "Default True."
+        ),
+    )
+
+    # === Phase 7.6: LLM Usage Tracking ===
+    llm_usage_tracking_enabled: bool = Field(
+        default=True,
+        description="Enable NDJSON logging of LLM usage for calibration.",
+    )
+    llm_usage_log_path: Path = Field(
+        default=Path("data/llm_usage.jsonl"),
+        description="Path to NDJSON file for LLM usage events.",
+    )
+
     # === Phase 6.2A v1.27.0: Plugin loader v0 ===
     # User-extensible plugin system. Plugins are plain ``*.py`` files
     # in ``plugins_dir`` that expose a ``register(registry)`` function.
