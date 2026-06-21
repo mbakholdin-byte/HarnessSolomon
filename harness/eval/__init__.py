@@ -52,6 +52,24 @@ from harness.eval.compaction_loss import (
     LossResult,
 )
 from harness.eval.runner import EvalRunner
+from harness.eval.calibration_parser import (
+    RoutingEvent,
+    CSV_COLUMNS,
+    parse_log_files,
+    write_golden_dataset,
+)
+from harness.eval.calibration_report import (
+    CURRENT_DEFAULTS,
+    CalibrationRecommendation,
+    generate_markdown,
+    generate_recommendation,
+    holdout_split,
+    migration_impact,
+    read_golden_dataset,
+    robustness_check,
+    validate_on_holdout,
+    write_report,
+)
 
 __all__ = [
     "GoldenFact",
@@ -74,4 +92,18 @@ __all__ = [
     "CompactionLossMetric",
     "LossResult",
     "EvalRunner",
+    "RoutingEvent",
+    "CSV_COLUMNS",
+    "parse_log_files",
+    "write_golden_dataset",
+    "CalibrationRecommendation",
+    "CURRENT_DEFAULTS",
+    "read_golden_dataset",
+    "holdout_split",
+    "validate_on_holdout",
+    "robustness_check",
+    "generate_recommendation",
+    "migration_impact",
+    "generate_markdown",
+    "write_report",
 ]

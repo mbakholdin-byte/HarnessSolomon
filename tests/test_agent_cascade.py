@@ -162,9 +162,9 @@ class TestTierSelectorConstruction:
         """Without explicit thresholds, the selector pulls from
         ``harness.config.settings``."""
         sel = TierSelector()
-        # Defaults: high=0.85, low=0.55, t1=qwen3:8b (Phase 2.1 settings).
-        assert sel.confidence_high == 0.85
-        assert sel.confidence_low == 0.55
+        # Defaults: high=0.60, low=0.30, t1=qwen3:8b (Phase 7.5 calibrated).
+        assert sel.confidence_high == 0.60
+        assert sel.confidence_low == 0.30
         assert sel.t1_model == "qwen3:8b"
 
 

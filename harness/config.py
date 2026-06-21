@@ -112,21 +112,23 @@ class Settings(BaseSettings):
         ),
     )
     subagent_confidence_high: float = Field(
-        default=0.85,
+        default=0.60,
         ge=0.0,
         le=1.0,
         description=(
             "Confidence >= this threshold -> Tier-1 (cheap local). "
-            "Calibrate via Phase 5 eval harness. See docs/MODEL_REGISTRY.md."
+            "Calibrated Phase 7.5 on 37K production events. "
+            "See docs/MODEL_REGISTRY.md and docs/calibration-report-v133.md."
         ),
     )
     subagent_confidence_low: float = Field(
-        default=0.55,
+        default=0.30,
         ge=0.0,
         le=1.0,
         description=(
             "Confidence in [low, high) -> Tier-2. Below low -> Tier-3 (premium). "
-            "Calibrate via Phase 5 eval harness. See docs/MODEL_REGISTRY.md."
+            "Calibrated Phase 7.5 on 37K production events. "
+            "See docs/MODEL_REGISTRY.md and docs/calibration-report-v133.md."
         ),
     )
 
@@ -1875,14 +1877,14 @@ class Settings(BaseSettings):
         ),
     )
 
-    # === Phase 6.1A v1.26.0: Heuristic Tier Selector ===
-    # Lightweight heuristic routing that runs BEFORE the confidence-
-    # based cascade. Returns T1/T2/T3 or None (fall through to the
-    # confidence cascade). See ``TierSelector.select_heuristic``.
+    # === Phase 7.5: Tier Router Calibration ===
+    # Thresholds calibrated on 37K production events (5 days), validated
+    # via grid search (37.5K configs), golden dataset (737 rows), and
+    # holdout validation. See docs/calibration-report-v133.md.
     tier_routing_heuristic_enabled: bool = Field(
         default=True,
         description=(
-            "Phase 6.1A v1.26.0: master switch for the heuristic "
+            "Phase 7.5 v1.33.0: master switch for the heuristic "
             "tier selector. When True, ``TierSelector.select_heuristic`` "
             "is consulted before the confidence cascade; when False, "
             "it returns ``None`` unconditionally (fall-through to "
@@ -1890,39 +1892,43 @@ class Settings(BaseSettings):
         ),
     )
     tier_routing_t1_max_prompt_chars: int = Field(
-        default=500,
+        default=1000,
         ge=1,
         description=(
-            "Phase 6.1A: maximum prompt length (chars) for T1 "
+            "Phase 7.5: maximum prompt length (chars) for T1 "
             "eligibility. Prompts longer than this skip T1. "
-            "Default 500."
+            "Calibrated up from 500 (v1.26.0) for wider T1 zone. "
+            "Default 1000."
         ),
     )
     tier_routing_t1_max_context_tokens: int = Field(
-        default=4000,
+        default=8000,
         ge=1,
         description=(
-            "Phase 6.1A: maximum context size (tokens) for T1 "
+            "Phase 7.5: maximum context size (tokens) for T1 "
             "eligibility. Contexts larger than this skip T1. "
-            "Default 4000."
+            "Calibrated up from 4000 (v1.26.0) for wider T1 zone. "
+            "Default 8000."
         ),
     )
     tier_routing_t3_min_prompt_chars: int = Field(
-        default=5000,
+        default=3000,
         ge=1,
         description=(
-            "Phase 6.1A: minimum prompt length (chars) that forces "
+            "Phase 7.5: minimum prompt length (chars) that forces "
             "T3. Prompts this long are routed to the premium tier "
-            "directly. Default 5000."
+            "directly. Calibrated down from 5000 (v1.26.0) — "
+            "production data shows T3 needed earlier. Default 3000."
         ),
     )
     tier_routing_t3_min_context_tokens: int = Field(
-        default=32000,
+        default=16000,
         ge=1,
         description=(
-            "Phase 6.1A: minimum context size (tokens) that forces "
+            "Phase 7.5: minimum context size (tokens) that forces "
             "T3. Large contexts get the premium tier to maximise "
-            "quality. Default 32000."
+            "quality. Calibrated down from 32000 (v1.26.0). "
+            "Default 16000."
         ),
     )
     tier_routing_complexity_keywords: list[str] = Field(
@@ -1930,9 +1936,10 @@ class Settings(BaseSettings):
             "reasoning", "analyze", "prove", "derive", "evaluate",
         ],
         description=(
-            "Phase 6.1A: case-insensitive keywords that trigger T3 "
+            "Phase 7.5: case-insensitive keywords that trigger T3 "
             "routing when present in the prompt. Indicates a complex "
-            "task that benefits from the premium tier. Default: "
+            "task that benefits from the premium tier. Unchanged from "
+            "v1.26.0. Default: "
             "['reasoning', 'analyze', 'prove', 'derive', 'evaluate']."
         ),
     )

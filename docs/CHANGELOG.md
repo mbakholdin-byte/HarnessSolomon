@@ -1,5 +1,20 @@
 # Changelog — Solomon Harness
 
+## [1.33.0] — 2026-06-21
+
+### Changed
+- **Tier Router thresholds calibrated**: 7 heuristic parameters tuned on production data (37K events, 5 days). Wider T1 zone (1000 chars / 8000 tokens) for more cheap-local routing. Lower confidence thresholds (0.60/0.30) for earlier tier promotion.
+
+### Added
+- **Calibration harness**: log parser, golden dataset (737 rows), grid search (37.5K configurations), calibration report with holdout validation and robustness analysis
+- **docs/calibration-report-v133.md**: methodology, results, recommendations
+
+### Technical
+- 32 new tests (parser: 8, grid search: 10, report: 6, regression: 5, changelog: 3)
+- Trust boundary: 0 violations (all calibration code in `harness/eval/*`)
+
+---
+
 ## [1.32.0] — 2026-06-20
 
 ### Added

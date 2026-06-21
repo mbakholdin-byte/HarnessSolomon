@@ -568,11 +568,26 @@ UX, web-обёртка, интеграции с IDE.
 |------|--------|--------|----------|
 | 7.3 | v1.31.0 | SHIPPED | Hooks/Plugins admin, Observability WS, Audit export |
 | 7.4 | v1.32.0 | SHIPPED | Plugin Marketplace: API, Manifest v2, Trust Registry, Install CLI, UI |
+| 7.5 | v1.33.0 | SHIPPED | Tier Router calibration: thresholds tuned, calibration harness, 32 tests |
 
-### Следующие версии (Phase 7.5+)
-- **v1.33.0** — Tier Router calibration (next)
+### Следующие версии (Phase 7.6+)
 - **v1.34.0** — Embeddings swap
 - **v1.35.0** — Cross-encoder + B5 eval
+
+---
+
+## Phase 7.5 — SHIPPED (v1.33.0, 21.06.2026)
+
+### Что закрыто
+- Tier Router thresholds calibrated: 7 heuristic parameters tuned on 37K production events (5 days)
+- Wider T1 zone: t1_max_prompt_chars 500→1000, t1_max_context_tokens 4000→8000
+- Lower T3 entry: t3_min_prompt_chars 5000→3000, t3_min_context_tokens 32000→16000
+- Earlier tier promotion: confidence_high 0.85→0.60, confidence_low 0.55→0.30
+- Calibration harness: log parser, golden dataset (737 rows), grid search (37.5K configs)
+- docs/calibration-report-v133.md with methodology, results, and recommendations
+- 32 new tests: 8 parser, 10 grid search, 6 report, 5 regression, 3 changelog
+- Trust boundary: 0 violations (all calibration code in harness/eval/*)
+- Existing tests updated: test_tier_selector_v126 boundary tests, test_agent_cascade defaults
 
 ---
 
@@ -587,6 +602,6 @@ UX, web-обёртка, интеграции с IDE.
 
 ---
 
-**Roadmap версия:** 3.31
-**Дата:** 20.06.2026
-**Следующий review:** Phase 7.5 — Tier Router calibration (v1.33.0)
+**Roadmap версия:** 3.32
+**Дата:** 21.06.2026
+**Следующий review:** Phase 7.6 — Embeddings swap (v1.34.0)
