@@ -1,5 +1,26 @@
 # Changelog — Solomon Harness
 
+## [1.32.0] — 2026-06-20
+
+### Added
+- **Plugin Marketplace API**: `GET /api/v1/marketplace/plugins` (list with keyword filter + pagination), `GET /api/v1/marketplace/plugins/{name}` (detail)
+- **Plugin Manifest v2**: dataclass with semver validation, permissions, signature fields, backward compatibility with v1 manifests
+- **Trust Registry**: `harness/security/trust_registry.py` — JSON-based trusted key management with hot-reload (asyncio polling)
+- **Install/Uninstall CLI**: `harness plugins install <name>` and `harness plugins uninstall <name>` commands with atomic install, signature verification, semver version check
+- **Signature verification integration**: TrustRegistry.verify_signature() now uses real ed25519 verification via `harness.plugins.signature` (Rust or Python fallback)
+- **Marketplace UI**: React page with plugin catalogue, keyword search, detail view, signature badges
+- **Scope `plugins.read`**: new read-only scope for marketplace browsing
+- **Trust boundary tests**: AST-level enforcement for all Phase 7.4 modules
+
+### Changed
+- `harness/server/auth/scopes.py`: added `PLUGINS_READ` scope
+
+### Technical
+- 45+ new tests (Python + Vitest)
+- Trust boundary: 0 violations across all new modules
+
+---
+
 ## v1.31.0 (Phase 7.3) — 2026-06-20
 
 ### Backend

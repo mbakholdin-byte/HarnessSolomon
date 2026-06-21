@@ -5,10 +5,11 @@ Usage:
     harness serve [--host H] [--port P]   # same, explicit
     harness agents list                   # list built-in + overridden sub-agents (Step 2+)
     harness agents run <name> "..."       # run a sub-agent (Step 2+)
+    harness plugins install <name>        # install a plugin from the marketplace
+    harness plugins uninstall <name>      # uninstall a loaded plugin
 
 This module is the target of the ``harness`` and ``solomon-harness`` console
-scripts declared in ``pyproject.toml``. Until Phase 2 Step 2 lands, only the
-``serve`` subcommand is fully implemented; ``agents`` prints a help message.
+scripts declared in ``pyproject.toml``.
 """
 from __future__ import annotations
 
@@ -1294,6 +1295,247 @@ def _dispatch_auth(args: argparse.Namespace) -> int:
     return 2
 
 
+# === Phase 7.4 WI-04 v1.32.0: plugin install / uninstall ===
+
+
+def _semver_gte(current: str, minimum: str) -> bool:
+    """Return True if current >= minimum (major.minor.patch only)."""
+    def parts(v: str) -> tuple[int, ...]:
+        return tuple(int(x) for x in v.split(".")[:3])
+    return parts(current) >= parts(minimum)
+
+
+def _load_manifests_from_dir(
+    marketplace: object, json_dir: Path,
+) -> None:
+    """Load plugin manifests from ``*.json`` files in ``json_dir``.
+
+    Each file is deserialized via :meth:`PluginManifestV2.from_dict`,
+    validated, and registered into the ``MarketplaceManager``. Invalid
+    files are logged and skipped (best-effort).
+    """
+    import json as _json
+
+    from harness.plugins.manifest_v2 import PluginManifestV2
+
+    if not json_dir.is_dir():
+        return
+
+    for path in sorted(json_dir.glob("*.json")):
+        try:
+            raw = path.read_text(encoding="utf-8")
+            data = _json.loads(raw)
+            manifest = PluginManifestV2.from_dict(data)
+            manifest.validate()
+            marketplace.register(manifest)
+        except Exception:  # noqa: BLE001 — best-effort
+            pass
+
+
+def _cmd_plugins_install(args: argparse.Namespace) -> int:
+    """``harness plugins install <name>`` — install a plugin from the marketplace.
+
+    1. Load manifests from ``--marketplace-dir`` into a ``MarketplaceManager``.
+    2. Look up the manifest by name.
+    3. Check ``min_harness_version`` against current version.
+    4. Verify signature if the manifest is signed (via ``TrustRegistry``).
+    5. Atomically copy the plugin ``.py`` file to ``plugins_dir``.
+    6. Load into the :class:`PluginRegistry`.
+    """
+    import json as _json
+    import tempfile
+    from pathlib import Path
+    from harness import __version__ as _current_version
+    from harness.config import settings
+    from harness.plugins import get_registry
+    from harness.plugins.loader import load_plugins_from_dir
+    from harness.plugins.marketplace import MarketplaceManager
+    from harness.security.trust_registry import TrustRegistry
+
+    name = args.plugin_name
+
+    # Resolve directories.
+    marketplace_dir = (
+        Path(args.marketplace_dir)
+        if args.marketplace_dir
+        else settings.project_root / ".harness" / "marketplace"
+    )
+    plugins_dir = (
+        Path(args.plugins_dir)
+        if args.plugins_dir
+        else settings.project_root / settings.plugins_dir
+    )
+
+    # Bootstrap marketplace from JSON manifests.
+    marketplace = MarketplaceManager()
+    _load_manifests_from_dir(marketplace, marketplace_dir)
+
+    manifest = marketplace.get(name)
+    if manifest is None:
+        print(
+            f"error: Plugin {name!r} not found in marketplace",
+            file=sys.stderr,
+        )
+        return 1
+
+    # semver check.
+    if manifest.min_harness_version:
+        if not _semver_gte(_current_version, manifest.min_harness_version):
+            print(
+                f"error: Plugin {name!r} requires harness >="
+                f" {manifest.min_harness_version}; current is"
+                f" {_current_version}",
+                file=sys.stderr,
+            )
+            return 1
+
+    # Signature verification.
+    if manifest.signature is not None and manifest.public_key is not None:
+        tr_path = (
+            Path(args.trust_registry)
+            if args.trust_registry
+            else settings.project_root / ".harness" / "trust-registry.json"
+        )
+        trust_registry = TrustRegistry(path=tr_path if tr_path.exists() else None)
+        if tr_path.exists():
+            try:
+                trust_registry.load()
+            except Exception:
+                pass  # best-effort — registry may be absent in dev
+
+        # Check if key is trusted (for warning only).
+        key_trusted = any(
+            pk == manifest.public_key for pk in trust_registry._keys.values()  # noqa: SLF001
+        )
+        if not key_trusted:
+            print(
+                f"warning: Public key not in trust registry"
+                f" for plugin {name!r}",
+                file=sys.stderr,
+            )
+
+        # Crypto verification.
+        manifest_bytes = _json.dumps(
+            manifest.to_dict(), sort_keys=True,
+        ).encode("utf-8")
+        ok = trust_registry.verify_signature(
+            manifest.public_key,
+            manifest.signature,
+            manifest_bytes,
+        )
+        if not ok:
+            print(
+                f"error: Signature verification failed"
+                f" for plugin {name!r}",
+                file=sys.stderr,
+            )
+            return 1
+    else:
+        print(
+            f"warning: Plugin {name!r} is unsigned"
+            f" — install at your own risk",
+            file=sys.stderr,
+        )
+
+    # Atomic install: copy .py from marketplace dir → plugins dir.
+    source_py = marketplace_dir / f"{name}.py"
+    if not source_py.exists():
+        print(
+            f"error: Plugin source file {source_py}"
+            f" not found in marketplace",
+            file=sys.stderr,
+        )
+        return 1
+
+    plugins_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb", suffix=".py",
+            delete=False, dir=plugins_dir,
+        ) as tmp:
+            tmp.write(source_py.read_bytes())
+            tmp_path = Path(tmp.name)
+        tmp_path.replace(plugins_dir / f"{name}.py")
+    except Exception as exc:  # noqa: BLE001 — surface to operator
+        print(
+            f"error: Failed to copy plugin {name!r}:"
+            f" {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+        # Clean up temp file on failure.
+        try:
+            tmp_path.unlink(missing_ok=True)  # type: ignore[name-defined]
+        except Exception:
+            pass
+        return 1
+
+    # Register into PluginRegistry.
+    registry = get_registry()
+    load_plugins_from_dir(plugins_dir, registry=registry, allowed=[name])
+
+    print(f"Plugin {name!r} installed successfully")
+    return 0
+
+
+def _cmd_plugins_uninstall(args: argparse.Namespace) -> int:
+    """``harness plugins uninstall <name>`` — uninstall a plugin.
+
+    1. Check that the plugin is loaded in the ``PluginRegistry``.
+    2. Call ``registry.disable(name)``.
+    3. Remove the ``.py`` file from ``plugins_dir``.
+    """
+    from pathlib import Path
+    from harness.config import settings
+    from harness.plugins import get_registry
+
+    name = args.plugin_name
+
+    plugins_dir = (
+        Path(args.plugins_dir)
+        if args.plugins_dir
+        else settings.project_root / settings.plugins_dir
+    )
+
+    registry = get_registry()
+    if registry.get_plugin(name) is None:
+        print(
+            f"error: Plugin {name!r} is not loaded",
+            file=sys.stderr,
+        )
+        return 1
+
+    registry.disable(name)
+
+    # Remove .py file (best-effort — may not exist if uninstall was
+    # called on a manually-registered plugin).
+    plugin_file = plugins_dir / f"{name}.py"
+    try:
+        if plugin_file.exists():
+            plugin_file.unlink()
+    except OSError as exc:
+        print(
+            f"warning: Could not remove {plugin_file}: {exc}",
+            file=sys.stderr,
+        )
+
+    print(f"Plugin {name!r} uninstalled successfully")
+    return 0
+
+
+def _cmd_plugins(args: argparse.Namespace) -> int:
+    """Dispatch on ``plugins`` sub-subcommand."""
+    if args.plugins_command == "install":
+        return _cmd_plugins_install(args)
+    if args.plugins_command == "uninstall":
+        return _cmd_plugins_uninstall(args)
+    print(
+        f"unknown plugins subcommand: {args.plugins_command!r}",
+        file=sys.stderr,
+    )
+    return 2
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="harness",
@@ -2312,6 +2554,63 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     # If no subcommand, default to "log" (most common entry point).
     obs_p.set_defaults(func=_cmd_observability_log_impl)
+
+    # === Phase 7.4 WI-04 v1.32.0: plugin install / uninstall ===
+    plugins_p = sub.add_parser(
+        "plugins",
+        help=(
+            "Install / uninstall plugins from the marketplace "
+            "(Phase 7.4 v1.32.0)."
+        ),
+    )
+    plugins_sub = plugins_p.add_subparsers(dest="plugins_command")
+
+    # ``harness plugins install <name>``
+    install_p = plugins_sub.add_parser(
+        "install",
+        help="Install a plugin from the marketplace.",
+    )
+    install_p.add_argument("plugin_name", help="Plugin name to install.")
+    install_p.add_argument(
+        "--marketplace-dir", default=None,
+        help=(
+            "Directory containing marketplace JSON manifests and .py "
+            "sources. Default: <project_root>/.harness/marketplace."
+        ),
+    )
+    install_p.add_argument(
+        "--plugins-dir", default=None,
+        help=(
+            "Target plugins directory. Default: <project_root>/.harness/plugins "
+            "(settings.plugins_dir)."
+        ),
+    )
+    install_p.add_argument(
+        "--trust-registry", default=None,
+        help=(
+            "Path to trust-registry.json for signature verification. "
+            "Default: <project_root>/.harness/trust-registry.json."
+        ),
+    )
+    install_p.set_defaults(func=_cmd_plugins_install)
+
+    # ``harness plugins uninstall <name>``
+    uninstall_p = plugins_sub.add_parser(
+        "uninstall",
+        help="Uninstall a loaded plugin.",
+    )
+    uninstall_p.add_argument("plugin_name", help="Plugin name to uninstall.")
+    uninstall_p.add_argument(
+        "--plugins-dir", default=None,
+        help=(
+            "Plugins directory where the .py file resides. "
+            "Default: <project_root>/.harness/plugins."
+        ),
+    )
+    uninstall_p.set_defaults(func=_cmd_plugins_uninstall)
+
+    # If no subcommand, dispatch to the handler (which prints usage).
+    plugins_p.set_defaults(func=_cmd_plugins)
 
     return parser
 

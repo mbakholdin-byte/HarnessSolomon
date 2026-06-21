@@ -2065,6 +2065,23 @@ class Settings(BaseSettings):
         ),
     )
 
+    # === Phase 7.4: Trust Registry (Plugin Marketplace) ===
+    trust_registry_path: Path = Field(
+        default=Path("trust-registry.json"),
+        validation_alias="HARNESS_TRUST_REGISTRY_PATH",
+        description="Path to trust registry JSON file. Override via HARNESS_TRUST_REGISTRY_PATH.",
+    )
+    trust_registry_hot_reload: bool = Field(
+        default=True,
+        description="Enable hot-reload of trust registry file on change.",
+    )
+    trust_registry_poll_interval: int = Field(
+        default=5,
+        ge=1,
+        le=60,
+        description="Polling interval (seconds) for trust registry hot-reload.",
+    )
+
     @model_validator(mode="after")
     def _cascade_thresholds_ordered(self) -> "Settings":
         """Guard against a misconfigured cascade + Phase 2.4 split strategy.

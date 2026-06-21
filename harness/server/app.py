@@ -621,6 +621,73 @@ async def lifespan(app: FastAPI):
     else:
         print("[harness] plugins: disabled (plugins_enabled=False)")
 
+    # Phase 7.4 WI-01 v1.32.0: Marketplace — always-on in-memory
+    # catalogue.  Populated with a couple of sample plugins for
+    # development / demonstration; operators replace these with
+    # real manifests from their own registry in production.
+    from harness.plugins.marketplace import MarketplaceManager
+    from harness.plugins.manifest_v2 import PluginManifestV2
+
+    marketplace = MarketplaceManager()
+    app.state.marketplace = marketplace
+
+    # Register sample plugins for development.
+    _sample_plugins = [
+        PluginManifestV2(
+            name="hello-world",
+            version="1.0.0",
+            author="Harness Team",
+            description=(
+                "A minimal plugin that logs 'Hello, World!' on every "
+                "tool invocation."
+            ),
+            min_harness_version="1.32.0",
+            permissions=["tools.log"],
+            entry_point="hello_world.plugin",
+            keywords=["example", "logging", "tutorial"],
+        ),
+        PluginManifestV2(
+            name="git-helper",
+            version="2.1.0",
+            author="Community",
+            description=(
+                "Git helper plugin: smart commit messages, branch "
+                "management, and PR templates."
+            ),
+            min_harness_version="1.32.0",
+            permissions=["git.read", "git.write"],
+            entry_point="git_helper.plugin",
+            homepage="https://github.com/example/git-helper",
+            repository="https://github.com/example/git-helper.git",
+            keywords=["git", "commit", "branch", "pr"],
+        ),
+        PluginManifestV2(
+            name="code-formatter",
+            version="0.9.0",
+            author="Community",
+            description=(
+                "Auto-format code with Black + Ruff on every save."
+            ),
+            min_harness_version="1.32.0",
+            permissions=["files.write"],
+            entry_point="code_formatter.plugin",
+            keywords=["formatting", "black", "ruff", "linting"],
+        ),
+    ]
+    for manifest in _sample_plugins:
+        try:
+            manifest.validate()
+            marketplace.register(manifest)
+        except Exception as exc:  # noqa: BLE001 — best-effort
+            print(
+                f"[harness] marketplace: skip {manifest.name} — "
+                f"{type(exc).__name__}: {exc}"
+            )
+    print(
+        f"[harness] marketplace: initialised "
+        f"({len(marketplace)} sample plugin(s))"
+    )
+
     # WI-04: MetricsBroker + background collector.
     # Best-effort — if the broker fails to init, the WS route returns
     # 503 but the rest of the server is unaffected.
@@ -691,7 +758,7 @@ def create_app() -> FastAPI:
     """Build FastAPI app with middleware and routers."""
     app = FastAPI(
         title="Solomon Harness",
-        version="1.31.0",
+        version="1.32.0",
         description=(
             "Open-source agentic shell — Web MVP (Phase 0) + "
             "sub-agent system (Phase 2.0+2.1) + GitHub PR integration (Phase 2.2) "
@@ -1006,6 +1073,13 @@ def create_app() -> FastAPI:
         print("[harness] plugins_admin: enabled (scope=plugins.admin)")
     else:
         print("[harness] plugins_admin: disabled by setting")
+
+    # Phase 7.4 WI-01 v1.32.0: Marketplace REST API — always mounted
+    # (no enable flag).  Scope-gated via ``plugins.read`` inside the
+    # router.  The router carries its own prefix (/api/v1/marketplace).
+    from harness.server.routes.marketplace import router as marketplace_router
+    app.include_router(marketplace_router)
+    print("[harness] marketplace: mounted /api/v1/marketplace (scope=plugins.read)")
 
     # === Web UI mount (WI-07) ===
     # Mount the built Vite SPA at /ui. The dist directory is at

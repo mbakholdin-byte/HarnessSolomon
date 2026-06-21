@@ -35,7 +35,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from harness.plugins import PluginInfo, PluginRegistry, get_registry
+from harness.plugins import PluginInfo, PluginManifestV2, PluginRegistry, get_registry
 
 log = logging.getLogger("harness.plugins.loader")
 
@@ -145,8 +145,32 @@ def _load_one(
         return None
 
     # Resolve the plugin's identity + register entrypoint.
-    plugin_name = getattr(module, "PLUGIN_NAME", stem)
-    plugin_version = getattr(module, "PLUGIN_VERSION", "0.0.0")
+    # Phase 7.4 WI-02: MANIFEST_V2 takes priority over v1 PLUGIN_NAME/PLUGIN_VERSION.
+    manifest_v2_dict = getattr(module, "MANIFEST_V2", None)
+    if manifest_v2_dict is not None and isinstance(manifest_v2_dict, dict):
+        try:
+            manifest = PluginManifestV2.from_dict(manifest_v2_dict)
+            manifest.validate()
+        except (TypeError, ValueError, KeyError) as exc:
+            log.warning(
+                "plugins: %s has invalid MANIFEST_V2 (%s: %s) — skipping",
+                stem,
+                type(exc).__name__,
+                exc,
+            )
+            return None
+        plugin_name = manifest.name
+        plugin_version = manifest.version
+        log.info(
+            "plugins: %s loaded v2 manifest (min_harness=%s, permissions=%d)",
+            stem,
+            manifest.min_harness_version or "<none>",
+            len(manifest.permissions),
+        )
+    else:
+        # v1 fallback — PLUGIN_NAME / PLUGIN_VERSION module attributes.
+        plugin_name = getattr(module, "PLUGIN_NAME", stem)
+        plugin_version = getattr(module, "PLUGIN_VERSION", "0.0.0")
 
     # Snapshot registered surface BEFORE calling register so we can
     # diff afterwards to populate PluginInfo.hooks / tools / scopes.

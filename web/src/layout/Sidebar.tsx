@@ -14,6 +14,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: '/observability', label: 'Observability', icon: '📊' },
   { to: '/audit', label: 'Audit', icon: '📋' },
   { to: '/plugins', label: 'Plugins', icon: '🧩' },
+  { to: '/marketplace', label: 'Marketplace', icon: '🏪' },
   { to: '/settings', label: 'Settings', icon: '⚙️' },
 ];
 

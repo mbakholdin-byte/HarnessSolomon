@@ -73,6 +73,9 @@ class Scope(str, Enum):
     # v1.31.0: plugins admin endpoints (GET/POST /api/v1/plugins/*)
     PLUGINS_ADMIN = "plugins.admin"
 
+    # v1.32.0: marketplace browsing (GET /api/v1/marketplace/plugins*)
+    PLUGINS_READ = "plugins.read"
+
 
 ALL_SCOPES: frozenset[Scope] = frozenset(Scope)
 
@@ -93,6 +96,7 @@ SCOPE_DESCRIPTIONS: dict[Scope, str] = {
     Scope.PRIVACY_WRITE: "Create / update / delete privacy zone rules (POST/PUT/DELETE /api/v1/privacy/zones, Phase 5.3 v1.25.0)",
     Scope.HOOKS_ADMIN: "Administer hooks: list, inspect, enable, disable (GET/POST /api/v1/hooks/*, v1.31.0)",
     Scope.PLUGINS_ADMIN: "Administer plugins: list, inspect, enable, disable (GET/POST /api/v1/plugins/*, v1.31.0)",
+    Scope.PLUGINS_READ: "Browse the plugin marketplace (GET /api/v1/marketplace/plugins*, v1.32.0)",
 }
 
 

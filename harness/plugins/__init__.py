@@ -24,10 +24,12 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from harness.plugins.base import Plugin
+from harness.plugins.manifest_v2 import PluginManifestV2
 
 __all__ = [
     "Plugin",
     "PluginInfo",
+    "PluginManifestV2",
     "PluginRegistry",
     "get_registry",
     "reset_registry",

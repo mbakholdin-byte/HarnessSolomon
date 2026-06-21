@@ -2,7 +2,7 @@
 
 **Проект:** Solomon Harness
 **Цель:** open-source агентская оболочка с multi-model (T1/T2/T3), сильнее Claude Code и OpenCode
-**Дата:** 12.06.2026 (v1.0), 13.06.2026 (v1.1 — multi-model), 13.06.2026 (v1.2 — Web + облачный MVP), 15.06.2026 (v2.0 — sync v0.4.0), 15.06.2026 (v2.10 — Phase 3 v1.5.0 closeout), **15.06.2026 (v2.11 — Phase 4 status audit)**, **16.06.2026 (v3.0 — Phase 3 = 12/12 FINAL, Phase 4 = 0/12 NOT STARTED)**, **20.06.2026 (v3.30 — Phase 7.3 SHIPPED, Plugin Marketplace next)**
+**Дата:** 12.06.2026 (v1.0), 13.06.2026 (v1.1 — multi-model), 13.06.2026 (v1.2 — Web + облачный MVP), 15.06.2026 (v2.0 — sync v0.4.0), 15.06.2026 (v2.10 — Phase 3 v1.5.0 closeout), **15.06.2026 (v2.11 — Phase 4 status audit)**, **16.06.2026 (v3.0 — Phase 3 = 12/12 FINAL, Phase 4 = 0/12 NOT STARTED)**, **20.06.2026 (v3.30 — Phase 7.3 SHIPPED, Plugin Marketplace next)**, **20.06.2026 (v3.31 — Phase 7.4 Plugin Marketplace SHIPPED)**
 **Автор:** Соломон
 **Заказчик:** Марк
 **Текущий tag:** `v1.5.0` (HEAD `ec8beaf`, 15.06.2026)
@@ -547,9 +547,30 @@ UX, web-обёртка, интеграции с IDE.
 - Trust boundary AST: 3 new checks (hooks_admin, plugins_admin, observability_ws)
 - ~50 new tests, 0 regressions
 
-### Следующие версии (Phase 7.4+)
-- **v1.32.0** — Plugin Marketplace (next)
-- **v1.33.0** — Tier Router calibration
+---
+
+## Phase 7.4 — SHIPPED (v1.32.0, 20.06.2026)
+
+### Что закрыто
+- Plugin Marketplace API: `GET /api/v1/marketplace/plugins` (list + keyword filter + pagination), `GET /api/v1/marketplace/plugins/{name}` (detail)
+- Plugin Manifest v2: dataclass with semver validation, permissions, signature fields, backward compatibility with v1
+- Trust Registry: JSON-based trusted key management with hot-reload (asyncio polling)
+- Install/Uninstall CLI: `harness plugins install <name>`, `harness plugins uninstall <name>` with atomic install + signature verification
+- Signature verification: ed25519 via harness.plugins.signature (Rust + Python fallback)
+- Marketplace UI: React page with plugin catalogue, keyword search, detail view, signature badges
+- Scope `plugins.read`: new read-only scope for marketplace browsing
+- Trust boundary: AST-level enforcement, 0 violations across all new modules
+- 45+ new tests (Python + Vitest)
+
+### Статус фаз
+
+| Фаза | Версия | Статус | Описание |
+|------|--------|--------|----------|
+| 7.3 | v1.31.0 | SHIPPED | Hooks/Plugins admin, Observability WS, Audit export |
+| 7.4 | v1.32.0 | SHIPPED | Plugin Marketplace: API, Manifest v2, Trust Registry, Install CLI, UI |
+
+### Следующие версии (Phase 7.5+)
+- **v1.33.0** — Tier Router calibration (next)
 - **v1.34.0** — Embeddings swap
 - **v1.35.0** — Cross-encoder + B5 eval
 
@@ -566,6 +587,6 @@ UX, web-обёртка, интеграции с IDE.
 
 ---
 
-**Roadmap версия:** 3.30
+**Roadmap версия:** 3.31
 **Дата:** 20.06.2026
-**Следующий review:** Phase 7.4 — Plugin Marketplace (v1.32.0)
+**Следующий review:** Phase 7.5 — Tier Router calibration (v1.33.0)
