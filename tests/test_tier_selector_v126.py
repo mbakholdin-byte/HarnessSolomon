@@ -1,10 +1,10 @@
-"""Phase 7.5 v1.33.0 — Tests for ``TierSelector.select_heuristic``.
+"""Phase 7.6 v1.34.0 — Tests for ``TierSelector.select_heuristic``.
 
 Verifies the heuristic tier routing rules:
 
-  * **T1** for short prompts (< 1000 chars) with small context (< 8000
+  * **T1** for short prompts (< 1000 chars) with small context (< 2000
     tokens) and no tool calls.
-  * **T3** for long prompts (> 3000 chars), large contexts (> 16000
+  * **T3** for long prompts (> 10000 chars), large contexts (> 16000
     tokens), or complexity keywords ("reasoning", "analyze", "prove",
     "derive", "evaluate").
   * **T2** as the default for medium prompts.
@@ -77,9 +77,9 @@ class TestT1Routing:
         selector: TierSelector,
         heuristic_enabled: None,
     ) -> None:
-        """Context at 7999 tokens (just under 8000) with short prompt → T1."""
+        """Context at 1999 tokens (just under 2000) with short prompt → T1."""
         prompt = "short prompt"
-        result = selector.select_heuristic(prompt, context_size=7999)
+        result = selector.select_heuristic(prompt, context_size=1999)
         assert result == TIER_T1
 
     def test_tool_calls_disqualify_t1(
@@ -102,11 +102,11 @@ class TestT1Routing:
         selector: TierSelector,
         heuristic_enabled: None,
     ) -> None:
-        """Context at 8000 tokens (>= threshold) does NOT get T1."""
+        """Context at 2000 tokens (>= threshold) does NOT get T1."""
         prompt = "a" * 100
-        result = selector.select_heuristic(prompt, context_size=8000)
-        # 8000 is >= T1 max (8000), so T1 disqualified.
-        # 8000 < T3 min (16000), no keywords → T2 default.
+        result = selector.select_heuristic(prompt, context_size=2000)
+        # 2000 is >= T1 max (2000), so T1 disqualified.
+        # 2000 < T3 min (16000), no keywords → T2 default.
         assert result == TIER_T2
 
 
@@ -122,8 +122,8 @@ class TestT3Routing:
         selector: TierSelector,
         heuristic_enabled: None,
     ) -> None:
-        """A 6000-char prompt (above 5000 threshold) → T3."""
-        prompt = "a" * 6000
+        """A 11000-char prompt (above 10000 threshold) → T3."""
+        prompt = "a" * 11000
         result = selector.select_heuristic(prompt)
         assert result == TIER_T3
 
@@ -132,8 +132,8 @@ class TestT3Routing:
         selector: TierSelector,
         heuristic_enabled: None,
     ) -> None:
-        """Prompt length = 5001 (just above the 5000 threshold) → T3."""
-        prompt = "a" * 5001
+        """Prompt length = 10001 (just above the 10000 threshold) → T3."""
+        prompt = "a" * 10001
         result = selector.select_heuristic(prompt)
         assert result == TIER_T3
 
@@ -164,10 +164,10 @@ class TestT3Routing:
         win first — the heuristic uses first-match-wins ordering, and
         T1 takes precedence for short prompts.
         """
-        # 1100 chars: above T1 (1000) but below T3 (3000).
+        # 1100 chars: above T1 (1000) but below T3 (10000).
         prompt = f"Please {keyword} the following problem. " + "x" * 1060
         assert len(prompt) > 1000, "test prompt must exceed T1 threshold"
-        assert len(prompt) < 3000, "test prompt must be below T3 threshold"
+        assert len(prompt) < 10000, "test prompt must be below T3 threshold"
         result = selector.select_heuristic(prompt)
         assert result == TIER_T3, (
             f"keyword {keyword!r} should route to T3, got {result}"
@@ -218,9 +218,9 @@ class TestT2Routing:
         selector: TierSelector,
         heuristic_enabled: None,
     ) -> None:
-        """A 1200-char prompt (above T1 threshold 1000, below T3 threshold 3000)
+        """A 1200-char prompt (above T1 threshold 1000, below T3 threshold 10000)
         without keywords → T2."""
-        prompt = "a" * 1200  # 1000 < 1200 < 3000, no keywords
+        prompt = "a" * 1200  # 1000 < 1200 < 10000, no keywords
         result = selector.select_heuristic(prompt)
         assert result == TIER_T2
 

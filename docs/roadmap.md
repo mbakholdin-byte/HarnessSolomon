@@ -5,8 +5,8 @@
 **Дата:** 12.06.2026 (v1.0), 13.06.2026 (v1.1 — multi-model), 13.06.2026 (v1.2 — Web + облачный MVP), 15.06.2026 (v2.0 — sync v0.4.0), 15.06.2026 (v2.10 — Phase 3 v1.5.0 closeout), **15.06.2026 (v2.11 — Phase 4 status audit)**, **16.06.2026 (v3.0 — Phase 3 = 12/12 FINAL, Phase 4 = 0/12 NOT STARTED)**, **20.06.2026 (v3.30 — Phase 7.3 SHIPPED, Plugin Marketplace next)**, **20.06.2026 (v3.31 — Phase 7.4 Plugin Marketplace SHIPPED)**
 **Автор:** Соломон
 **Заказчик:** Марк
-**Текущий tag:** `v1.5.0` (HEAD `ec8beaf`, 15.06.2026)
-**Следующий review:** после Plan agent review + ExitPlanMode на Phase 4 Step 0 → coding → tag v1.6.0
+**Текущий tag:** `v1.34.0` (HEAD, 21.06.2026)
+**Следующий review:** Phase 7.7 — Embeddings swap
 
 > **Этот файл** — короткий canonical reference внутри репо.
 > **Полный source of truth** roadmap (90 KB, актуальный) — `C:\MyAI\_output\2026-06\12.06 Harness-Claude-Code-Architecture\roadmap.md` (v2.11).
@@ -569,10 +569,11 @@ UX, web-обёртка, интеграции с IDE.
 | 7.3 | v1.31.0 | SHIPPED | Hooks/Plugins admin, Observability WS, Audit export |
 | 7.4 | v1.32.0 | SHIPPED | Plugin Marketplace: API, Manifest v2, Trust Registry, Install CLI, UI |
 | 7.5 | v1.33.0 | SHIPPED | Tier Router calibration: thresholds tuned, calibration harness, 32 tests |
+| 7.6 | v1.34.0 | SHIPPED | Wire v2 Thresholds + Regression + CHANGELOG + Ship Prep |
 
-### Следующие версии (Phase 7.6+)
-- **v1.34.0** — Embeddings swap
-- **v1.35.0** — Cross-encoder + B5 eval
+### Следующие версии (Phase 7.7+)
+- **v1.35.0** — Embeddings swap
+- **v1.36.0** — Cross-encoder + B5 eval
 
 ---
 
@@ -591,6 +592,20 @@ UX, web-обёртка, интеграции с IDE.
 
 ---
 
+## Phase 7.6 — SHIPPED (v1.34.0, 21.06.2026)
+
+### Что закрыто
+- Tier Router thresholds recalibrated: t1_max_context_tokens 8000→2000, t3_min_prompt_chars 3000→10000
+- Accuracy improvement: 61.4%→71.2%, cost reduction: −$2.64
+- LLM usage NDJSON logging wired into completion and streaming paths
+- AgentContext: per-session cumulative context tracking for tier router
+- Synthetic benchmark v2: 2000 events with nonzero prompt/context tokens
+- 39 new tests: 6 usage log, 19 agent context, 8 synthetic benchmark, 6 regression
+- docs/calibration-report-v134.md: synthetic benchmark calibration report
+- Trust boundary: 0 violations
+
+---
+
 ## Следующие шаги (что делать прямо сейчас)
 
 1. **Создать репо:** `C:\MyAI\06_Harness\` (рядом с 05_TaskGraph)
@@ -602,6 +617,6 @@ UX, web-обёртка, интеграции с IDE.
 
 ---
 
-**Roadmap версия:** 3.32
+**Roadmap версия:** 3.33
 **Дата:** 21.06.2026
-**Следующий review:** Phase 7.6 — Embeddings swap (v1.34.0)
+**Следующий review:** Phase 7.7 — Embeddings swap (v1.35.0)

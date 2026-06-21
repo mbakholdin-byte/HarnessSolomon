@@ -514,6 +514,7 @@ def generate_markdown(
     total_events: int,
     train_events: int,
     holdout_events: int,
+    dataset_path: str = "data/calibration/golden_routing_dataset_v2.csv",
 ) -> str:
     """Generate a structured Markdown calibration report.
 
@@ -563,10 +564,11 @@ def generate_markdown(
     delta_acc_sign = "+" if impact["delta_accuracy"] >= 0 else ""
     delta_cost_sign = "+" if impact["delta_cost"] >= 0 else ""
 
-    report = f"""# Calibration Report — v1.33.0
+    report = f"""# Calibration Report — v1.34.0
 
-> **Phase:** 7.5 (Tier Router Calibration)
-> **Generated:** auto-generated from golden dataset
+> **Phase:** 7.6 (Synthetic Benchmark + Golden Dataset v2)
+> **Dataset:** ``{dataset_path}``
+> **Generated:** auto-generated from synthetic golden dataset
 > **Grid search model:** composite = accuracy − 0.5 × normalized_cost
 
 ---
@@ -575,8 +577,9 @@ def generate_markdown(
 
 This report presents the calibration results for the heuristic Tier Router
 (``harness.routing.tier_selector``). A full grid search was performed over
-**7 threshold parameters** against the golden routing dataset, followed by
-holdout validation, robustness analysis, and migration impact assessment.
+**7 threshold parameters** against the synthetic golden routing dataset (v2,
+2,000 events with realistic prompt and context token distributions), followed
+by holdout validation, robustness analysis, and migration impact assessment.
 
 ---
 
@@ -589,13 +592,12 @@ holdout validation, robustness analysis, and migration impact assessment.
 | Holdout set | {holdout_events} (20%) |
 | Grid combinations | 6×5×5×5×5×5×2 = 37,500 |
 | Holdout seed | 42 |
+| Source | Synthetic benchmark (Phase 7.6) |
 
-**⚠️ Limitation (context_tokens):** All ``context_tokens`` values in the
-current golden dataset are **0** — the log format does not capture per-call
-context token counts. Thresholds for ``t1_max_context_tokens`` and
-``t3_min_context_tokens`` are set to reasonable defaults but
-**have not been validated against real context-token data**. Recalibration
-is recommended once context token tracking is added to the logging pipeline.
+**✅ Synthetic dataset:** All ``prompt_tokens`` and ``context_tokens`` are
+nonzero with realistic multi-turn distributions (T1: 25–375 prompt tokens,
+T2: 125–750, T3: 500–2500). Context tokens simulate cumulative multi-turn
+usage via ``context_tokens >= prompt_tokens``.
 
 ---
 
@@ -646,28 +648,26 @@ the parameter strongly affects accuracy.
 
 ## 7. Limitation Notes
 
-1. **context_tokens = 0:** The golden dataset does not contain real context
-   token values. Thresholds ``t1_max_context_tokens`` and
-   ``t3_min_context_tokens`` are selected by grid search but have not been
-   validated against context-rich scenarios.
+1. **Synthetic data:** The golden dataset v2 is synthetically generated with
+   heuristic confidence scores and tier assignments. Real-world distributions
+   of prompt lengths, context tokens, and complexity keywords may differ.
 
-2. **Prompt text absent:** ``prompt_len_chars`` is estimated as
-   ``prompt_tokens × 4``; ``has_complexity_keyword`` is inferred from
-   ``model_id``/``model`` fields only (no prompt text in logs).
+2. **Prompt text absent:** ``prompt_len_chars`` is derived from
+   ``prompt_tokens × 4 ± 20%``; ``has_complexity_keyword`` is assigned
+   per-tier (80% for T3). Real prompt text keyword scanning is not performed.
 
-3. **T1 bias:** Due to the absence of prompt/context data, most events fall
-   into T1 (Rule 3). The grid search selects the **widest T1 zone** when
-   all configurations achieve ≈100% accuracy. Real-world performance with
-   actual prompt data may differ.
-
-4. **Confidence unused:** The ``confidence_high`` and ``confidence_low``
+3. **Confidence unused:** The ``confidence_high`` and ``confidence_low``
    thresholds are part of the grid but are not exercised by the current
    heuristic router logic (which uses only prompt/context size and
    complexity keywords).
 
-5. **Re-evaluation recommended:** Re-run calibration after adding
-   per-call context token tracking and prompt text keyword scanning to
-   the logging pipeline (Phase 7.6).
+4. **Cost model is flat:** The grid search uses a flat per-call cost model
+   (T1=$0.001, T2=$0.005, T3=$0.020). Token-based pricing is not simulated
+   in the grid search, only in the synthetic data generator.
+
+5. **Re-evaluation recommended:** Re-run calibration after replacing the
+   synthetic dataset with real production logs that include per-call
+   context token tracking and prompt text keyword scanning.
 """
     return report
 
@@ -681,6 +681,7 @@ def write_report(
     rec: CalibrationRecommendation,
     events: list[RoutingEvent],
     output_path: Path,
+    dataset_path: Path = Path("data/calibration/golden_routing_dataset_v2.csv"),
 ) -> None:
     """Full pipeline: generate recommendation, validation, robustness,
     impact analysis, and write a markdown report to disk.
@@ -697,6 +698,7 @@ def write_report(
         rec: Recommended threshold configuration (pre-computed).
         events: Full golden dataset.
         output_path: Destination path for the markdown report.
+        dataset_path: Path to the golden dataset CSV (used in report header).
     """
     train, holdout = holdout_split(events, ratio=0.8, seed=42)
     train_results = run_grid_search(train, lambda_cost=0.5, top_n=10)
@@ -712,6 +714,7 @@ def write_report(
         total_events=len(events),
         train_events=len(train),
         holdout_events=len(holdout),
+        dataset_path=str(dataset_path),
     )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)

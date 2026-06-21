@@ -1299,8 +1299,11 @@ def _dispatch_auth(args: argparse.Namespace) -> int:
 
 
 def _semver_gte(current: str, minimum: str) -> bool:
-    """Return True if current >= minimum (major.minor.patch only)."""
+    """Return True if current >= minimum (major.minor.patch only). Pre-release suffixes are stripped."""
+    import re as _re
+
     def parts(v: str) -> tuple[int, ...]:
+        v = _re.sub(r"-.*$", "", v)  # strip pre-release suffix (e.g. "0-alpha")
         return tuple(int(x) for x in v.split(".")[:3])
     return parts(current) >= parts(minimum)
 

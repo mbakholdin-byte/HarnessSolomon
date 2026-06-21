@@ -1,5 +1,25 @@
 # Changelog — Solomon Harness
 
+## [1.34.0] — 2026-06-21
+
+### Added
+- **LLM usage NDJSON logging**: `harness/observability/llm_usage_log.py` — append-only NDJSON log for every LLM completion (prompt_tokens, completion_tokens, cost, latency, tier)
+- **AgentContext**: `harness/agents/context.py` — per-session cumulative context tracking for tier router (cumulative_prompt_tokens, last_context_size)
+- **Synthetic benchmark**: `harness/eval/synthetic_benchmark.py` — realistic LLM usage event generator for calibration
+- **Golden dataset v2**: 2000 synthetic events with nonzero prompt/context tokens
+
+### Changed
+- **Tier Router thresholds recalibrated** on synthetic data (v2): t1_max_context_tokens 8000→2000, t3_min_prompt_chars 3000→10000. Accuracy: 61.4%→71.2%, cost: −$2.64.
+- `harness/server/llm/router.py` — LlmUsageLogger wired into both completion and streaming paths
+- `harness/config.py` — llm_usage_tracking_enabled, llm_usage_log_path, context_tracking_enabled
+
+### Technical
+- 39 new tests (usage log: 6, agent context: 19, synthetic benchmark: 8, regression: 6)
+- Trust boundary: 0 violations
+- Calibration report v1.34.0 generated from synthetic benchmark
+
+---
+
 ## [1.33.0] — 2026-06-21
 
 ### Changed

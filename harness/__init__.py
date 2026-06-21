@@ -1,5 +1,5 @@
 """Solomon Harness — open-source agentic shell for local LLM."""
 
-__version__ = "1.34.0-alpha.1"
+__version__ = "1.34.0"
 __author__ = "Solomon"
 __license__ = "MIT"

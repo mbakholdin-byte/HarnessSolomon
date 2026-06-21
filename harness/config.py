@@ -1902,23 +1902,25 @@ class Settings(BaseSettings):
         ),
     )
     tier_routing_t1_max_context_tokens: int = Field(
-        default=8000,
+        default=2000,
         ge=1,
         description=(
-            "Phase 7.5: maximum context size (tokens) for T1 "
+            "Phase 7.6: maximum context size (tokens) for T1 "
             "eligibility. Contexts larger than this skip T1. "
-            "Calibrated up from 4000 (v1.26.0) for wider T1 zone. "
-            "Default 8000."
+            "Recalibrated down from 8000 (v1.33.0) — synthetic "
+            "benchmark v2 shows narrower T1 context band improves "
+            "accuracy. Default 2000."
         ),
     )
     tier_routing_t3_min_prompt_chars: int = Field(
-        default=3000,
+        default=10000,
         ge=1,
         description=(
-            "Phase 7.5: minimum prompt length (chars) that forces "
+            "Phase 7.6: minimum prompt length (chars) that forces "
             "T3. Prompts this long are routed to the premium tier "
-            "directly. Calibrated down from 5000 (v1.26.0) — "
-            "production data shows T3 needed earlier. Default 3000."
+            "directly. Recalibrated up from 3000 (v1.33.0) — "
+            "synthetic benchmark v2 shows higher bar reduces "
+            "unnecessary T3 routing. Default 10000."
         ),
     )
     tier_routing_t3_min_context_tokens: int = Field(

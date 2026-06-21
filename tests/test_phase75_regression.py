@@ -28,8 +28,8 @@ RECOMMENDED = {
     "subagent_confidence_high": 0.60,
     "subagent_confidence_low": 0.30,
     "tier_routing_t1_max_prompt_chars": 1000,
-    "tier_routing_t1_max_context_tokens": 8000,
-    "tier_routing_t3_min_prompt_chars": 3000,
+    "tier_routing_t1_max_context_tokens": 2000,
+    "tier_routing_t3_min_prompt_chars": 10000,
     "tier_routing_t3_min_context_tokens": 16000,
     "tier_routing_complexity_keywords": (
         "reasoning", "analyze", "prove", "derive", "evaluate",
