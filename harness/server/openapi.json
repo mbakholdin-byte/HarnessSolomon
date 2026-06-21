@@ -1,0 +1,3772 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Solomon Harness",
+    "description": "Open-source agentic shell — Web MVP (Phase 0) + sub-agent system (Phase 2.0+2.1) + GitHub PR integration (Phase 2.2) + scope-gated API (Phase 1.6) + observability (Phase 4.1).\n\n**API versioning:** Legacy `/api/*` paths return RFC 8594 `Deprecation: true` and `Sunset: Wed, 31 Dec 2026 23:59:59 GMT` headers. New clients SHOULD use `/api/v1/*` (canonical). See docs/api-versioning.md for the migration timeline.",
+    "version": "1.36.0"
+  },
+  "paths": {
+    "/api/health": {
+      "get": {
+        "tags": [
+          "observability",
+          "observability"
+        ],
+        "summary": "Health Alias",
+        "description": "Backward-compat alias for ``/health/deep`` (Phase 0+).",
+        "operationId": "health_alias_api_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Health Alias Api Health Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/health": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Health",
+        "description": "Liveness probe.",
+        "operationId": "health_api_v1_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object",
+                  "title": "Response Health Api V1 Health Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/metrics": {
+      "get": {
+        "tags": [
+          "observability",
+          "observability"
+        ],
+        "summary": "Metrics",
+        "description": "Prometheus scrape endpoint. Disabled by default in Settings.",
+        "operationId": "metrics_metrics_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health/live": {
+      "get": {
+        "tags": [
+          "observability",
+          "observability"
+        ],
+        "summary": "Health Live",
+        "description": "Liveness: is the process alive? Always 200 unless the Python\ninterpreter is broken. Used by Kubernetes liveness probe.",
+        "operationId": "health_live_health_live_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Health Live Health Live Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health/ready": {
+      "get": {
+        "tags": [
+          "observability",
+          "observability"
+        ],
+        "summary": "Health Ready",
+        "description": "Readiness: are the required dependencies up? Returns 503 if\n``require_qdrant`` / ``require_neo4j`` are set and the dep is down.",
+        "operationId": "health_ready_health_ready_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Health Ready Health Ready Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health/deep": {
+      "get": {
+        "tags": [
+          "observability",
+          "observability"
+        ],
+        "summary": "Health Deep",
+        "description": "Deep health: run every registered probe with full timeout.\nUsed by ops dashboards.",
+        "operationId": "health_deep_health_deep_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Health Deep Health Deep Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/sessions": {
+      "get": {
+        "tags": [
+          "sessions"
+        ],
+        "summary": "List Sessions",
+        "description": "List most recent sessions.",
+        "operationId": "list_sessions_api_sessions_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "title": "Response List Sessions Api Sessions Get"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "sessions"
+        ],
+        "summary": "Create Session",
+        "description": "Create new session.\n\nv1.0.0 security fix: requires ``sessions.write`` scope (was:\n``sessions.read`` — REST semantics violation). Creating a session\nis a mutation, not a read.",
+        "operationId": "create_session_api_sessions_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSessionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Create Session Api Sessions Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/sessions/{session_id}": {
+      "get": {
+        "tags": [
+          "sessions"
+        ],
+        "summary": "Get Session",
+        "description": "Get session by id.",
+        "operationId": "get_session_api_sessions__session_id__get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Session Api Sessions  Session Id  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "sessions"
+        ],
+        "summary": "Delete Session",
+        "description": "Delete session + cascade messages.",
+        "operationId": "delete_session_api_sessions__session_id__delete",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/sessions/{session_id}/messages": {
+      "get": {
+        "tags": [
+          "sessions"
+        ],
+        "summary": "List Messages",
+        "description": "List messages for a session, in order.",
+        "operationId": "list_messages_api_sessions__session_id__messages_get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "title": "Response List Messages Api Sessions  Session Id  Messages Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "sessions"
+        ],
+        "summary": "Add Message",
+        "description": "Add a message to a session.\n\nAlso touches the session (updated_at + message_count++) and mirrors to JSONL.",
+        "operationId": "add_message_api_sessions__session_id__messages_post",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddMessageRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Add Message Api Sessions  Session Id  Messages Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/models": {
+      "get": {
+        "tags": [
+          "models"
+        ],
+        "summary": "Get Models",
+        "description": "Return all catalog models with availability computed from env.\n\nResponse shape (per model):\n    {\n      \"id\": \"MiniMax-M2.7\",\n      \"provider\": \"minimax\",\n      \"tier\": \"T3\",\n      \"context\": 200000,\n      \"available\": true|false,\n      \"pricing_input\": 0.30,\n      \"pricing_output\": 0.60,\n    }",
+        "operationId": "get_models_api_models_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "type": "array",
+                  "title": "Response Get Models Api Models Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/models": {
+      "get": {
+        "tags": [
+          "models"
+        ],
+        "summary": "Get Models",
+        "description": "Return all catalog models with availability computed from env.\n\nResponse shape (per model):\n    {\n      \"id\": \"MiniMax-M2.7\",\n      \"provider\": \"minimax\",\n      \"tier\": \"T3\",\n      \"context\": 200000,\n      \"available\": true|false,\n      \"pricing_input\": 0.30,\n      \"pricing_output\": 0.60,\n    }",
+        "operationId": "get_models_api_v1_models_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "type": "array",
+                  "title": "Response Get Models Api V1 Models Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/elicitation/poll": {
+      "get": {
+        "tags": [
+          "elicitation-longpoll"
+        ],
+        "summary": "Elicitation Poll",
+        "description": "Long-poll the broker for the next pending question.\n\nBehaviour:\n    - If long-poll is disabled → 403.\n    - If a pending question exists right now → return it (200).\n    - Otherwise poll every ``interval_s`` up to ``timeout_s``.\n      On timeout → 200 with empty body via raising HTTPException(200)?\n      No — FastAPI doesn't allow 200 + empty via raise cleanly. We\n      instead return a 404 with ``detail=\"no_pending_question\"`` so\n      the caller can distinguish \"disabled\" (403), \"timeout\" (404),\n      and \"got one\" (200). (Spec also allows empty body on timeout;\n      we chose 404 because FastAPI serialises a clean JSON error\n      body which is easier for clients to parse than an empty one.)",
+        "operationId": "elicitation_poll_api_v1_elicitation_poll_get",
+        "parameters": [
+          {
+            "name": "session",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional session id (informational — broker is process-global).",
+              "title": "Session"
+            },
+            "description": "Optional session id (informational — broker is process-global)."
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LongPollQuestion"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/elicitation/answer": {
+      "post": {
+        "tags": [
+          "elicitation-longpoll"
+        ],
+        "summary": "Elicitation Answer",
+        "description": "Submit an answer for a pending question.\n\nReturns:\n    ``{\"accepted\": True, \"question_id\": \"...\"}`` on success.\n\nStatus codes:\n    - 200: answer accepted, future resolved.\n    - 403: long-poll disabled.\n    - 404: question_id unknown or already resolved (broker.answer\n      returned False).",
+        "operationId": "elicitation_answer_api_v1_elicitation_answer_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LongPollAnswer"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Elicitation Answer Api V1 Elicitation Answer Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/elicitation/sse": {
+      "get": {
+        "tags": [
+          "elicitation-sse"
+        ],
+        "summary": "Elicitation Sse",
+        "description": "Server-Sent Events stream for Elicitation lifecycle events.\n\nReturns a ``text/event-stream`` response that stays open until the\nclient disconnects, the heartbeat-max-age is reached, or the server\nshuts down. See the module docstring for the wire format.\n\nStatus codes:\n    - 200 (streaming): success — the response body is the SSE stream.\n    - 403: ``hooks_elicitation_sse_enabled`` is False, OR the token\n      lacks the ``elicitation.read`` scope.",
+        "operationId": "elicitation_sse_api_v1_elicitation_sse_get",
+        "parameters": [
+          {
+            "name": "session",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional session id filter. When set, only questions published with a matching ``session_id`` are streamed. The broker is process-global so the filter is informational.",
+              "title": "Session"
+            },
+            "description": "Optional session id filter. When set, only questions published with a matching ``session_id`` are streamed. The broker is process-global so the filter is informational."
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/elicitation/history": {
+      "get": {
+        "tags": [
+          "elicitation-history"
+        ],
+        "summary": "Elicitation History",
+        "description": "Return the persisted Elicitation decision history.\n\nReads directly from the shared ``agent-jobs.db`` SQLite file — no\nbroker interaction. The broker may be writing concurrently; SQLite\nhandles the locking, and our reads are short-lived.",
+        "operationId": "elicitation_history_api_v1_elicitation_history_get",
+        "parameters": [
+          {
+            "name": "session",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional session_id filter (exact match).",
+              "title": "Session"
+            },
+            "description": "Optional session_id filter (exact match)."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 10000,
+              "minimum": 1,
+              "description": "Max rows to return (1..10_000).",
+              "default": 100,
+              "title": "Limit"
+            },
+            "description": "Max rows to return (1..10_000)."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "title": "Response Elicitation History Api V1 Elicitation History Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/observability/metrics": {
+      "get": {
+        "tags": [
+          "observability-admin",
+          "observability-admin"
+        ],
+        "summary": "Admin Metrics",
+        "description": "Return a JSON snapshot of all Prometheus counters + gauges.\n\nSame data as ``GET /metrics`` (Prometheus text format), but as\nnested JSON for easier consumption by admin tools. Histograms are\nexcluded (the Prometheus text format is their canonical export).",
+        "operationId": "admin_metrics_api_v1_observability_metrics_get",
+        "parameters": [
+          {
+            "name": "filter",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional regex filter on metric names. When set, only metrics whose name matches the pattern are returned. Overrides ``settings.hooks_observability_admin_metrics_filter`` for this request.",
+              "title": "Filter"
+            },
+            "description": "Optional regex filter on metric names. When set, only metrics whose name matches the pattern are returned. Overrides ``settings.hooks_observability_admin_metrics_filter`` for this request."
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Admin Metrics Api V1 Observability Metrics Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/observability/health/deep": {
+      "get": {
+        "tags": [
+          "observability-admin",
+          "observability-admin"
+        ],
+        "summary": "Admin Health Deep",
+        "description": "Return a JSON deep health report (8 subsystem probes).\n\nReuses :meth:`HealthChecker.deep` from the singleton observability\nhandle. The response shape is the canonical ``HealthReport.to_dict()``\noutput (``{status, version, project_root, checks, probes, ts}``).",
+        "operationId": "admin_health_deep_api_v1_observability_health_deep_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Admin Health Deep Api V1 Observability Health Deep Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/observability/audit/recent": {
+      "get": {
+        "tags": [
+          "observability-admin",
+          "observability-admin"
+        ],
+        "summary": "Admin Audit Recent",
+        "description": "Return the last N :class:`HookAuditSink` entries.\n\nThe audit sink is DI'd via ``app.state.audit_sink`` by the FastAPI\nlifespan handler. When the sink is not configured (no\n``hooks_audit_log=True``), the endpoint returns an empty list\nrather than 503 — the absence of audit logging is a valid state\nand the admin tool should see ``[]`` (not an error).",
+        "operationId": "admin_audit_recent_api_v1_observability_audit_recent_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Number of recent audit entries to return. Capped at ``settings.hooks_observability_admin_audit_max_limit`` (default 500).",
+              "default": 50,
+              "title": "Limit"
+            },
+            "description": "Number of recent audit entries to return. Capped at ``settings.hooks_observability_admin_audit_max_limit`` (default 500)."
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "title": "Response Admin Audit Recent Api V1 Observability Audit Recent Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/observability/webhooks/dlq": {
+      "get": {
+        "tags": [
+          "observability-admin",
+          "observability-admin"
+        ],
+        "summary": "Admin Webhooks Dlq List",
+        "description": "List recent outbound webhook DLQ entries (Phase 4.13B Drift 2).\n\nReturns ``{\"entries\": [...], \"count\": N, \"limit\": limit,\n\"include_replayed\": bool}``. Each entry is serialised with PII\nstripping (preview fields removed from the payload). The store\nis the single source of truth — there is no in-memory cache.",
+        "operationId": "admin_webhooks_dlq_list_api_v1_observability_webhooks_dlq_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 1000,
+              "minimum": 1,
+              "description": "Max DLQ entries to return. Default 100, hard cap 1000. Only entries that have NOT been replayed are returned (pass ?include_replayed=true for the full audit history).",
+              "default": 100,
+              "title": "Limit"
+            },
+            "description": "Max DLQ entries to return. Default 100, hard cap 1000. Only entries that have NOT been replayed are returned (pass ?include_replayed=true for the full audit history)."
+          },
+          {
+            "name": "include_replayed",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "When True, also return entries that have been replayed (audit history). Default False (only pending).",
+              "default": false,
+              "title": "Include Replayed"
+            },
+            "description": "When True, also return entries that have been replayed (audit history). Default False (only pending)."
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Admin Webhooks Dlq List Api V1 Observability Webhooks Dlq Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/observability/webhooks/dlq/{dlq_id}/replay": {
+      "post": {
+        "tags": [
+          "observability-admin",
+          "observability-admin"
+        ],
+        "summary": "Admin Webhooks Dlq Replay",
+        "description": "Replay a single DLQ entry (Phase 4.13B Drift 2).\n\nRe-sends the original payload to the URL using the CURRENT\nsigning secret (honouring ``secret_version`` on the outbound\nconfig row). On success, the entry is marked ``replayed_at``\nand will not appear in the default list (``?include_replayed=\nfalse``). On failure, the entry is left untouched (the operator\ncan retry).\n\nRequires ``Scope.WEBHOOK_ADMIN`` (mutation, not just read).\n\nReturns:\n    ``{\"dlq_id\": id, \"replayed\": bool, \"status_code\": int}``.\n    ``replayed`` is True when the resend returned 2xx AND the\n    store marked the row replayed.",
+        "operationId": "admin_webhooks_dlq_replay_api_v1_observability_webhooks_dlq__dlq_id__replay_post",
+        "parameters": [
+          {
+            "name": "dlq_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Dlq Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Admin Webhooks Dlq Replay Api V1 Observability Webhooks Dlq  Dlq Id  Replay Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/audit": {
+      "get": {
+        "tags": [
+          "audit",
+          "audit"
+        ],
+        "summary": "Audit List",
+        "description": "List audit entries with date-range filter, pagination, and format.\n\nReturns:\n  * ``format=json`` → ``application/json``: list of event dicts\n  * ``format=csv`` → ``text/csv; charset=utf-8``: CSV document\n  * Empty result → 200 with ``[]`` (JSON) or headers-only CSV",
+        "operationId": "audit_list_api_v1_audit_get",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive lower bound (ISO 8601), e.g. 2026-06-19T00:00:00Z",
+              "title": "From"
+            },
+            "description": "Inclusive lower bound (ISO 8601), e.g. 2026-06-19T00:00:00Z"
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive upper bound (ISO 8601), e.g. 2026-06-20T23:59:59Z",
+              "title": "To"
+            },
+            "description": "Inclusive upper bound (ISO 8601), e.g. 2026-06-20T23:59:59Z"
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Response format: 'json' (application/json) or 'csv' (text/csv)",
+              "default": "json",
+              "title": "Format"
+            },
+            "description": "Response format: 'json' (application/json) or 'csv' (text/csv)"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 1000,
+              "minimum": 1,
+              "description": "Page size (1–1000, default 100)",
+              "default": 100,
+              "title": "Limit"
+            },
+            "description": "Page size (1–1000, default 100)"
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Pagination offset (0-based)",
+              "default": 0,
+              "title": "Offset"
+            },
+            "description": "Pagination offset (0-based)"
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/enable": {
+      "post": {
+        "tags": [
+          "webhooks-admin",
+          "webhooks-admin"
+        ],
+        "summary": "Enable Webhook",
+        "description": "Re-enable an auto-disabled outbound webhook URL.\n\nResets ``disabled_at`` to NULL and ``consecutive_failures`` to 0.\nThe next delivery attempt will go through normally; if the\nendpoint is still flaky, the counter climbs again and the URL\nis re-disabled at the threshold.\n\nQuery param:\n    ``url``: The outbound URL to re-enable. Pass raw (the query\n    string handles slashes natively) or percent-encoded.\n\nReturns:\n    ``{\"url\": <url>, \"enabled\": <bool>}`` where\n    ``enabled`` is True if the row was previously disabled and\n    is now active, False if it was already active (idempotent\n    no-op). A 404 is returned when the URL has never been\n    recorded by the dispatcher (no config row exists).",
+        "operationId": "enable_webhook_api_v1_webhooks_enable_post",
+        "parameters": [
+          {
+            "name": "url",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "The outbound webhook URL to re-enable. Outbound URLs contain slashes and colons (``https://host/path``) which can't appear raw in a path segment, so the URL is passed as a query parameter (``?url=<value>``). Percent-encoding is optional — Starlette decodes query params once.",
+              "title": "Url"
+            },
+            "description": "The outbound webhook URL to re-enable. Outbound URLs contain slashes and colons (``https://host/path``) which can't appear raw in a path segment, so the URL is passed as a query parameter (``?url=<value>``). Percent-encoding is optional — Starlette decodes query params once."
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Enable Webhook Api V1 Webhooks Enable Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agents/jobs/{job_id}": {
+      "get": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "Get Job",
+        "description": "Fetch one job by id. 404 if not found.\n\nPhase 1.6: requires ``agents.read`` scope. The token is not\nused by the handler body but its presence is enforced by\nthe dependency — FastAPI will resolve it before the handler\nruns.",
+        "operationId": "get_job_api_v1_agents_jobs__job_id__get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/_JobRecordSchema"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agents/jobs": {
+      "get": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "List Jobs",
+        "description": "List the ``recent`` most recent jobs (default 20, newest first).\n\nPhase 1.6: requires ``agents.read`` scope.",
+        "operationId": "list_jobs_api_v1_agents_jobs_get",
+        "parameters": [
+          {
+            "name": "recent",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 20,
+              "title": "Recent"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/_JobRecordSchema"
+                  },
+                  "title": "Response List Jobs Api V1 Agents Jobs Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "Enqueue Job",
+        "description": "Enqueue a sub-agent job (Phase 1.6).\n\nPhase 1.6 scope contract:\n  * Always requires ``agents.write``.\n  * Additionally requires ``agents.pr`` when ``pr_mode != \"off\"``\n    (compound check, enforced explicitly in the handler body).\n\nValidation:\n  * ``prompt`` is non-empty (Pydantic)\n  * ``agent`` must be a known spec (built-in or project override)\n  * ``model`` (if given) must be in the catalog\n  * ``pr_mode`` is one of off/draft/ready\n\nResponse: 201 with ``job_id``, ``status='queued'``. The actual\njob runs in a background ``asyncio.Task`` via the lifespan-\ninstantiated ``MergeQueue``.",
+        "operationId": "enqueue_job_api_v1_agents_jobs_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/_EnqueueRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/_EnqueueResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agents/stacks/{stack_id}": {
+      "get": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "Get Stack",
+        "description": "Phase 2.4: fetch a stack by its ``pr_stack_id``.\n\nReturns the parent orchestrator row (``stack_position=0``) and\nthe ordered list of children (one per slice). 404 if no row\nmatches ``stack_id``. The parent's status reflects the\naggregate (``pr_open`` while children are in flight, ``merged``\nafter ``all_stack_children_merged`` is True, ``failed`` if\nthe stack was cascade-cancelled).\n\nPhase 1.6: requires ``agents.read`` scope.",
+        "operationId": "get_stack_api_v1_agents_stacks__stack_id__get",
+        "parameters": [
+          {
+            "name": "stack_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Stack Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/_StackSchema"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agents/health": {
+      "get": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "Queue Health",
+        "description": "Ops health endpoint: per-repo lock stats + recent job count.\n\nThe lock stats are read from ``app.state.merge_queue`` when\navailable; the recent-job count is read from the store. The\ntwo are independent so a missing queue doesn't kill the\nhealth response.\n\nPhase 1.6: requires ``agents.read`` scope (it's a read\nendpoint, and we keep the auth surface uniform across the\nv1 namespace — operators who want a fully-open health\nendpoint can hit ``/api/health`` which remains legacy-open).",
+        "operationId": "queue_health_api_v1_agents_health_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/_QueueHealth"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/capabilities": {
+      "get": {
+        "tags": [
+          "capabilities"
+        ],
+        "summary": "Get Capabilities",
+        "description": "Return the server's self-description.\n\nPublic on purpose — this is the discovery endpoint. The\n``auth_required`` flag tells the client whether subsequent\ncalls will need a token; the ``scopes_available`` array\nis the closed set the server recognises; ``endpoints``\nis built live from the app's mounted routes via\n:func:`harness.server.auth.route_registry.collect_endpoints`.",
+        "operationId": "get_capabilities_api_v1_capabilities_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/_CapabilitiesResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/memory/search": {
+      "get": {
+        "tags": [
+          "memory"
+        ],
+        "summary": "Search Memory",
+        "description": "Search the 4-layer memory with BM25 + identity rerank.\n\nQuery parameters:\n  * ``q`` — required, the search string\n  * ``k`` — optional, default 5, max 50\n\nReturns 422 on missing ``q`` (handled by FastAPI's required-\nquery-param validation) and 200 with an empty ``hits`` list\non no matches.",
+        "operationId": "search_memory_api_v1_memory_search_get",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Q"
+            }
+          },
+          {
+            "name": "k",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 5,
+              "title": "K"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/_SearchResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/memory/notes": {
+      "post": {
+        "tags": [
+          "memory"
+        ],
+        "summary": "Write Note",
+        "description": "Dual-write a new memory note to the unified facade.\n\nPydantic enforces non-empty ``text`` and a sane ``layer``.\nThe bridge does the actual write; this route just shapes\nthe response.",
+        "operationId": "write_note_api_v1_memory_notes_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/_WriteNoteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/_WriteNoteResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/memory/stats": {
+      "get": {
+        "tags": [
+          "memory"
+        ],
+        "summary": "Memory Stats",
+        "description": "Return per-layer entry counts (cheap, best-effort).\n\nThe ``L1`` count is read from the on-disk JSONL file\n(one line per entry). Other layers report ``available: true``\n— a precise per-entry count would require a per-adapter\n``count()`` method (Phase 3 follow-up).",
+        "operationId": "memory_stats_api_v1_memory_stats_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/_StatsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sessions": {
+      "get": {
+        "tags": [
+          "sessions-v1"
+        ],
+        "summary": "List Sessions V1",
+        "description": "List the most recently updated sessions (Phase 1.6).\n\nPhase 1.6: requires ``sessions.read`` scope. The shape is\nthe same as the legacy ``/api/sessions`` route so a client\ncan swap endpoints by changing only the prefix.",
+        "operationId": "list_sessions_v1_api_v1_sessions_get",
+        "parameters": [
+          {
+            "name": "recent",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "title": "Recent"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Session"
+                  },
+                  "title": "Response List Sessions V1 Api V1 Sessions Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sessions/{session_id}/compact": {
+      "post": {
+        "tags": [
+          "sessions-v1"
+        ],
+        "summary": "Compact Session V1",
+        "description": "Force-compact a session's context (Phase 3 v1.4.0).\n\nRequires the ``sessions.write`` scope (separate from\n``agents.write`` and ``memory.write`` because /compact is a\nsession-control operation).\n\nReturns a JSON body with the same shape as\n:class:`harness.context.compaction.CompactResult`:\n``{\"original_tokens\": int, \"compacted_tokens\": int,\n   \"summary_preview\": str, \"cache_hit\": bool,\n   \"saved_tokens\": int}``.\n\nReturns 503 if the compactor / trigger is not wired into the\napp (e.g. dev mode without a real compactor). Returns 200 with\nthe result on success.",
+        "operationId": "compact_session_v1_api_v1_sessions__session_id__compact_post",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "bypass_cache",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Bypass Cache"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Compact Session V1 Api V1 Sessions  Session Id  Compact Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agents/webhooks/github": {
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Receive Github Webhook",
+        "description": "Receive a single inbound GitHub webhook event.\n\nPipeline (each step short-circuits with the appropriate HTTP code):\n  1. Read the raw body (bytes — we need the unparsed body\n     for HMAC verification).\n  2. Reject if body > ``webhook_max_payload_kb``.\n  3. Read ``X-Hub-Signature-256`` / ``X-GitHub-Event`` /\n     ``X-GitHub-Delivery`` headers (case-insensitive).\n  4. Reject if ``webhook_secret`` is empty (503).\n  5. Delegate to ``WebhookHandler.handle_raw`` (HMAC verify\n     + idempotency + parse + record). On HMAC fail → 401.\n  6. If the event was a redelivery (None from handle_raw),\n     return 200 with ``processed: false`` and ``detail`` set.\n  7. Otherwise dispatch to the JobStore via\n     ``WebhookHandler.dispatch_event``.\n  8. Return 200 with the result.\n\nThe route deliberately returns 200 on most \"no work to do\"\ncases (unknown event types, no matching job, etc.) so\nGitHub doesn't retry — only true error conditions (bad\nsignature, malformed JSON, missing secret) return non-200.",
+        "operationId": "receive_github_webhook_api_v1_agents_webhooks_github_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/_WebhookAck"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hooks": {
+      "get": {
+        "tags": [
+          "hooks-admin",
+          "hooks-admin"
+        ],
+        "summary": "List Hooks",
+        "description": "List all registered hooks (builtin + custom) with on/off state.\n\nReturns hooks sorted by event, then by priority.",
+        "operationId": "list_hooks_api_v1_hooks_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HookListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hooks/{hook_id}": {
+      "get": {
+        "tags": [
+          "hooks-admin",
+          "hooks-admin"
+        ],
+        "summary": "Get Hook",
+        "description": "Get a single hook by id.\n\nReturns 404 if the hook does not exist.",
+        "operationId": "get_hook_api_v1_hooks__hook_id__get",
+        "parameters": [
+          {
+            "name": "hook_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Hook Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HookDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hooks/{hook_id}/enable": {
+      "post": {
+        "tags": [
+          "hooks-admin",
+          "hooks-admin"
+        ],
+        "summary": "Enable Hook",
+        "description": "Enable a hook.\n\nReturns 404 if the hook does not exist. Idempotent — calling\nenable on an already-enabled hook succeeds (enabled=True).",
+        "operationId": "enable_hook_api_v1_hooks__hook_id__enable_post",
+        "parameters": [
+          {
+            "name": "hook_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Hook Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HookStatusResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hooks/{hook_id}/disable": {
+      "post": {
+        "tags": [
+          "hooks-admin",
+          "hooks-admin"
+        ],
+        "summary": "Disable Hook",
+        "description": "Disable a hook.\n\nReturns 404 if the hook does not exist. Idempotent — calling\ndisable on an already-disabled hook succeeds (enabled=False).",
+        "operationId": "disable_hook_api_v1_hooks__hook_id__disable_post",
+        "parameters": [
+          {
+            "name": "hook_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Hook Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HookStatusResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/plugins": {
+      "get": {
+        "tags": [
+          "plugins-admin",
+          "plugins-admin"
+        ],
+        "summary": "List Plugins",
+        "description": "List all loaded plugins with their enabled/disabled state.",
+        "operationId": "list_plugins_api_v1_plugins_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PluginListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/plugins/{name}": {
+      "get": {
+        "tags": [
+          "plugins-admin",
+          "plugins-admin"
+        ],
+        "summary": "Get Plugin",
+        "description": "Get a single plugin by name.\n\nReturns 404 if the plugin is not loaded and not in the\ndisabled set.",
+        "operationId": "get_plugin_api_v1_plugins__name__get",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PluginDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/plugins/{name}/enable": {
+      "post": {
+        "tags": [
+          "plugins-admin",
+          "plugins-admin"
+        ],
+        "summary": "Enable Plugin",
+        "description": "Re-enable a previously disabled plugin.\n\nRemoves the administrative block. The plugin must be reloaded\nvia the loader for its hooks/tools to become active again —\nthis endpoint only clears the disabled flag.\n\nReturns 200 if the plugin was disabled and is now re-enabled.\nReturns 200 with ``enabled=True`` if it was already active\n(idempotent). Returns 404 if the plugin name is completely\nunknown.",
+        "operationId": "enable_plugin_api_v1_plugins__name__enable_post",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PluginStatusResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/plugins/{name}/disable": {
+      "post": {
+        "tags": [
+          "plugins-admin",
+          "plugins-admin"
+        ],
+        "summary": "Disable Plugin",
+        "description": "Disable a plugin: unload + mark disabled.\n\nRemoves the plugin's hooks and tools from the registry and\nmarks it as disabled so it cannot be re-loaded until\n``enable`` is called.\n\nReturns 200 if the plugin was loaded and is now disabled.\nReturns 404 if the plugin is not currently loaded.",
+        "operationId": "disable_plugin_api_v1_plugins__name__disable_post",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PluginStatusResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/marketplace/plugins": {
+      "get": {
+        "tags": [
+          "marketplace"
+        ],
+        "summary": "List Marketplace Plugins",
+        "description": "List available plugins in the marketplace.\n\nSupports optional ``keyword`` filtering (case-insensitive\nsubstring match against name, description, and keywords)\nand ``limit`` / ``offset`` pagination.",
+        "operationId": "list_marketplace_plugins_api_v1_marketplace_plugins_get",
+        "parameters": [
+          {
+            "name": "keyword",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by keyword",
+              "title": "Keyword"
+            },
+            "description": "Filter by keyword"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "description": "Max results",
+              "default": 50,
+              "title": "Limit"
+            },
+            "description": "Max results"
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Pagination offset",
+              "default": 0,
+              "title": "Offset"
+            },
+            "description": "Pagination offset"
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MarketplaceListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/marketplace/plugins/{name}": {
+      "get": {
+        "tags": [
+          "marketplace"
+        ],
+        "summary": "Get Marketplace Plugin",
+        "description": "Get a single plugin manifest by name.\n\nReturns 404 if the plugin is not found in the marketplace.",
+        "operationId": "get_marketplace_plugin_api_v1_marketplace_plugins__name__get",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MarketplacePluginDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AddMessageRequest": {
+        "properties": {
+          "role": {
+            "type": "string",
+            "enum": [
+              "user",
+              "assistant",
+              "tool"
+            ],
+            "title": "Role"
+          },
+          "content": {
+            "type": "string",
+            "title": "Content"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "tool_calls": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tool Calls"
+          },
+          "tool_results": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tool Results"
+          }
+        },
+        "type": "object",
+        "required": [
+          "role",
+          "content"
+        ],
+        "title": "AddMessageRequest"
+      },
+      "CreateSessionRequest": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Title"
+          },
+          "model": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Model"
+          }
+        },
+        "type": "object",
+        "required": [
+          "title",
+          "model"
+        ],
+        "title": "CreateSessionRequest"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "HookDetail": {
+        "properties": {
+          "hook_id": {
+            "type": "string",
+            "title": "Hook Id"
+          },
+          "event": {
+            "type": "string",
+            "title": "Event"
+          },
+          "transport": {
+            "type": "string",
+            "title": "Transport"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "timeout_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timeout Ms"
+          },
+          "priority": {
+            "type": "integer",
+            "title": "Priority",
+            "default": 100
+          },
+          "matcher": {
+            "type": "string",
+            "title": "Matcher",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "hook_id",
+          "event",
+          "transport",
+          "enabled"
+        ],
+        "title": "HookDetail",
+        "description": "Public-facing hook info exposed via the API.\n\nDeliberately excludes the ``callable`` reference (not JSON-\nserialisable) and internal fields like ``script_path`` / ``url``\n/ ``headers`` / ``model`` / ``prompt`` (those are visible in\n``transport_specific``)."
+      },
+      "HookListResponse": {
+        "properties": {
+          "hooks": {
+            "items": {
+              "$ref": "#/components/schemas/HookDetail"
+            },
+            "type": "array",
+            "title": "Hooks"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "hooks",
+          "total"
+        ],
+        "title": "HookListResponse",
+        "description": "``GET /api/v1/hooks`` response."
+      },
+      "HookStatusResponse": {
+        "properties": {
+          "hook_id": {
+            "type": "string",
+            "title": "Hook Id"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          }
+        },
+        "type": "object",
+        "required": [
+          "hook_id",
+          "enabled"
+        ],
+        "title": "HookStatusResponse",
+        "description": "``POST /api/v1/hooks/{id}/enable`` or ``/disable`` response."
+      },
+      "LongPollAnswer": {
+        "properties": {
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id",
+            "description": "Optional session scope (informational — broker is process-global)."
+          },
+          "question_id": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Question Id",
+            "description": "The pending question_id returned by /poll."
+          },
+          "answer": {
+            "type": "string",
+            "minLength": 0,
+            "title": "Answer",
+            "description": "The user's answer. Empty string is allowed (treated as a real answer)."
+          }
+        },
+        "type": "object",
+        "required": [
+          "question_id",
+          "answer"
+        ],
+        "title": "LongPollAnswer",
+        "description": "Body schema for ``POST /api/v1/elicitation/answer``.\n\n``session_id`` is optional — the broker keys questions by\n``question_id`` (process-global UUID hex), so session scoping is\ninformational only. It's accepted for API symmetry with the\nlong-poll query parameter."
+      },
+      "LongPollQuestion": {
+        "properties": {
+          "question_id": {
+            "type": "string",
+            "title": "Question Id"
+          },
+          "question": {
+            "type": "string",
+            "title": "Question"
+          },
+          "options": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Options"
+          },
+          "default_answer": {
+            "type": "string",
+            "title": "Default Answer"
+          },
+          "created_at": {
+            "type": "number",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "question_id",
+          "question",
+          "options",
+          "default_answer",
+          "created_at"
+        ],
+        "title": "LongPollQuestion",
+        "description": "Response schema for ``GET /api/v1/elicitation/poll``."
+      },
+      "MarketplaceListResponse": {
+        "properties": {
+          "plugins": {
+            "items": {
+              "$ref": "#/components/schemas/MarketplacePluginDetail"
+            },
+            "type": "array",
+            "title": "Plugins"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "plugins",
+          "total"
+        ],
+        "title": "MarketplaceListResponse",
+        "description": "``GET /api/v1/marketplace/plugins`` response."
+      },
+      "MarketplacePluginDetail": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "version": {
+            "type": "string",
+            "title": "Version"
+          },
+          "author": {
+            "type": "string",
+            "title": "Author"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "min_harness_version": {
+            "type": "string",
+            "title": "Min Harness Version"
+          },
+          "permissions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Permissions"
+          },
+          "signature": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Signature"
+          },
+          "public_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Public Key"
+          },
+          "entry_point": {
+            "type": "string",
+            "title": "Entry Point"
+          },
+          "homepage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Homepage"
+          },
+          "repository": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repository"
+          },
+          "keywords": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Keywords"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "version",
+          "author",
+          "description",
+          "min_harness_version",
+          "permissions",
+          "signature",
+          "public_key",
+          "entry_point",
+          "homepage",
+          "repository",
+          "keywords"
+        ],
+        "title": "MarketplacePluginDetail",
+        "description": "Public-facing plugin manifest exposed via the marketplace API."
+      },
+      "PluginDetail": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "version": {
+            "type": "string",
+            "title": "Version"
+          },
+          "source_path": {
+            "type": "string",
+            "title": "Source Path"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "hooks": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Hooks"
+          },
+          "tools": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Tools"
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Scopes"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "version",
+          "source_path",
+          "enabled"
+        ],
+        "title": "PluginDetail",
+        "description": "Public-facing plugin info exposed via the API.\n\nMirrors :class:`~harness.plugins.PluginInfo` with the addition\nof ``enabled`` (derived from the registry's disabled set) and\nwithout internal fields."
+      },
+      "PluginListResponse": {
+        "properties": {
+          "plugins": {
+            "items": {
+              "$ref": "#/components/schemas/PluginDetail"
+            },
+            "type": "array",
+            "title": "Plugins"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "plugins",
+          "total"
+        ],
+        "title": "PluginListResponse",
+        "description": "``GET /api/v1/plugins`` response."
+      },
+      "PluginStatusResponse": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "enabled"
+        ],
+        "title": "PluginStatusResponse",
+        "description": "``POST /api/v1/plugins/{name}/enable`` or ``/disable`` response."
+      },
+      "Session": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "message_count": {
+            "type": "integer",
+            "title": "Message Count",
+            "default": 0
+          },
+          "total_tokens": {
+            "type": "integer",
+            "title": "Total Tokens",
+            "default": 0
+          },
+          "total_cost": {
+            "type": "number",
+            "title": "Total Cost",
+            "default": 0.0
+          }
+        },
+        "type": "object",
+        "required": [
+          "title",
+          "model"
+        ],
+        "title": "Session",
+        "description": "A chat session — one conversation thread with one model."
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "_CapabilitiesResponse": {
+        "properties": {
+          "server_version": {
+            "type": "string",
+            "title": "Server Version"
+          },
+          "auth_required": {
+            "type": "boolean",
+            "title": "Auth Required"
+          },
+          "scopes_available": {
+            "items": {
+              "$ref": "#/components/schemas/_ScopeDescriptor"
+            },
+            "type": "array",
+            "title": "Scopes Available"
+          },
+          "endpoints": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Endpoints"
+          }
+        },
+        "type": "object",
+        "required": [
+          "server_version",
+          "auth_required",
+          "scopes_available",
+          "endpoints"
+        ],
+        "title": "_CapabilitiesResponse",
+        "description": "JSON shape of the capabilities response."
+      },
+      "_EnqueueRequest": {
+        "properties": {
+          "prompt": {
+            "type": "string",
+            "maxLength": 8000,
+            "minLength": 1,
+            "title": "Prompt"
+          },
+          "agent": {
+            "type": "string",
+            "title": "Agent",
+            "description": "Sub-agent name (built-in or project override). Default: 'explore' (read-only, safe default).",
+            "default": "explore"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model",
+            "description": "Override the agent's default model. Must be a catalog id. Default: agent's spec.model."
+          },
+          "pr_mode": {
+            "type": "string",
+            "title": "Pr Mode",
+            "description": "Phase 2.2: PR mode. One of 'off' (local ff-merge), 'draft' (open a draft PR), 'ready' (open a ready PR). Requires agents.pr scope when not 'off'.",
+            "default": "off"
+          },
+          "pr_target": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pr Target",
+            "description": "Phase 2.2: target branch for the PR. Default: settings.pr_default_target_branch."
+          },
+          "background": {
+            "type": "boolean",
+            "title": "Background",
+            "description": "Enqueue and return a job_id (default true). If false, the route runs the agent synchronously and returns the result inline.",
+            "default": true
+          },
+          "split_into": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 64.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Split Into",
+            "description": "Phase 2.4: split the job's diff into N stacked PRs. Each slice's PR targets the previous slice's branch. Requires ``pr_mode`` != 'off' (stacks need gh). Default: null (no split, single-PR path)."
+          },
+          "split_strategy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Split Strategy",
+            "description": "Phase 2.4: split strategy override. One of 'auto', 'files', 'directory', 'size'. Default: settings.pr_split_strategy = 'auto'."
+          },
+          "stack_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stack Id",
+            "description": "Phase 2.4: stack identifier. If omitted, the queue generates a new one. Use to re-enqueue an existing stack with the same id (rare; usually managed by the orchestrator)."
+          },
+          "stack_repos": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stack Repos",
+            "description": "Phase 2.5: one absolute repo path per slice, for cross-repo stacks. ``len(stack_repos)`` MUST equal ``split_into`` when both are set. Default: null (single-repo stack — all slices live in the worktree repo, Phase 2.4 behaviour)."
+          }
+        },
+        "type": "object",
+        "required": [
+          "prompt"
+        ],
+        "title": "_EnqueueRequest",
+        "description": "``POST /api/v1/agents/jobs`` body."
+      },
+      "_EnqueueResponse": {
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "title": "Job Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "worktree_id": {
+            "type": "string",
+            "title": "Worktree Id"
+          },
+          "prompt": {
+            "type": "string",
+            "title": "Prompt"
+          },
+          "pr_mode": {
+            "type": "string",
+            "title": "Pr Mode"
+          },
+          "pr_target": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pr Target"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model"
+          }
+        },
+        "type": "object",
+        "required": [
+          "job_id",
+          "status",
+          "worktree_id",
+          "prompt",
+          "pr_mode",
+          "model"
+        ],
+        "title": "_EnqueueResponse",
+        "description": "``POST /api/v1/agents/jobs`` response."
+      },
+      "_JobRecordSchema": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "worktree_id": {
+            "type": "string",
+            "title": "Worktree Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "started_at": {
+            "type": "string",
+            "title": "Started At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "cost": {
+            "type": "number",
+            "title": "Cost"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model"
+          },
+          "prompt": {
+            "type": "string",
+            "title": "Prompt"
+          },
+          "repo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repo"
+          },
+          "pr_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pr Url"
+          },
+          "pr_number": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pr Number"
+          },
+          "target_branch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Branch"
+          },
+          "pr_mode": {
+            "type": "string",
+            "title": "Pr Mode",
+            "default": "off"
+          },
+          "pr_stack_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pr Stack Id"
+          },
+          "stack_position": {
+            "type": "integer",
+            "title": "Stack Position",
+            "default": 0
+          },
+          "stack_size": {
+            "type": "integer",
+            "title": "Stack Size",
+            "default": 1
+          },
+          "depends_on_pr_number": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Depends On Pr Number"
+          },
+          "stack_repos": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stack Repos"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "worktree_id",
+          "status",
+          "started_at",
+          "finished_at",
+          "cost",
+          "error",
+          "model",
+          "prompt"
+        ],
+        "title": "_JobRecordSchema",
+        "description": "JSON shape of a :class:`harness.agents.jobs.JobRecord`."
+      },
+      "_MemoryHit": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "layer": {
+            "type": "string",
+            "title": "Layer"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Tags"
+          },
+          "agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "layer",
+          "source",
+          "text",
+          "tags"
+        ],
+        "title": "_MemoryHit",
+        "description": "One search result."
+      },
+      "_QueueHealth": {
+        "properties": {
+          "queue_locks": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Queue Locks"
+          },
+          "job_store_path": {
+            "type": "string",
+            "title": "Job Store Path"
+          },
+          "recent_job_count": {
+            "type": "integer",
+            "title": "Recent Job Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "queue_locks",
+          "job_store_path",
+          "recent_job_count"
+        ],
+        "title": "_QueueHealth",
+        "description": "JSON shape of the merge-queue health endpoint."
+      },
+      "_ScopeDescriptor": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "description"
+        ],
+        "title": "_ScopeDescriptor",
+        "description": "One row in the ``scopes_available`` array."
+      },
+      "_SearchResponse": {
+        "properties": {
+          "query": {
+            "type": "string",
+            "title": "Query"
+          },
+          "k": {
+            "type": "integer",
+            "title": "K"
+          },
+          "hits": {
+            "items": {
+              "$ref": "#/components/schemas/_MemoryHit"
+            },
+            "type": "array",
+            "title": "Hits"
+          }
+        },
+        "type": "object",
+        "required": [
+          "query",
+          "k",
+          "hits"
+        ],
+        "title": "_SearchResponse",
+        "description": "``GET /api/v1/memory/search`` response."
+      },
+      "_StackSchema": {
+        "properties": {
+          "stack_id": {
+            "type": "string",
+            "title": "Stack Id"
+          },
+          "parent": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/_JobRecordSchema"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "children": {
+            "items": {
+              "$ref": "#/components/schemas/_JobRecordSchema"
+            },
+            "type": "array",
+            "title": "Children",
+            "default": []
+          }
+        },
+        "type": "object",
+        "required": [
+          "stack_id"
+        ],
+        "title": "_StackSchema",
+        "description": "JSON shape of ``GET /stacks/{stack_id}`` — a parent + children."
+      },
+      "_StatsResponse": {
+        "properties": {
+          "agent_id": {
+            "type": "string",
+            "title": "Agent Id"
+          },
+          "layers": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Layers"
+          }
+        },
+        "type": "object",
+        "required": [
+          "agent_id",
+          "layers"
+        ],
+        "title": "_StatsResponse",
+        "description": "``GET /api/v1/memory/stats`` response."
+      },
+      "_WebhookAck": {
+        "properties": {
+          "delivery_id": {
+            "type": "string",
+            "title": "Delivery Id"
+          },
+          "event_type": {
+            "type": "string",
+            "title": "Event Type"
+          },
+          "action": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action"
+          },
+          "processed": {
+            "type": "boolean",
+            "title": "Processed",
+            "default": true
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "delivery_id",
+          "event_type"
+        ],
+        "title": "_WebhookAck",
+        "description": "Response shape for a successfully accepted webhook.\n\nAlways returns 200 OK. ``processed`` is True when the\nhandler did meaningful work (e.g. marked a job merged);\nFalse for redeliveries, unknown event types, and\n\"we saw this but there's nothing to do\" cases."
+      },
+      "_WriteNoteRequest": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "maxLength": 8000,
+            "minLength": 1,
+            "title": "Text"
+          },
+          "layer": {
+            "type": "string",
+            "title": "Layer",
+            "description": "One of L1/L2/L2.5/L3/L4. Default L2 (semantic).",
+            "default": "L2"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Tags"
+          }
+        },
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "title": "_WriteNoteRequest",
+        "description": "``POST /api/v1/memory/notes`` body."
+      },
+      "_WriteNoteResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "layer": {
+            "type": "string",
+            "title": "Layer"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Tags"
+          },
+          "agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "layer",
+          "source",
+          "tags"
+        ],
+        "title": "_WriteNoteResponse",
+        "description": "``POST /api/v1/memory/notes`` response."
+      }
+    }
+  }
+}

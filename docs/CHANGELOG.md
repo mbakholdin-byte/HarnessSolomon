@@ -1,5 +1,25 @@
 # Changelog — Solomon Harness
 
+## [1.36.0] — 2026-06-21
+
+### Added
+- **Playwright E2E for Web UI** (`web/e2e/`): 13 tests across 3 spec files — home smoke (page load + sidebar visibility + root redirect), navigation (7 routes + collapse/expand), settings page (version table + categories)
+- **`web/playwright.config.ts`**: chromium, headless, 60s timeout, trace/screenshot/video on failure, BASE_URL via `E2E_BASE_URL` env var
+- **`web/e2e/README.md`**: setup, run instructions, conventions, debugging
+- **`harness/server/generate_openapi.py`**: static OpenAPI spec generator for docs-site
+- **`harness/server/openapi.json`** (3771 lines): OpenAPI 3.1.0 spec covering all v1 endpoints
+
+### Changed
+- `web/package.json`: +`@playwright/test ^1.61.0`, +scripts `test:e2e`, `test:e2e:headed`
+- `.gitignore`: added `web/test-results/`, `web/playwright-report/`, `web/blob-report/`, `web/playwright/.cache/`
+
+### Technical
+- E2E tests use `test.skip` on dev-server unreachable (graceful CI degradation)
+- Role-based selectors (`getByRole`, `getByText`) — survive styling refactors
+- No backend mutation: read-only smoke/navigation tests
+
+---
+
 ## [1.34.0] — 2026-06-21
 
 ### Added

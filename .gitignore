@@ -48,6 +48,12 @@ harness/web/dist/
 harness/.venv/
 .harness/working/
 
+# Playwright (Phase 7.2)
+web/test-results/
+web/playwright-report/
+web/blob-report/
+web/playwright/.cache/
+
 # Secrets
 .env
 .env.*
