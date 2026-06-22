@@ -1,13 +1,15 @@
 name: Deploy Docs
 
 on:
+  # Allow manual trigger from Actions UI
+  workflow_dispatch:
   push:
-    branches: [main]
+    branches: [master, main]
     paths:
       - 'docs-site/**'
       - '.github/workflows/docs.yml'
   pull_request:
-    branches: [main]  # Need branch to enable PR previews
+    branches: [master, main]  # Need branch to enable PR previews
     paths:
       - 'docs-site/**'
       - '.github/workflows/docs.yml'
