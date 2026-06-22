@@ -1,0 +1,76 @@
+---
+id: disable-plugin-api-v-1-plugins-name-disable-post
+title: "Disable Plugin"
+description: "Disable a plugin: unload + mark disabled."
+sidebar_label: "Disable Plugin"
+hide_title: true
+hide_table_of_contents: true
+api: eJztVtty2zYQ/ZUdvNR2aOoSJ1PzzROncWaSWGM5yYPtESFyJSEBAQYLylE1nOlH9Av7JZ0FSV3susn0uU8SsQe7i7OLs1gLL+ckkhtR6mquDB3LvFBGRA++7yKRI2VOlV5ZIxJxrkhONYKEBphAZbSVOTyDQrqvkDf2PL41t+YKC7tEAr/AFv4LwcLarwTS5OCt1QQzZ4uAcDhX5N2KbbeGvREoD5I2ToEsr2TSGOthyluOOTjmUBmv9K1JUzQMTVNQBJnU21R85QzBsN8HNdvJCO4lQeuEk1IExt7vnqPbetI/ebA1YD1klXNovF61fmIRCVuik8zZ21wkovU2afZNZKkmy0H7RZOJkQVOJhuQJc+FkE4W6NFxmdaCMSJpfiKhuBal9AsRCYffKuUwF4l3FUaCsgUWUiRr4Vcl7yHvlJmLSHjlNS98YCd1HW28ysovrFO/h4w79wuUObq9ADOpaS+CNKvLWchvPxb7bldMpbWo77bRz/aC1WxySKU1hMQ+h/0+/+z33bjKMiSaVRquWrCIRGaNR+NDJmWpVRZ89r4Q71nv5Fk6LohXTYTm1D/iJxJNL+U70Km1GqXZwb5uMXUddSA7/YKZ3yPupitc53KHj1Fog7GXvqKds+2fP01Hl+Nr6MlS9ZaDXts6vTW7rXubprcO0rTXdlKaQkdsLOqaMzwZDh9z+0lqlQfm4LVz1v13YnP0Umn+pzwW9BigbbZn/Yn+UcbjHJ2o77YMS+fkaqcI72zWdlMkCpr/W23fI5Gch/I2kKehgQy4ZmvNd6KsAiGd+W1YqCOR+e87bjbV73CvmMvv/ocdwtw06be4nR7Zlqip0NNUnDcl+KdgHeTi+nr0yGHTHwX6hWXF2oiQX4hEPNF2bZ8FwZjZXW7GVtvCGriQziDRo3a+LNEck61chiDnaLzKgBaoNfz1x5/wGafw/tMIDkYLSQj9Q3gGVE2PAxJoRR6LzjiM+8+G8YAhb5S/qKYwuoLQM43+bnHD4CazJR7PpccczkZvO+sgfslWOyV0SzlVWvlVZzuJB4dhhhwd8Y4lOlLWKDNPjo7gHc5ltoI0MHSUAhNG4MLIgKvfXsGvL05PID3H0mHTowmwTKdh2KTjyhD6BD5jHsHzAZxjBsP+8CUMnycvTpMXp/Dm/XUKjRRTDB/wHjKt0HiC8cXlx3fnUBG24ZcDzuAgk8YalUl9GMMYEXKbEduPt5nHRQ4z68IsK1THlFcFamWQ51eLFYkYxM9fxn3uOO6JQpqtgm5eA42EPazyeisj/78bfvLd0N5ZFoxeqaUKkla5oKnNZbwRslRcocH2tSYikbQDpruTd5FY8B1ObsR6PZWEH52ua17+VqFbieTmLhJL6VRAswJ3qW/G/JPFPLhqZesQnkq5UyfD2rSUuuIvEYmvuOpeMUHQ20cGx29MZ1mGpd/Z9Gj+8INho1M8FUVd/w0AzbQc
+sidebar_class_name: "post api-method"
+info_path: api/solomon-harness
+custom_edit_url: null
+---
+
+import MethodEndpoint from "@theme/ApiExplorer/MethodEndpoint";
+import ParamsDetails from "@theme/ParamsDetails";
+import RequestSchema from "@theme/RequestSchema";
+import StatusCodes from "@theme/StatusCodes";
+import OperationTabs from "@theme/OperationTabs";
+import TabItem from "@theme/TabItem";
+import Heading from "@theme/Heading";
+import Translate from "@docusaurus/Translate";
+
+<Heading
+  as={"h1"}
+  className={"openapi__heading"}
+  children={"Disable Plugin"}
+>
+</Heading>
+
+<MethodEndpoint
+  method={"post"}
+  path={"/api/v1/plugins/{name}/disable"}
+  context={"endpoint"}
+>
+  
+</MethodEndpoint>
+
+
+
+Disable a plugin: unload + mark disabled.
+
+Removes the plugin's hooks and tools from the registry and
+marks it as disabled so it cannot be re-loaded until
+``enable`` is called.
+
+Returns 200 if the plugin was loaded and is now disabled.
+Returns 404 if the plugin is not currently loaded.
+
+<Heading
+  id={"request"}
+  as={"h2"}
+  className={"openapi-tabs__heading"}
+>
+  <Translate id="theme.openapi.request.title">Request</Translate>
+</Heading>
+
+<ParamsDetails
+  {...require("./disable-plugin-api-v-1-plugins-name-disable-post.ParamsDetails.json")}
+>
+  
+</ParamsDetails>
+
+<RequestSchema
+  {...require("./disable-plugin-api-v-1-plugins-name-disable-post.RequestSchema.json")}
+>
+  
+</RequestSchema>
+
+<StatusCodes
+  {...require("./disable-plugin-api-v-1-plugins-name-disable-post.StatusCodes.json")}
+>
+  
+</StatusCodes>
+
+
+      

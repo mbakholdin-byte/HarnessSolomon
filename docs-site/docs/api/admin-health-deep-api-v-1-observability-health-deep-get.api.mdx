@@ -1,0 +1,73 @@
+---
+id: admin-health-deep-api-v-1-observability-health-deep-get
+title: "Admin Health Deep"
+description: "Return a JSON deep health report (8 subsystem probes)."
+sidebar_label: "Admin Health Deep"
+hide_title: true
+hide_table_of_contents: true
+api: eJztVs1u2zgQfpUBT0mqyD9pgka3IOkmWSSNYbvpIQksmhpbbCWSJSm3XkPAPsQ+4T7JYig5tpMU2L3vyQbn48zwm5lvtGKezx1LHpieOrQLPpWF9MtDnpVSsejN06eIZeiElcZLrVjChugrq4DD76O7T5AhGsiRFz4Hi0ZbD3sfwFVTt3QeSzBWT9Htx4/qUQ2xcuggKdHnSXoVLp3nKL6hjclPCjOrS/A5gpNqXqDXCnZyelQ5V1mBMYxzBIvOaOUQXM4NgnThquBKKyl4AWkbYxjyir2eZFL4vf00fVS68qbysJemK+e5r1wEC7ROahVRzl9R+InV2kcgKEMXtS+JwLs6Tfdjosug5cTKdcYSFuiaNFRM6DkTbuRk0ZvsvGAHMEfPIma45SV6tFSZFVO8RHJX+Vxb+UcIwCImifsceYaWRczi90pazFgy44XDiDmRY8lZsmJcLe9mwZNfGvLkvJVqzuro+URVRcHqp4h56Qs6ONsJVpNpTa4jn/1ul352G2FUCYHOzaoChi2YRUxo5VH5kIkxhRTBZ+erozurrTzbXPSUuGYR41kmCcqLgSVmvaTY3la4yXMdB86IbGjKCxfUg2dGwn0P7rbJ3gFcomd1XdcRe9/vv37NPS9kFnKFj9Zq+1+eYrYSJr+ey4L+SY+lew0otNix/ouKSeVxjpbVT3W0PuPW8iXbkHOjRVu/iJVuvsVx628DvUXn+BzZs7NfQwMZMCZrTV1oqkDI2nwdDuqICf/zraqucefE5U+qQPQKs2nmh8BNk36L2+rSTYmaCv2aioumBG8FW0OuxuPBK4dNf5A+aRrp9Xz6nCWsw43sLHqdnXHuNOPcoXEOQzrT2+yMdKFLreCKW4XOsZdaemdQHTpdWYHA56i8FOByLAr4+8+/4AtO4fZ+AHuDnDuE7j68I2U9DEhoBbY19uPuu37cI8il9FfVFAZDCF3TSNQG1w9uhDZ4OOceMzgbXK+tvfiErDtPXNvex71Gxg8O6EarllLNk4MDuME5F0tIA0kHKRBnDmyzKoa/ncOH49P3kF6gsdh0aQI02ilwlUE6qpRDn8AXzCI46sEFCuh3+yfQP0qOT5PjU7i8HafQyJ+L4RP+AFFIVN7B6Oru880FVA7b8IseZbD3vAf2YxghQqaFI/vhJvO4zGCmbVgbpVwz5WWJhVRIEt9iWcJ68dFJ3KWeM9r5kgcJaLX6lRq9LPRqoyX/78/n/dmOJulCxxRcBuWqbJDOZugeGDeSytB7+XXCItawFqhGQzqRa+fpzmo15Q4/26Ku6fh7hXbJkoeniC24lXxKo/lAQtquU1Leb7ikQgqBhmZ+wYsqCMtL3afV+KwPlx/HrK7/AZZUOdw=
+sidebar_class_name: "get api-method"
+info_path: api/solomon-harness
+custom_edit_url: null
+---
+
+import MethodEndpoint from "@theme/ApiExplorer/MethodEndpoint";
+import ParamsDetails from "@theme/ParamsDetails";
+import RequestSchema from "@theme/RequestSchema";
+import StatusCodes from "@theme/StatusCodes";
+import OperationTabs from "@theme/OperationTabs";
+import TabItem from "@theme/TabItem";
+import Heading from "@theme/Heading";
+import Translate from "@docusaurus/Translate";
+
+<Heading
+  as={"h1"}
+  className={"openapi__heading"}
+  children={"Admin Health Deep"}
+>
+</Heading>
+
+<MethodEndpoint
+  method={"get"}
+  path={"/api/v1/observability/health/deep"}
+  context={"endpoint"}
+>
+  
+</MethodEndpoint>
+
+
+
+Return a JSON deep health report (8 subsystem probes).
+
+Reuses :meth:`HealthChecker.deep` from the singleton observability
+handle. The response shape is the canonical ``HealthReport.to_dict()``
+output (``{status, version, project_root, checks, probes, ts}``).
+
+<Heading
+  id={"request"}
+  as={"h2"}
+  className={"openapi-tabs__heading"}
+>
+  <Translate id="theme.openapi.request.title">Request</Translate>
+</Heading>
+
+<ParamsDetails
+  {...require("./admin-health-deep-api-v-1-observability-health-deep-get.ParamsDetails.json")}
+>
+  
+</ParamsDetails>
+
+<RequestSchema
+  {...require("./admin-health-deep-api-v-1-observability-health-deep-get.RequestSchema.json")}
+>
+  
+</RequestSchema>
+
+<StatusCodes
+  {...require("./admin-health-deep-api-v-1-observability-health-deep-get.StatusCodes.json")}
+>
+  
+</StatusCodes>
+
+
+      

@@ -1,0 +1,75 @@
+---
+id: admin-audit-recent-api-v-1-observability-audit-recent-get
+title: "Admin Audit Recent"
+description: "Return the last N :class:`HookAuditSink` entries."
+sidebar_label: "Admin Audit Recent"
+hide_title: true
+hide_table_of_contents: true
+api: eJztVs1u20YQfpXBXho7NPXjOGgI9GDEiW0giQVbSQ62YY7IEbnxcpfZXapRDQJ9iD5hn6SYJWVJtlO0l7aHnkTt/OzM983P3gmPhRPJpTAzR3aBM6mkX+5hXkktoidPryORk8usrL00WiTinHxjNfiSQKHz8AGSTKFzSXpizO1hk0t/IfVtCqS9leTiK32lpyUBsgic1LcgHRyd/pDDQiKkKdZ17Dx6ioPKDaukKcyW4ZK36Pzh5PRKKzknV6OGEnWuyMbwuaQukJVTbTxkRs9l0VjK4Zk2VzpNS2Nu3U3nW5nip6ltKE13omBKOq+N1B5syMsBaqCq9ktQ0vkrbdGXZMGXqOFguA+///pbsMOZI50RmHmfmDJFIXXBYSAsUMkcQlJXGnXemTCg4I1R4ErTqBwcEaTp5XWacqw+3G2tsTsxs1GTRQb9NBeJCMZ9EpYy0v4Ga3mzGN1ssbatUZAXkajRYkWeLFN/JzRWJBKhZCVZKpnUrw3ZpYiEpa+NtJSLZI7KUSRcVlKFIrkTflmzmdSeCrIiEpXUsmoqkYwelsiHppqRZWi6OHqE+oIAb3qwY3iNdU05oIc0deS91IWLO74epLWRfoXfbkL0DFtOc2yUh4PhMKDW/xfJwTASXnrFQb8Lubb/nTjb6J4HbHxprPwlUL3ioyTMA8h/Qgjq5dk8MNpT47yVugi++xPdKCXa6zUQh1uXtSyy5GqjHTn2OR4O+Wcbposmy8i5eaPgvFcWkciM9qR9iKSulcyCz8EXxzZ3jwsHrUUuMempchvnZvaFMi5EzHPJLlBNLNe+lxyTtw216wRWAcBhaKYwbuC8Y++wlvBpBGebhGxrHJMXbdu2kXgxHj9O9BN3bUgD3nAb/p0s642Y2a9HqfjrPt1tBWWyLelfIHPVee0147EN6n2hm6ynNhKVKzZg7v2tVd+Tc1iQuHf2fdUABkxZ2nKB1k0AZCU+DQdtJDL/7SliV3qvGctvzED0SGdd55cBmy78Xm+jgNcUdQx9H4qjjoKnLlupnEynk0cOu/qoyJeG5+5qhPpSJGKAtRwsRoOtnh+Ebh90IyQ08NxswnNhlKmMhhO0mpwTD6fQWU16z5nGZgRYkPYyA1eSUmHXfKYZvP80gWeTEh3BcAeeg2tme0ET3NJ5qlbCcTx8Po5HrHIs/Ukzg8k5hLLpFslabxzcZKamvQI95XA4OV1JR/FLlm7luJK9iEc7YaHv7rLFgqyTRktdJLu78I4KzJaQBpR2U2DQXD9C4fzta/jx4NULSI+ottSVaQLc3inwhkwvGu3IJ/CZ8gj2R3BEGYyH45cw3k8OXiUHr+D4/TSFbjS6GD7Qz5ApSdo7uDg5+/juCBpH/fWLEUfwLENttMxQ7cRwQQS5yRzL99aRx1UOc2PDhq7kCikvK1JSE6+UXlckYhTvv4yHXHS1cb7CMAP6Of54ID1k+m49Tf5/Rf1Tr6i+93nwDGqFMozGxobZ3HX1pcBaMs2jh09gXkocVZhPgdHrSJTGeTa6u5uho49WtS0fdy8oHuC5dDhTGyv7u0Xwb76TnsTllpYbL8MFqoZ1wgtigVZyWiK55P3TP1A4387oMMuo3rR6tC7Zy/1YPX4zFW37B2WQX70=
+sidebar_class_name: "get api-method"
+info_path: api/solomon-harness
+custom_edit_url: null
+---
+
+import MethodEndpoint from "@theme/ApiExplorer/MethodEndpoint";
+import ParamsDetails from "@theme/ParamsDetails";
+import RequestSchema from "@theme/RequestSchema";
+import StatusCodes from "@theme/StatusCodes";
+import OperationTabs from "@theme/OperationTabs";
+import TabItem from "@theme/TabItem";
+import Heading from "@theme/Heading";
+import Translate from "@docusaurus/Translate";
+
+<Heading
+  as={"h1"}
+  className={"openapi__heading"}
+  children={"Admin Audit Recent"}
+>
+</Heading>
+
+<MethodEndpoint
+  method={"get"}
+  path={"/api/v1/observability/audit/recent"}
+  context={"endpoint"}
+>
+  
+</MethodEndpoint>
+
+
+
+Return the last N :class:`HookAuditSink` entries.
+
+The audit sink is DI'd via ``app.state.audit_sink`` by the FastAPI
+lifespan handler. When the sink is not configured (no
+``hooks_audit_log=True``), the endpoint returns an empty list
+rather than 503 — the absence of audit logging is a valid state
+and the admin tool should see ``[]`` (not an error).
+
+<Heading
+  id={"request"}
+  as={"h2"}
+  className={"openapi-tabs__heading"}
+>
+  <Translate id="theme.openapi.request.title">Request</Translate>
+</Heading>
+
+<ParamsDetails
+  {...require("./admin-audit-recent-api-v-1-observability-audit-recent-get.ParamsDetails.json")}
+>
+  
+</ParamsDetails>
+
+<RequestSchema
+  {...require("./admin-audit-recent-api-v-1-observability-audit-recent-get.RequestSchema.json")}
+>
+  
+</RequestSchema>
+
+<StatusCodes
+  {...require("./admin-audit-recent-api-v-1-observability-audit-recent-get.StatusCodes.json")}
+>
+  
+</StatusCodes>
+
+
+      

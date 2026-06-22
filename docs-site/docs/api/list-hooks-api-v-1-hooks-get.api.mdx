@@ -1,0 +1,71 @@
+---
+id: list-hooks-api-v-1-hooks-get
+title: "List Hooks"
+description: "List all registered hooks (builtin + custom) with on/off state."
+sidebar_label: "List Hooks"
+hide_title: true
+hide_table_of_contents: true
+api: eJzFVttu2zgQ/ZUBn5JUvvaCrd6KJptkkTRG4rYPSWBR1NiahiJVknLjGgL2I/YL90sWpORb0rqLfdknXWY4HM6ZczhL5vjMsviW5Vo/2A7PClIs2vm6j1iGVhgqHWnFYnZB1gGXEgzOyDo0mEFYAAdpRdKRghcgKut0cQjfyOWgVU9Pp2Add9i9U3fqGl1llG2XWW0cZpAuAOeoXAQuR+U/S0PakFt0WcR0iYb7DM4zFjNJ1k3C6gkvaTIftB8zdCxiJTe8QIfGH23JFC+QxYxXLteGvocoLGLkD5Mjz9CwiBn8WpHBjMVTLi1GzIocC87iJeNqcTUNkdyi9JGsM6RmrI7Wf1QlJavvI+bISf/j3c5mtTcZtKVWFq2POez3/WO3sjeVEGjttJJw3TqziAmtHCoXMilLSSLE7H2xfs1yK8/S+CI5anYIBfEv5LCwP7ZPKPOvu8faHOJM6wc4z1gdsYDMPt+T4FBHzBmubKnNXu/x2snHVjyVuJ1JqrVErrbDtz5+AypQV27SHOoZOKQcztDsRWfchIBL6wOu2mwrgVWQzZLRysnTYcor6Vg86PfriBXciRzNvuNeti5baxmr64jxLCOPJpejLXDaDmyj6fQLCrfTordr9FbIbNd9U9H7XSyP0XGS7CmhR1UqSXSmXJCaBU4CqakGfCy1xQzmxD0l4d3oPLD3GCWlno0oF4CPQlYZ2uCRJIJL6fdOEjA4RYNKIBwo7eCPm6sPnTtl0RCXZL3TIXCVga+1UVzClFBmFiQ9+EhNhpOSuzxJoAdJUhmZJHfKvza0ta2h0BnK9r00uihdksCBy7VF4AZhTpZSiUDqTiXJulATW6KgKYkkOeyGzmoKzo3hiyc0CI3itONyb5eMg0dd/xo8y1bxnoDk5XWL/btQJcnpyRh6vKTefNALcUKlG/cuq2u/96vh8Lm4fOKSsiAdcGKMNv9dWbKmjX4uLVKLHeu/ENA1a+9/jsOFFq2cRqyws72EQ2v5DDeg7hEuXwwYe2vtL4WyapSrNZ+HH3XEhHvcCrPGdeX33tfy0f0Se1+bJv3Wbwv+DUQNQj8vRcvkH2227qXxePQsYNMfBbpc+2t0dV26nMVsp6vC/TjV25W40VIXWsEZNwqtfdabVyWqjtWVEQh8hsqRAJujlPD3n3/BZ0zh8tMIDkY5twj9Q3gBtko7wRPswjosVsZht/9i2B14l1NyZ1UKo+sgE7NmBNj4DUMYoUvszLgfIt6NzlfWQfeNt+rUopnzlCS5xcr2qjs4DFp2dORXzNFY0orULD46gguccbGAJBTkKAFfHwsmzCxw/ft7+O3121eQHGNpsOnIGJypMAlyltxUyqKL4TNmEbwcwDEKGPaHb2D4Mn79Nn79Fk4vxwm0EtaFD/gNhCRUzsLN2dXHi2OoLLbbzwc+gwPBlVYkuDzswg0iZFpYb+9sMu8WGUy1CTpc0KpS/rKUpNCPUK0vi9mg+/JNtx/uPm1dwQPd2zEpjHdnbQ/sILzcCMb/NAS2ve6J1islpyAFlQla1HTxLeMl+bMOVmOsJ1iurfO25TLlFj8aWdf+99cKzYLFt/cRm3ND/kryX3W0Ggu9ZD3gws9zQmDpyTLnsgqMfCqYfr5YE+v0ZMzq+h8Kd+Om
+sidebar_class_name: "get api-method"
+info_path: api/solomon-harness
+custom_edit_url: null
+---
+
+import MethodEndpoint from "@theme/ApiExplorer/MethodEndpoint";
+import ParamsDetails from "@theme/ParamsDetails";
+import RequestSchema from "@theme/RequestSchema";
+import StatusCodes from "@theme/StatusCodes";
+import OperationTabs from "@theme/OperationTabs";
+import TabItem from "@theme/TabItem";
+import Heading from "@theme/Heading";
+import Translate from "@docusaurus/Translate";
+
+<Heading
+  as={"h1"}
+  className={"openapi__heading"}
+  children={"List Hooks"}
+>
+</Heading>
+
+<MethodEndpoint
+  method={"get"}
+  path={"/api/v1/hooks"}
+  context={"endpoint"}
+>
+  
+</MethodEndpoint>
+
+
+
+List all registered hooks (builtin + custom) with on/off state.
+
+Returns hooks sorted by event, then by priority.
+
+<Heading
+  id={"request"}
+  as={"h2"}
+  className={"openapi-tabs__heading"}
+>
+  <Translate id="theme.openapi.request.title">Request</Translate>
+</Heading>
+
+<ParamsDetails
+  {...require("./list-hooks-api-v-1-hooks-get.ParamsDetails.json")}
+>
+  
+</ParamsDetails>
+
+<RequestSchema
+  {...require("./list-hooks-api-v-1-hooks-get.RequestSchema.json")}
+>
+  
+</RequestSchema>
+
+<StatusCodes
+  {...require("./list-hooks-api-v-1-hooks-get.StatusCodes.json")}
+>
+  
+</StatusCodes>
+
+
+      

@@ -1,0 +1,81 @@
+---
+id: elicitation-poll-api-v-1-elicitation-poll-get
+title: "Elicitation Poll"
+description: "Long-poll the broker for the next pending question."
+sidebar_label: "Elicitation Poll"
+hide_title: true
+hide_table_of_contents: true
+api: eJztV91u2zYUfpUD3ixJZcd23GLVMAxZkzYZ0tqt0/YiLixaOpbYUqRKUna8wMCu9gDDnrBPMhxK8g/cdMXQq6FXtnl+ePid7/z4jjmeWhbeMJQiFo47oVVLapUWWkr2LmAJ2tiIgs5ZyK60SlskApchTI3+gAZm2vifCm8dFKgSoVL4WKIlo/ZYjdWvmPG50KUJxwoAoAWXM5BrX8JCIiyfSkzg059/Qb9z0t5S5HtOAW+FdRaMSDMHSi+8mUFXGgXCwUGv0zlcuxi4DM1CWAR/G87RLCGKhHJo5lxObBRBWYDTEEVO5KhLR2e1PcBAQX3sr+l1OrAQLgPMC7eEqU6WMBccDBeWgry4vh6e38boMfOR/NJ4eqHh0x9/w1Nu3enwEhKNVv3ggEupF97vg9pp4w8hlsiVXLbhLTZehLIOedK8l0O/068iiqIEHRfy5zFTelKjNmlQG7MoAqsbN5SymEuJBmKuKANOqLQUNoMxa/IxZnDQ75wcBjBmNQjVUf8waBxxlcCYpdqBVkhSjz4cjAqMgUurqwfabcD0GtOfGjcLhDjTFv1zphjz0uIaKotGcCksWuAVJvDbaPAC0BhtGg/e8yITcUaUQm5Fzc5YClTOUooLbiyCy7gCruqItML2IQuYLtD4CrhMWLhdERMizoQXYjLvTvbOU3QsYAU3PEeHhsrpjimeIwuZRWupdAImqH4+lmiWLGAGP5bCYMLCGZcWA2bjDHPOwjvG1XIw8y7csvAunBEqZatgfaJKKdlqrzgH/guXUF8KIoEDoWba5LyWEPvqqhUWCqNjtLaVSj3l8rDNAuaEk3TFqI579e0voYfU6PDSZdqI371lg1GGPEHz7UBqnnS6c9mKRAZtoZVFSz57nQ597D53VMYU/ayU8KpWZgGLtXKonI+kKKSIvc/j95Zs7rbiLAxxyonqhqYQJyKhn7uhbwJ92XS5y4Twb6y+xoT0tY/dXygc5nbfbhU0B9wYvtzyM6htfdpnvJRuwpVdoPnS5WeVJpxWmquAxQa5w2TC3ZadKvOpz2tj96TSglPHVpuQ9PQ9xm4n/Tc7yG0hsnnsXrw7QWyxgCbYUEv5cuNjN+NNmqHKou8fUfTs/BqOeSGO593jrQZwTA0gitpstaIn9Hu9fQq94VIkXhvOqVv9d/5UzX0nsbsKUsc70q8oE5qCKWXt3f2suNIxb9iV2/RLXHiO1vIUNxS7X9WDAdckXVHpF2XFllp86Q+ITO52y82aHmsWEZa3/04hwqYKv9bbIsUmRVWG7ofirErB5y5rVGj+7zms+JGjyzTNlmZkuIyF7D5e+YY409ugjLTUuVZwwY1Ca/fIOyhQtawuTYzAU1ROxGAzlFVTfotTeP5mCAfDjFuEziE8AFtOW14T7NI6zBthr9150Gt3SeWZcBflFIavwJOlGpEbvZ53E+sCW2lVz8PLRtptPyKpnlpataZCCrdsZP1299Bvh0dHZDFHQ/NEqDQ8OoIrTHm8hMhjcxQBQWWbjefV0yfw48PHfYjOsDBYkTMEZ0qM/DYSjUpl0YXwFpMATrpwhjH0Or1H0DsJHz4OHz6GZ8+vI6hGjW3DC1ysl4TRxeD11RnQ9hE1qTmK4CDmSisR0wyDESIkOrYkb20ib+fJehvORYMULTpSKKT5WuuykHXbJ4/aHaJaoa3Lua/8ei6eb5gAw4oJO3m+23SQ7yv595X8f7yS102WOvxxIbnwM6g0fghW7fOG8UJQZXVZsL2zU3+t/8Nm2jpSvLubcouvjVyt6Lhaxmk6NtCuN817q+2b7Nife9MHXO78XZhzWZKWX2Hn3AgKkIU3NKbrDZkir8xOY+L2ltXeVkFe1tPn2fk1W63+Aa7ucVw=
+sidebar_class_name: "get api-method"
+info_path: api/solomon-harness
+custom_edit_url: null
+---
+
+import MethodEndpoint from "@theme/ApiExplorer/MethodEndpoint";
+import ParamsDetails from "@theme/ParamsDetails";
+import RequestSchema from "@theme/RequestSchema";
+import StatusCodes from "@theme/StatusCodes";
+import OperationTabs from "@theme/OperationTabs";
+import TabItem from "@theme/TabItem";
+import Heading from "@theme/Heading";
+import Translate from "@docusaurus/Translate";
+
+<Heading
+  as={"h1"}
+  className={"openapi__heading"}
+  children={"Elicitation Poll"}
+>
+</Heading>
+
+<MethodEndpoint
+  method={"get"}
+  path={"/api/v1/elicitation/poll"}
+  context={"endpoint"}
+>
+  
+</MethodEndpoint>
+
+
+
+Long-poll the broker for the next pending question.
+
+Behaviour:
+    - If long-poll is disabled → 403.
+    - If a pending question exists right now → return it (200).
+    - Otherwise poll every ``interval_s`` up to ``timeout_s``.
+      On timeout → 200 with empty body via raising HTTPException(200)?
+      No — FastAPI doesn't allow 200 + empty via raise cleanly. We
+      instead return a 404 with ``detail="no_pending_question"`` so
+      the caller can distinguish "disabled" (403), "timeout" (404),
+      and "got one" (200). (Spec also allows empty body on timeout;
+      we chose 404 because FastAPI serialises a clean JSON error
+      body which is easier for clients to parse than an empty one.)
+
+<Heading
+  id={"request"}
+  as={"h2"}
+  className={"openapi-tabs__heading"}
+>
+  <Translate id="theme.openapi.request.title">Request</Translate>
+</Heading>
+
+<ParamsDetails
+  {...require("./elicitation-poll-api-v-1-elicitation-poll-get.ParamsDetails.json")}
+>
+  
+</ParamsDetails>
+
+<RequestSchema
+  {...require("./elicitation-poll-api-v-1-elicitation-poll-get.RequestSchema.json")}
+>
+  
+</RequestSchema>
+
+<StatusCodes
+  {...require("./elicitation-poll-api-v-1-elicitation-poll-get.StatusCodes.json")}
+>
+  
+</StatusCodes>
+
+
+      

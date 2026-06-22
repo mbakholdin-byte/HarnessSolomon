@@ -1,0 +1,71 @@
+---
+id: add-message-api-sessions-session-id-messages-post
+title: "Add Message"
+description: "Add a message to a session."
+sidebar_label: "Add Message"
+hide_title: true
+hide_table_of_contents: true
+api: eJzFVs1y2zYQfpWdPfmHli0lzjS8uXEau2PHGslJDopHgsi1hBQEGAC0rWg404foE/ZJOguSpmjHbtNDq4skYLH7YffbD7tGLxYO4wk6ck4a7fAqwpRcYmXupdEY41GagoCMnBMLAm9AQG3c+6w/6yPlDHhTJEty4JfUbMJWkafCUzoVHnab89PEFNrv7m6D0Clk0lpjHTv9dXzx/qyHEZqcrODQpynGKNJ02hwVuZw2MKfNr6lMp42Fm+bGeYwwF1Zk5Mny1daoRUYYY3sCI5R8tVz4JUZo6WshLaUYe1tQhC5ZUiYwXqNf5eGkt1IvMEIvveKFcX3H0xTLMrqPIAq/NFZ+C/ibIEsSKdlOmGuhXCeO0KuL64C1G5F91yu6UArLqxbDUSdYyVscgZz/2aQr9vrwXonRnrQPAfNcySQc3f/iuM7rDTi55Sp4SS64MRzvcTJIFxlTp3DhesI56bzQXABvjMINrCN2UXYQPJXaN7VJGWFmUlL/Nj3n4XBZYZkmQinXdSU9ZdVSmkpOhFDDjXtXKau9m/kXSgKmekFYK1bPxr80RsGbELYBYckVyv8PMEZ14LJ86GqTlZOq0m2VNsmWpudVk40qjmFZsjdLLjfaVUQZHPT5qysf4yJJyLnrIsAIxvgDVHwI99ksNWyr4wBLVw0bjnIJdds6gLaBobFwMDT393o5GDy+ykehZBqAwlsWrh+5R7elUvJCBmrfl79roEzS2f0HHSC1pwVZLK8e8qPNzJlJarmIMHOL5/qwzkpLtqdNQzLgkndLFr28qDq83j4NC9z9/u57Je10/p3/W5Zybir4td0GT9sSVRV6OhXHVQm+F6wxObm8HD5yWPEjI780/EDdvzh+iTHui1zuN2/U/rp9ccr95o3CCJkdo1aq396JLK8ktpLaRlHvydWmvJbEjRpsqNtkHTq/IzW8FopybTZrMjbKZEbDibCaHIPqUv0iJ73nTGETArEg7WUCbklKwZ+//wGfaA7nH4ewNVwKR3CwDbvgivlesAS3cp6yZnPQO9gd9Pps8k76k2IOwxEErlbPfGs3CG4Sk9PeggcHOBqeNrv93iveNXNH9kbMpZJ+1ey97PW3wyiys8Mnbshy0qVexDs7cEYLkaxgFiqzMwMulANLvrAaRr+8gZ8OX7+E2THllqreiIHVZBYGlNm40I58DJ8ojeBFH44pgcHB4BUMXsSHr+PD1/Du/HIG1RvvevCebiFRkrR3MD65+HB2DIWjOvxNnxFsJUIbLROhtnswJoLUJI7391rkvSyFa2PDPJXJJlNeZqSkJh6TaluMsd978ap3wExnLmYiCE89kGwI4MMSrzfo9R+PeHW/cbPv50rIIEeFDXpYNdIERS4xaqfSCOPO+HbfTVcRLrkF4wmu13Ph6INVZcnLXwuyK4wnVxHeCCvFnIk/WWMqHf9ux7An07I1qlVnG55C3YiLZmm5Eargfxjhb7TqTpyhC+tRkFFUBvWwsxe0s3Xw6Clhma9OHCUJ5f5Z26sNeRpejC8xwnk9EbJ8YIxW3LKmitsKrAl3r2Y9XlujEnpRMGlirHzy5y9UVCr/
+sidebar_class_name: "post api-method"
+info_path: api/solomon-harness
+custom_edit_url: null
+---
+
+import MethodEndpoint from "@theme/ApiExplorer/MethodEndpoint";
+import ParamsDetails from "@theme/ParamsDetails";
+import RequestSchema from "@theme/RequestSchema";
+import StatusCodes from "@theme/StatusCodes";
+import OperationTabs from "@theme/OperationTabs";
+import TabItem from "@theme/TabItem";
+import Heading from "@theme/Heading";
+import Translate from "@docusaurus/Translate";
+
+<Heading
+  as={"h1"}
+  className={"openapi__heading"}
+  children={"Add Message"}
+>
+</Heading>
+
+<MethodEndpoint
+  method={"post"}
+  path={"/api/sessions/{session_id}/messages"}
+  context={"endpoint"}
+>
+  
+</MethodEndpoint>
+
+
+
+Add a message to a session.
+
+Also touches the session (updated_at + message_count++) and mirrors to JSONL.
+
+<Heading
+  id={"request"}
+  as={"h2"}
+  className={"openapi-tabs__heading"}
+>
+  <Translate id="theme.openapi.request.title">Request</Translate>
+</Heading>
+
+<ParamsDetails
+  {...require("./add-message-api-sessions-session-id-messages-post.ParamsDetails.json")}
+>
+  
+</ParamsDetails>
+
+<RequestSchema
+  {...require("./add-message-api-sessions-session-id-messages-post.RequestSchema.json")}
+>
+  
+</RequestSchema>
+
+<StatusCodes
+  {...require("./add-message-api-sessions-session-id-messages-post.StatusCodes.json")}
+>
+  
+</StatusCodes>
+
+
+      

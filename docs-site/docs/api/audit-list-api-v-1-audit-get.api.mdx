@@ -1,0 +1,74 @@
+---
+id: audit-list-api-v-1-audit-get
+title: "Audit List"
+description: "List audit entries with date-range filter, pagination, and format."
+sidebar_label: "Audit List"
+hide_title: true
+hide_table_of_contents: true
+api: eJztV1FP3DgQ/isjv7DQbEi2LSo59QGVtlDRgthtKx1FxJvMZt1z7NR2tmxRpD7dD7i7X9hfcrKT7AYWaAvVPZ2EtKxnPPPN5/H42wtiaKZJdEJomTJDvObz1CMp6kSxwjApSEQOmDbgbIDCKIYaPjMzhZQa7CsqMoQJ4waVBwXNmKB2nwdUpDCRKqfG/yA+iGM0pRI6+iAANiCOa9PTj1qKOIZvf/4FcUyLgrPE7d+sDRFwm11OAGcoDKQsMfpKiETPFhEMnpvNRM9+g2RKlUbztDST/hMb6NnwHaQyKXMUpo7wPC/MHBTqkhu3fxAEdWlxfHIax9B7NTx8sw5SwRRpikr3peBzG4l4RBaoHNT9lEQ1d2cW7Bkt2NksPKtXMrTMFlTRHA0qy/cFETRHEpGJkjnxCLMkfypRzYlHFH4qmcKURBPKNXpEJ1PMKYkuCBXzw4nbb+aF3a+NYiIjlbdYESXnpFo5wX2R8FKzGQKXn1HBWJYihd7+8BCebAXhugfoZz4MgsFWP9jqh9ujIIjc3+/EI4YZboO/sHCrXxnbIm+4MPI/ZqIsiu+jHQSjwcPo8Xb0eLvLxEjexsPPR+7wUPf0T3BxmYGrqI5RF1JobG5iBGv2Xq1B7+pVc12+lujZGvTaS7Tuwk1oyQ2JiPXqdkMNdIWHe2bsUMFZzu7ABBMGM1TEIzk9Z3mZkygMgsAjORPN16uYj2iGoNkXhF747evfzh2ayiEMgktEhDZWy8KBw7hCwvcDduqUk4nG+xXaVhZcA6QZyFCngV7QH1ON6aWaOhUd1miuK+nGSJ1iaGmmUrEvzrOtqZ6ev+5Ot1h3LiWrrEk17adtzEEQ2I/LhQzLJEGtJyWHtleJRxIpDArjkFxpVLu2wFlVVeWRR4PBauB3lLO0Zui5UlL9RFRSKPucGFbjTtFQxu1/zGCuVx24TC5Zf4C8tluq08pr16hSdN650wcyaaj0SK6z68ZL6/oataYZkkWwm10dGTCy1so2RFE6QlrzvluoPJKY804YOf6IiemEeWa5PDekWuJf+Cz76sRxU8Nv/DoNszyi+oRupmK3PoLrkrUue6PR0UrAuj9yNFNpZUH7/JspicgmLdjmLNxs9RYTE9llYii5zKWAPaoEar0yzA8LFH0tS5Ug0AyFYQnoKXIO377+A+9xDK/fHUHvaEo1QrAOD0CX477zBD3XBvPWOPCDBwM/tC4vmdkrx3B0DK5Dakmz9Bu4MIkssJ9RgynsHO231tDfslY51qhmdMw4M/PW9sgP153u29iwO2aoNJOCiSza2IADzGgyh9gRshGD5UeDcgoRjl88gyePtx9BvIuFwrojIzCqxNiJynhYCo0mgveYevAwhF1M3LsK7YsKL1+P4laz+fAGP0PCGQqjYbh3+PZgF0qNTfpZaBH0EiqkYAnl6z4MEa1S1NbeXyL3cydowUwRctYyZViOnAn0iUcaXxKR0H+45Qe2vwqpTU7ddW9G5I6T0lZVXz3hi+XA+F91X6+6m8voMhacMjerSuWGZX3NTggtmD2MsPuTZiq1sbaLC/tmvVW8quxy/drawZkyTce88zTdeDL3VNPXFfAHzpe/B2aUl9bFTe+7wLqTtL0ZlpPmdwR1b/15G12tVL4jth9Rfbekb+Xp3bPfosxuybuQi8vEp/aLYjYziU7sA98oLtvY9a6dJMGiu2tFj9goi3fr5fMRqap/ASfPYLo=
+sidebar_class_name: "get api-method"
+info_path: api/solomon-harness
+custom_edit_url: null
+---
+
+import MethodEndpoint from "@theme/ApiExplorer/MethodEndpoint";
+import ParamsDetails from "@theme/ParamsDetails";
+import RequestSchema from "@theme/RequestSchema";
+import StatusCodes from "@theme/StatusCodes";
+import OperationTabs from "@theme/OperationTabs";
+import TabItem from "@theme/TabItem";
+import Heading from "@theme/Heading";
+import Translate from "@docusaurus/Translate";
+
+<Heading
+  as={"h1"}
+  className={"openapi__heading"}
+  children={"Audit List"}
+>
+</Heading>
+
+<MethodEndpoint
+  method={"get"}
+  path={"/api/v1/audit"}
+  context={"endpoint"}
+>
+  
+</MethodEndpoint>
+
+
+
+List audit entries with date-range filter, pagination, and format.
+
+Returns:
+  * ``format=json`` → ``application/json``: list of event dicts
+  * ``format=csv`` → ``text/csv; charset=utf-8``: CSV document
+  * Empty result → 200 with ``[]`` (JSON) or headers-only CSV
+
+<Heading
+  id={"request"}
+  as={"h2"}
+  className={"openapi-tabs__heading"}
+>
+  <Translate id="theme.openapi.request.title">Request</Translate>
+</Heading>
+
+<ParamsDetails
+  {...require("./audit-list-api-v-1-audit-get.ParamsDetails.json")}
+>
+  
+</ParamsDetails>
+
+<RequestSchema
+  {...require("./audit-list-api-v-1-audit-get.RequestSchema.json")}
+>
+  
+</RequestSchema>
+
+<StatusCodes
+  {...require("./audit-list-api-v-1-audit-get.StatusCodes.json")}
+>
+  
+</StatusCodes>
+
+
+      

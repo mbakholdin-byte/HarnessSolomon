@@ -1,0 +1,73 @@
+---
+id: create-session-api-sessions-post
+title: "Create Session"
+description: "Create new session."
+sidebar_label: "Create Session"
+hide_title: true
+hide_table_of_contents: true
+api: eJzVVtty2zYQ/ZWdfYodmpbky9R8c2M39owdayQleZA9FkSuJKQkwACgZFXDmX5Ev7Bf0lmQ1MWXpnmsXiRhF7uLs2cPsEInphajIVqyVmpl8SHAhGxsZO6kVhjhB0PCEShaQO0U3qt7NW+HrbAFluLCSLeEiXyKwND3QhqyMBo1AcOFkY5GI7CxzgneLYSN7tWW3ZBIRiP4+8+/oHfZH4ClTCgnYwtzqVPBVeyF4KuQagqiqeJeSQsCssJ5nwCUdiCAw4UYoM7JeMN1ghHG/hCP9dZHkcvmt33MtXUYYC6MyMiRYTxWqERGGKEo3Ewb+YcPhQFKhmRGIiGDAdbnTTCaiNRSgDaeUSYwWqFQy7uJj+SWOUeyzkg1xTJYr6giTbF8CNBJl/LC+U6ykk2cgaz7VSdLjrpJ6ExBAcZaOVLOJ8zzVMZ+6+E3y61bbZWTGwbESbL8r074vLYAM/F0Q2rqZhh1Wq0AM6ma/+1NnQP/XQaY6YTSH8Rpvx3n1m8vy6DZr8ffKHY7wA5r7ybZFlwVM/tVH3sVUFiWHM+QzbWy1Wk7rTZ/7dK6X8QxWTspUujVzvgTeD4vWCSJZFeRdreQrprU1NvkgXqk6srhPJfNbwtdvT7Ecafzsu4vIpWJrwoujdHmZ4reJUFCTkjfPekosy8dUh3vWP8DpaVyNCWD5cOmqcIYscQNDDc6rgkeYGanr9FnTRCyVkw91SqXt109GDBga8ljmhdui+l47RfKAGP39Fr/1pxiLJ/cD0nJ2FTl135bvNy0qOrQ21BcVC14LVnjcjUYdF8ErPiRkZtpVre1gvF84aHI5eFazwNkHvQ2MnL5JLK8nv46x2Zsq3neNBalmuht175OdaYVXAmjyHL4XXre5aQOrC5MTCCmxEIOdkZp6gX+K43h9ksX3nVnwhK09uA92GJ84D3BLq2jrDF2wtb7Tthml4/SXRVj6PbA86vS9Y1fx4fh6+VgKhwlcN69bqzt8JStemzJzMVYpnxX1bbjsL3n77L9fd4xJ8OQSTWN9vfhhqYiXsLIo7k/AgbXgiFXGAW93z7ALydnxzC6oNxQxecIeNxHIFQCo36hLLkIvlISwFEbLiiGTqtzCp2j6OQsOjmDj7eDEVQ3iQ3hEy0gTiUpZ6F/dff55gIKS3X6eZsreBcLpZWMRboXQp8IEh1bth9sKg+zBCbagJsRZLJBysmMUqmI78XaFyNsh0enYYubzPzJhBeL+trbVajnXV5tJOf/+jyox41n/TBPhfRqVBgvh9UcDVHkEoOdl9GMBy0a4mo1FpY+m7Qsefl7QWaJ0fAhwLkwUox5VIYsgfVLgTXzd1o2+qLcgRcqdk8LLwzPdZs1tdpxHseUu3/1fdjSgu5df4ABjusHA080RmjEggVMLDBC/zhy/kj8ouC1FaZCTQuW2girmPz5BzRweeM=
+sidebar_class_name: "post api-method"
+info_path: api/solomon-harness
+custom_edit_url: null
+---
+
+import MethodEndpoint from "@theme/ApiExplorer/MethodEndpoint";
+import ParamsDetails from "@theme/ParamsDetails";
+import RequestSchema from "@theme/RequestSchema";
+import StatusCodes from "@theme/StatusCodes";
+import OperationTabs from "@theme/OperationTabs";
+import TabItem from "@theme/TabItem";
+import Heading from "@theme/Heading";
+import Translate from "@docusaurus/Translate";
+
+<Heading
+  as={"h1"}
+  className={"openapi__heading"}
+  children={"Create Session"}
+>
+</Heading>
+
+<MethodEndpoint
+  method={"post"}
+  path={"/api/sessions"}
+  context={"endpoint"}
+>
+  
+</MethodEndpoint>
+
+
+
+Create new session.
+
+v1.0.0 security fix: requires ``sessions.write`` scope (was:
+``sessions.read`` — REST semantics violation). Creating a session
+is a mutation, not a read.
+
+<Heading
+  id={"request"}
+  as={"h2"}
+  className={"openapi-tabs__heading"}
+>
+  <Translate id="theme.openapi.request.title">Request</Translate>
+</Heading>
+
+<ParamsDetails
+  {...require("./create-session-api-sessions-post.ParamsDetails.json")}
+>
+  
+</ParamsDetails>
+
+<RequestSchema
+  {...require("./create-session-api-sessions-post.RequestSchema.json")}
+>
+  
+</RequestSchema>
+
+<StatusCodes
+  {...require("./create-session-api-sessions-post.StatusCodes.json")}
+>
+  
+</StatusCodes>
+
+
+      

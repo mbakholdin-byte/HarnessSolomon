@@ -1,0 +1,73 @@
+---
+id: list-marketplace-plugins-api-v-1-marketplace-plugins-get
+title: "List Marketplace Plugins"
+description: "List available plugins in the marketplace."
+sidebar_label: "List Marketplace Plugins"
+hide_title: true
+hide_table_of_contents: true
+api: eJzdV81y2zYQfpUdnGKH1l/iTMNbJnbsTOxYYynJwfaIELmikIAAA4CKVQ9n+hB9wj5JBwBJUZaspGpPPUng/n3YXXzAPhBDU03CG5JR9Q1NzmmM5C4gCepYsdwwKUhILpg2QBeUcTrlCDkvUiY0MAFmjtAy7dyKWzEq8lwqo0E6e8ohir7h8odUSRTBjHGDiokUnsVU4xETGoVmhi3wVuhiqo0TZtTEc6ApZUIbEDTDAFqgAqAigcqrPrgVdhlFnGXMRBF0IYrkbKbRLnKaMkGtVYcEROao3OJ9QkLCmTaT1gYm1d4mNGeTRX+rKEVDApJTRTM0qGz6HohFSEJSISIBYTZx3wtUSxIQhd8LpjAh4YxyjQHR8RwzSsIHQsXyauZcmGVuXfgEkDJovoiCc1JuVOWdyyRMl7CKapjh1uRD9aX8uZENVKF36fsH2Ct8TBhMUZGAZPSeZUVGwkGvF5CMCb/qP0ZxSe9BoS640cTKZrTghoTHvdUOLhyWDfxtyxZyX+x/Bb0G23scctj0DzRhGsgtxFdeuAF5074FnBZmLhX73clr/HOkiQP1H/VNjfDNWrDSihTqXAqN2voc9Hr2Zx3+qIhj1HpWcLiulElAYikMCuOQ5DlnsfPZ/aqtzUMLZ67siTPMR6jOkP3LDGZ6U8Pn5fGuVnv4aOVlQBaoNPPBnlL9XKmUQZXmXco+NxvVe9rgpKVWuv6ZzKkSqPXkF7BdMgHnXh1aOHNUGdN2tZ6jxzWuP1Cl6LLldtiyLwOiWSqoKRTu2zGjxoEFV0w5iyffcLmvu6HzAB9waf2hMGo5ySXzffRUqk6tGgydWhmQucwwp+neWzqv7Uvb/bnUzEi1946uVx7KoKb//Wr3oTYubcMmCfO357B1PCoWqBzI6VeMzRpN3PjzszoeTeuv9/X2fl3vv3b7rBV/vXKtiqwltJWNVr4uVxfq0HHBCRrKONkgTRfuaEZj+xrwtAEZFWyG2gDe51JjAgtGHz9B4M3wfWfXCakYyGpIQ/nWy6BWHjuNstyd8prUao/bt2sfUS0CXd9uFJ2djqFLc9Zd9Lut7XQr51EENVV3SFlaSC8Hg022/kw5S/xlc6qUq/ueVJ34wjzN1FzGa9JfOD51hsu7pwt0IWPakKpOd5Ioal2dZK+yg0RsMmBspaW9ZfPCc04lfu8+lAGJzX3LTVPuWu+tzeW9+WlL2Nx4+JVeqydWJfIVejoV1dnYFqxhs/F4uOHQ90eGZi7tI7d+sJo5CcmOHnPPj5ls52Ukucxkc1Vt9O1VjuJIy0LFCDRFYVgMeo6cw19//AlfcAqXn4fwbDinGqF3AM9BF9Mjpwl6qQ1mtXDQ6T0fdPpW5YyZ82IKw2tw/eKf6yu9gXMTyxyPUmowsSe+lvY7r6xUTjWqBZ0yzsyylr3s9A/cgHJ4aC0q0mMiDQ8P4QJTGi8hcuk5tEODmWtQaAol4PrdW/jt+PVLiE4wV+j7MwSjCozcIBKNCqHRhPAFkwBe9OEEYxj0Bq9g8CI8fh0ev4azy3EE/mGnO/ARf0DMGQqjYXR+9eniBAqNVfhF3yJ4FlMhBYspP+jACBESGWsrP1oh72QJzKTyHMjqTBmWIWcCO617ICT9zotXnZ67x6U2GRWr15Yf8FpcBcOmIx69hhoy+V8NhdXpske7m3PKHPkUyrGfPzc3hObM5rPvxpzVsBw09H9nb0JtrO7Dw5Rq/KR4WdrPfh6xzJgwbbO1etA/md6t0902mO451ho8F5QXVsvx7q/HWx/JdkSqh8Q942ybpnZEa3RW4e7sQjEbj4Q39iap5iWbYG/1Jo4xb1ttXHzWS0OQZ6djUpZ/A4D65hY=
+sidebar_class_name: "get api-method"
+info_path: api/solomon-harness
+custom_edit_url: null
+---
+
+import MethodEndpoint from "@theme/ApiExplorer/MethodEndpoint";
+import ParamsDetails from "@theme/ParamsDetails";
+import RequestSchema from "@theme/RequestSchema";
+import StatusCodes from "@theme/StatusCodes";
+import OperationTabs from "@theme/OperationTabs";
+import TabItem from "@theme/TabItem";
+import Heading from "@theme/Heading";
+import Translate from "@docusaurus/Translate";
+
+<Heading
+  as={"h1"}
+  className={"openapi__heading"}
+  children={"List Marketplace Plugins"}
+>
+</Heading>
+
+<MethodEndpoint
+  method={"get"}
+  path={"/api/v1/marketplace/plugins"}
+  context={"endpoint"}
+>
+  
+</MethodEndpoint>
+
+
+
+List available plugins in the marketplace.
+
+Supports optional ``keyword`` filtering (case-insensitive
+substring match against name, description, and keywords)
+and ``limit`` / ``offset`` pagination.
+
+<Heading
+  id={"request"}
+  as={"h2"}
+  className={"openapi-tabs__heading"}
+>
+  <Translate id="theme.openapi.request.title">Request</Translate>
+</Heading>
+
+<ParamsDetails
+  {...require("./list-marketplace-plugins-api-v-1-marketplace-plugins-get.ParamsDetails.json")}
+>
+  
+</ParamsDetails>
+
+<RequestSchema
+  {...require("./list-marketplace-plugins-api-v-1-marketplace-plugins-get.RequestSchema.json")}
+>
+  
+</RequestSchema>
+
+<StatusCodes
+  {...require("./list-marketplace-plugins-api-v-1-marketplace-plugins-get.StatusCodes.json")}
+>
+  
+</StatusCodes>
+
+
+      

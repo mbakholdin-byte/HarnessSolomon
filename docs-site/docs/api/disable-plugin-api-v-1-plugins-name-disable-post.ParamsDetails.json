@@ -1,0 +1,1 @@
+{"parameters":[{"name":"name","in":"path","required":true,"schema":{"type":"string","title":"Name"}},{"name":"authorization","in":"header","required":false,"schema":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Authorization"}}]}

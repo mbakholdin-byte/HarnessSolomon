@@ -1,0 +1,78 @@
+---
+id: elicitation-sse-api-v-1-elicitation-sse-get
+title: "Elicitation Sse"
+description: "Server-Sent Events stream for Elicitation lifecycle events."
+sidebar_label: "Elicitation Sse"
+hide_title: true
+hide_table_of_contents: true
+api: eJztVs1uGzcQfpUBT7G7WkuyEzR7C2InDpDUhuUkBzvwUtyxljGX3HC4slVhgT5En7BPUgx39eOoBlqglxQ9acUZfhx+83FmliLIGYnsSqDRSgcZtLMDIhRfElEgKa9rXhKZmKCfox9M0AY4maMNBBQ8ygpunYeTzXYw+hbVQhkEjH7ptb22Fxgabwkk5HnAh3AQbYMOIs/BI9XOEkIoZQAKckHgarTQ2KANhBKvrTKaTy80KWctqkAJG6BE6cMUZRhU8mEgZwiawKNUJRYJOB+dKMZ/balsAkHh7m0KE8Roq1zRGITCKQpe21m8EhvutUf+U8kQbzEJMjQEyhVI2bUFABjAeDiEZ91FtJ3tZUCNUkgEf/z2e0RZ323qigXHxouTyUlPYLoCOhoeZpDnpXN3dLOVkBsivEErpwaLPGeAN9IQJnB2EaGCu0PbgQAYqe66E/J8CyP1KHkzKVdjKhLhavTR8q4Qmfj+NFnrm/loJ4gZBpGIWnpZYUDPylkKKysUmSAkYqkkQrNevjXoFyIRHr812mMhstsYtCBVYiVFthTSLs5uI0RY1BEisi/aZL1iG2NEuyPGs/ghDfSHgi7gVpuAPoXPJVogDAk4axbwrUFiZ4K6mRpNJRZwr0MJEioZVMnpzvMe50YzR9JjnxosUrgsEabe3aFn5mvvOLeDmXFTPt9Fqruz2a5tJ5cYHvMcdDAY309HT/vD3oXT0udaNqF0Xv8abauMlygL9P9eylfMvXp0WMum1YsixhwPh/zzXbnq3uBtY+CidxaJUM4GtCFGUtdGq4h58JV4z3ITZ9u2bSKOxuNd4E/S6KIrdCfeO/8PUEXt+dUF3cVdYJDa8JcOWNGug3HqkfVvkKdtwBl60X5pk9Wa9F4utpT43qmeykRUNGPkx3gb1w9IJGco1mBPu0Yy4JKtLQuibiIhK/O7uNAmQoWHLRg3/YoqbMG8Zi4fgmg38a99Nrq6itx04fd+W4LZpKjL0NNUHHcp+KvDVi6nl5fnO4CdPioMpePquSqLoRSZOJC1PpiPDrZq5wFF9fF72uZk4oyrnIVT6S0Sid3KgHZArvEKQc7QBq2ASjQmdpbPOIUPn87h2XkpCWG4Bz8BNdNB9ARaUMBqZRynw5/G6Yhd3upw2kzh/AKiVroesPEbRxhuEoOZDFjAq/N3K+sofcFWN+VeKqfa6LBY2Y7S0V5skfv7vGOOnmuQtrNsfx/e40yqBeSRmv0cmCnu0DwSwMWb1/Dz85dHkB9j7bHTZgbBN5iDtAXkk8YShgw+czs/HMExKhgPxy9gfJg9f5k9fwlvP1zm0NUfSuEXvIduViCYnJ59fH8MDWF//HzEETxT0jqrlTR73RjAvZ/tg03kaVWsB4FKr5gKukKjbeyhva/IxCg9fJEOWWm1o1DJ+PD7Yrk9G02iEB6lebmpH/8PWf+xIasvKjEXtZE61tzGx6LflYsrIWvNUhqJZHsKE4nox/DSUWC/5XIqCT9607a83M1X3AwKTTHqdbt9Ul4/zKjxBHN3uHg0aM6ladgrjgtz6TXzILIrbn79NMIEddteKYV12Nq106sZZV3T355cirb9E7qIk+U=
+sidebar_class_name: "get api-method"
+info_path: api/solomon-harness
+custom_edit_url: null
+---
+
+import MethodEndpoint from "@theme/ApiExplorer/MethodEndpoint";
+import ParamsDetails from "@theme/ParamsDetails";
+import RequestSchema from "@theme/RequestSchema";
+import StatusCodes from "@theme/StatusCodes";
+import OperationTabs from "@theme/OperationTabs";
+import TabItem from "@theme/TabItem";
+import Heading from "@theme/Heading";
+import Translate from "@docusaurus/Translate";
+
+<Heading
+  as={"h1"}
+  className={"openapi__heading"}
+  children={"Elicitation Sse"}
+>
+</Heading>
+
+<MethodEndpoint
+  method={"get"}
+  path={"/api/v1/elicitation/sse"}
+  context={"endpoint"}
+>
+  
+</MethodEndpoint>
+
+
+
+Server-Sent Events stream for Elicitation lifecycle events.
+
+Returns a ``text/event-stream`` response that stays open until the
+client disconnects, the heartbeat-max-age is reached, or the server
+shuts down. See the module docstring for the wire format.
+
+Status codes:
+    - 200 (streaming): success — the response body is the SSE stream.
+    - 403: ``hooks_elicitation_sse_enabled`` is False, OR the token
+      lacks the ``elicitation.read`` scope.
+
+<Heading
+  id={"request"}
+  as={"h2"}
+  className={"openapi-tabs__heading"}
+>
+  <Translate id="theme.openapi.request.title">Request</Translate>
+</Heading>
+
+<ParamsDetails
+  {...require("./elicitation-sse-api-v-1-elicitation-sse-get.ParamsDetails.json")}
+>
+  
+</ParamsDetails>
+
+<RequestSchema
+  {...require("./elicitation-sse-api-v-1-elicitation-sse-get.RequestSchema.json")}
+>
+  
+</RequestSchema>
+
+<StatusCodes
+  {...require("./elicitation-sse-api-v-1-elicitation-sse-get.StatusCodes.json")}
+>
+  
+</StatusCodes>
+
+
+      

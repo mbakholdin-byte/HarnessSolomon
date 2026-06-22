@@ -1,0 +1,70 @@
+---
+id: get-models-api-v-1-models-get
+title: "Get Models"
+description: "Return all catalog models with availability computed from env."
+sidebar_label: "Get Models"
+hide_title: true
+hide_table_of_contents: true
+api: eJztVcFy2zYQ/ZWdPdkKRYlS7Na8eeJEzkzUaCwnOVgeCwJXJFIQQAGQsUblTD+iX9gv6YAUIyvTY4/hhQTfA3b59u1yj57lDtMHLHVG0uFjhBk5boXxQitM8Y58ZRUwKYEzz6TOoaPCN+ELYDUTkm2EFH4HXJem8pTB1uoSSNXxSq3UHTmjlSNwBTMEZ4Zsd8R5ulIAAPvuBrBCka0whRXOhRJz9jycT+JfVhgdCcbqWmRkO1oplCjZ8wnDix69n54AXCtPzz5gk3G4XmCHz5AUUG8r+nPLpKOTwIILlT8JZar2jHE8Hf8Hriv/nXDZExqMUBuyLIj6PsMUc/JPnY5PzIinOulXOXmM0B40c5jucTIeh9tpXZYV5+TctpLQC4xR943KBzozRgreRhx9dWHPHh0vqGThSXgq28NZlonAYXJhQ4pehKBBggj9zhCmqDdfiXtsvr9g1rIdRuiFl9R65FDhGXmYd+64NgI+J/1qRh6bcEVYki/0QQKM0DBfYIojZsSoTkYHG0Yo1FaH/PoYSy11qRXcMqvIBcapHh8NqaHTleUELCflBQdXkJTwz19/wxfawPzzAs4WBXME43N4Ba7aDFsmuJ3zVPbgJB6/msRJoMyEv602sLgDoTzlXf2OvEl7DNeGhjkLvr9evO/RJL4MqN44snXfIAfsdZyct60xGIQdNVkntBIqTwcD+EA54ztYt4oM1hAEcmC7Nrx79wZ+vbh6DesbMpa68naOXQNTGayXlXLkU/hCWQTTBG6Iw2Q8uYTJNL24Si+uYDa/X0NBLCPrYviNvgGXgpR3sLz9+OnDDVSODuHrJGRwxpnSSnAmz2NYEkGmuQv48Jh5XGaw1RZ8QVCKXikvSpJCUYwRHriYYhJPL+Nx8JPRzpestaZiZSjz0UE/Vnh/NPfPofR/DaVDQ4cURkYyoUJVKiuD3F1nPiAzIpQvwejFT6LQzgdwv98wR5+sbJrw+o+K7A7Th8cIa2ZFSD6smgg7w2H6sMffaYcpXnNOJkyAmsmqnSo/Dqzm8cW0mL29x6b5F3ROKk8=
+sidebar_class_name: "get api-method"
+info_path: api/solomon-harness
+custom_edit_url: null
+---
+
+import MethodEndpoint from "@theme/ApiExplorer/MethodEndpoint";
+import ParamsDetails from "@theme/ParamsDetails";
+import RequestSchema from "@theme/RequestSchema";
+import StatusCodes from "@theme/StatusCodes";
+import OperationTabs from "@theme/OperationTabs";
+import TabItem from "@theme/TabItem";
+import Heading from "@theme/Heading";
+import Translate from "@docusaurus/Translate";
+
+<Heading
+  as={"h1"}
+  className={"openapi__heading"}
+  children={"Get Models"}
+>
+</Heading>
+
+<MethodEndpoint
+  method={"get"}
+  path={"/api/v1/models"}
+  context={"endpoint"}
+>
+  
+</MethodEndpoint>
+
+
+
+Return all catalog models with availability computed from env.
+
+Response shape (per model):
+    \{
+      "id": "MiniMax-M2.7",
+      "provider": "minimax",
+      "tier": "T3",
+      "context": 200000,
+      "available": true|false,
+      "pricing_input": 0.30,
+      "pricing_output": 0.60,
+    \}
+
+<ParamsDetails>
+  
+</ParamsDetails>
+
+<RequestSchema
+  {...require("./get-models-api-v-1-models-get.RequestSchema.json")}
+>
+  
+</RequestSchema>
+
+<StatusCodes
+  {...require("./get-models-api-v-1-models-get.StatusCodes.json")}
+>
+  
+</StatusCodes>
+
+
+      

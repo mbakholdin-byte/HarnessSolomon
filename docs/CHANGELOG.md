@@ -1,5 +1,26 @@
 # Changelog — Solomon Harness
 
+## [1.35.0] — 2026-06-21
+
+### Added
+- **Public documentation site** (`docs-site/`): Docusaurus 3.0 setup with i18n (en + ru), Algolia search placeholder, GitHub Pages deployment workflow, 144 generated HTML pages
+- **47 API reference pages** (`.api.mdx`): auto-generated from `harness/server/openapi.json` via `docusaurus-plugin-openapi-docs` v5.0.2 + `docusaurus-theme-openapi` v5.0.2
+- **4 Installation guides**: `linux.md` (143 lines, Ubuntu/RHEL/Arch), `macos.md` (134 lines, Homebrew + manual), `windows.md` (195 lines, WSL2 + native), `docker.md` (276 lines, production image)
+- **`gen-config-ref.py`** (240 lines): AST parser for Pydantic Settings → auto-generates `docs/configuration/reference.md` (233 settings in 42 sections with type/default/env-var/constraints columns)
+- **SEO + Performance**: `trailingSlash: false`, `<meta name="description">` headTag, auto-generated sitemap.xml
+- **GitHub Actions CI**: `.github/workflows/docs.yml` (build on PR, deploy on main → Pages) + `.github/lighthouserc.json` (perf ≥85, a11y/bp/seo ≥90)
+
+### Changed
+- `docusaurus.config.ts`: `baseUrl` → `/HarnessSolomon/` (custom domain not yet purchased)
+- `actions/upload-pages-artifact`: v3 → v4
+
+### Technical
+- Documentation rendered via Docusaurus static site generator
+- All MCP/agent changes documented in auto-generated API pages
+- Configuration reference auto-generated from `harness/config.py` Pydantic models
+
+---
+
 ## [1.36.0] — 2026-06-21
 
 ### Added

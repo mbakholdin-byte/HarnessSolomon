@@ -1,0 +1,72 @@
+---
+id: get-plugin-api-v-1-plugins-name-get
+title: "Get Plugin"
+description: "Get a single plugin by name."
+sidebar_label: "Get Plugin"
+hide_title: true
+hide_table_of_contents: true
+api: eJy9Vs1S4zgQfpUuXRYYY5LwU4tv1MACVTCkSIY5AJUodsfRjCx5JDlDJuWtfYh9wn2SrZbtxIGF3eKwJ5fVv+ru72stmeOpZdE9y2WRCmV3eZIJxYJn/48BS9DGRuROaMUido4OOFihUolQ6cJkAYpnGD6oB3WLrjDKwkHnAMQU3GylJSwo7UBqnmACXCX+VyjSeVCJsHwiMQGLLmQB0zkaTjEvExaxFN2ocjPiuRjNu/WfHY0o8miUoqPcueEZOjR0syUjEYuqT8AEpZ9zN2MBM/i9EAYTFjlTYMBsPMOMs2jJ3CInG+uMUCkLmBNO0sEnclKWwcorL9xMG/HTJ9m4nyFP0GwEmHJpNyJwtbiZ+vw2Y5Hv+kQVUrLycR39ZCNYSSKDNtfKoiWfvU6HPputGhRxjNZOCwm3tTILWKyVQ+V8JnkuRex97n21ZLNs5Zkb6oETVYTq1v9Wn4DN0VhRuXpN9a5WKQNmdWFiHPmuvGEx8GrQJ7UyYKj8qLQsJlpL5KplclbrlAGbaf3N30E4zOzLOGXQHHBj+KLl5MJbklxr+T4XQ29JV411ju/zMahMyzJgPEkE9YvLfqs99YzV5nryFWO3MYT3DQia9myWfl3S1sz1PcJO0XEh2XMa6BcTKeLdKY+FSlcIV1MN+JRriwnMBffoP+lfemK4FsZoYyGKJbc2Gv8+40ahtWGN5LCKd6mmegw/hJt56+a+D0pPYTyu0xyPYStBI+aYwNTozKsaTIV1ZvGLhTaZbBPVPCjyqAviG4dGcQlTgTKxIStLqutBr/cSQHdcisTDA84o+fejJ6mq2G7+poLU8Yb0P5AE3SRFw8rH1yfnSsc1ZQQss+lbGLtGa3mK6zF8XdUXA4YkLYn48sIXpBFf+oMyYLF7arlZjWWj95Fq+eT8XL81ulSbKv1arzWk6xZVHXq9FPUg/1OwFdyHw/4Lh9V8ZOhmut5EftEQYbE9nou9eXevHuG9JaGs9MtgqtslGWipM63gopr5F3C6yVHtVogEnqJyIgY7Qynhrz/+hC84geu7Pmz1Z9widLbhA9hisus1wS6sw6wR9sLOh17YJZVz4S6KCfRv/dCn1Tpd6/W8G6KW3ZQ7TAipjbQbHpFUTyyaOZ8IKdyikR2E3W2P6J0dsqgZRag02tmBK0x5vICxr8zOGKhQFox/FMDtbx/h18PjAxifYm6wGs0IaAWP/YNgPCiURRfBF0wC2O/CKcbQ6/SOoLcfHR5Hh8dwfj0cQ7VmbQif8AfEUqByFgYXN5+vTqGwWIefdymDrZgrrUTM5XYIA0RIdGxJvrvOPMwSmGrjaSQTTaWcyFAKhWGLNyPWDfePwg4NWq6ty7hab0f/OKpo7HmHl2vm+N+eUPWYE8b2csmFZ4HCeBqqBvie8VzQ7brrhx8LWOSv80ib0zrSWi4n3OJnI8uSjr8XaBYsun8M2JwbQUE9VTUJrBbSqyXYuq3xvQ2vJdrAWBGI51wW9McC9g0XzZvOM1/95KL4legkjjF3LaMXRE3PpxWgz8+GrCz/Bg0MxHU=
+sidebar_class_name: "get api-method"
+info_path: api/solomon-harness
+custom_edit_url: null
+---
+
+import MethodEndpoint from "@theme/ApiExplorer/MethodEndpoint";
+import ParamsDetails from "@theme/ParamsDetails";
+import RequestSchema from "@theme/RequestSchema";
+import StatusCodes from "@theme/StatusCodes";
+import OperationTabs from "@theme/OperationTabs";
+import TabItem from "@theme/TabItem";
+import Heading from "@theme/Heading";
+import Translate from "@docusaurus/Translate";
+
+<Heading
+  as={"h1"}
+  className={"openapi__heading"}
+  children={"Get Plugin"}
+>
+</Heading>
+
+<MethodEndpoint
+  method={"get"}
+  path={"/api/v1/plugins/{name}"}
+  context={"endpoint"}
+>
+  
+</MethodEndpoint>
+
+
+
+Get a single plugin by name.
+
+Returns 404 if the plugin is not loaded and not in the
+disabled set.
+
+<Heading
+  id={"request"}
+  as={"h2"}
+  className={"openapi-tabs__heading"}
+>
+  <Translate id="theme.openapi.request.title">Request</Translate>
+</Heading>
+
+<ParamsDetails
+  {...require("./get-plugin-api-v-1-plugins-name-get.ParamsDetails.json")}
+>
+  
+</ParamsDetails>
+
+<RequestSchema
+  {...require("./get-plugin-api-v-1-plugins-name-get.RequestSchema.json")}
+>
+  
+</RequestSchema>
+
+<StatusCodes
+  {...require("./get-plugin-api-v-1-plugins-name-get.StatusCodes.json")}
+>
+  
+</StatusCodes>
+
+
+      

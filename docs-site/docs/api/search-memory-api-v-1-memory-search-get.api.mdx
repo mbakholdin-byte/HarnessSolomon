@@ -1,0 +1,77 @@
+---
+id: search-memory-api-v-1-memory-search-get
+title: "Search Memory"
+description: "Search the 4-layer memory with BM25 + identity rerank."
+sidebar_label: "Search Memory"
+hide_title: true
+hide_table_of_contents: true
+api: eJztVtty2zYQ/ZUdvNR2KFpirEzDNzdObE/txLGV5MH2mBC5FhGTAA2ASlQNZ/oR/cJ+SWcBUhdflDbPfeIQe7CXsxfsnFk+MSy+ZCWWSs/YdcAyNKkWlRVKsphdINdpDjZH2OsVfIYaPBS+CZvDb6fREF6AyFBaYWegUXN5F17JK/mxRj2DimteokVt4isJsANJcp8k8Peff4HG+1pozAKn3XhDxmohJx30roUq5w4vAsjwlteFhWEAJf8Owz6ZOkdba2lgL4pASSiFMUJOWlNbOZdZgRmMZ/COG7t/dvyLWRjvXcl7crTnHIUpL0TGydg2cJlB1O/7QLkELCs7gyTJhTVJAoUw9koqCVJByW2aowlZwFSF2ik4zljMfFQ3nrIbXomb6aD7a2UTtCxgS55YfDlnkpfIYnbPAiYoDc5HFrDObRZbXWPATJpjyVk8Z3ZW0Q3PHwuYFbagg4+saYKFwrvnFd7ywjylUUiLE9SMKsNxz+LhUv3va+p5bXOlxR+OgM5Ujjxz9zfY4nL24dZFvh4H6W5PZF0UrLlemt5fM9aQSKOplDRoSGfU79PnQT3XaYrG3NYFnLdgFrBUSYvSOk+qqhCp07n71dCd+Yqflab8WuEteBI3ke8ATcDuniR0hcSAUVkRSlgszWNbIttk6DgjFa4/N8FOHKAJmFG1TnET9MIjmoBZ/G43IUckJ5wbJSsBPExld8C15rNVBXSxCRifoLQ3PtCfKgi6D0TF0pYaf8XUrhXfJXHZkbWgoo2zDWNF682pa9cjYdnD4fhBLuaWRlMXNtwQ5RHl90eedW1JfeoKYtURP4tXynbdmyQ5fDuCXV6J3elg1w+ZXe9ekkDXGiFrGvJiL4oed8fnxfiDt1or/fOtkaHlothQz4VK16T/IuFd4zTXz7N8otJ2HgSsNJNNdXuKxvAJLlP2PNSRASOSNjTVqtp3RNd97qAJWGq/r6hZZLjDvSEuqVl+UAXEjXe/xa1UwTJFPkPPU3HgU/CUsUVNjkZnjxT6+ijR5oqesO59sjmL2ZPV5Qb9rVpl5EIVqlQSjriWaMzjzqlQ9nzngWt7kYLJsSjcc/8Fx3D6+Qy2znJuEPrb8AJMPe45JJiZsVh2wijsv4jCAUEOhT2qx3B2Dq5S/DO8xEVOTaoq7E24xQz2z4476SB8RVI1NqinfCwKWmZa2V442HYbzc4O3ZiiNkJJISfxzg6c4ISnM0gcMTsJEE+0XdBCAufv3sCvw9d7kBxgpdFXZgz0dCduvUguamnQxvCF1qCXAzjAFKJ+9Aqil/HwdTx8DYenowT8E2pCeI/fIC0ESmvg4ujDp5MDqA225qcD8mAr5VJJkfJiO4QLRMhUakjeW3oelhncKu0Wr1J0TFlRYiEk0hrTYlnMBuHLV2Gf6qxSxpbctX373rfboZ+QD5M8X86O/9fI/7pGth1L42K3KrhwA63WbqL6XrxkvBKUqQHNii4DbUdeByxXxhJqPh9zg5900TR03O4sl3OWCcPHxco69mz2ts7bMLfhOdfucNbuq1Ne1CR3k/uRDY+7W8Nd048WBGTxJQ33dmUkL/2F/TTFyq7cevQWkZbFzDp8O2JN8w9bw1qs
+sidebar_class_name: "get api-method"
+info_path: api/solomon-harness
+custom_edit_url: null
+---
+
+import MethodEndpoint from "@theme/ApiExplorer/MethodEndpoint";
+import ParamsDetails from "@theme/ParamsDetails";
+import RequestSchema from "@theme/RequestSchema";
+import StatusCodes from "@theme/StatusCodes";
+import OperationTabs from "@theme/OperationTabs";
+import TabItem from "@theme/TabItem";
+import Heading from "@theme/Heading";
+import Translate from "@docusaurus/Translate";
+
+<Heading
+  as={"h1"}
+  className={"openapi__heading"}
+  children={"Search Memory"}
+>
+</Heading>
+
+<MethodEndpoint
+  method={"get"}
+  path={"/api/v1/memory/search"}
+  context={"endpoint"}
+>
+  
+</MethodEndpoint>
+
+
+
+Search the 4-layer memory with BM25 + identity rerank.
+
+Query parameters:
+  * ``q`` — required, the search string
+  * ``k`` — optional, default 5, max 50
+
+Returns 422 on missing ``q`` (handled by FastAPI's required-
+query-param validation) and 200 with an empty ``hits`` list
+on no matches.
+
+<Heading
+  id={"request"}
+  as={"h2"}
+  className={"openapi-tabs__heading"}
+>
+  <Translate id="theme.openapi.request.title">Request</Translate>
+</Heading>
+
+<ParamsDetails
+  {...require("./search-memory-api-v-1-memory-search-get.ParamsDetails.json")}
+>
+  
+</ParamsDetails>
+
+<RequestSchema
+  {...require("./search-memory-api-v-1-memory-search-get.RequestSchema.json")}
+>
+  
+</RequestSchema>
+
+<StatusCodes
+  {...require("./search-memory-api-v-1-memory-search-get.StatusCodes.json")}
+>
+  
+</StatusCodes>
+
+
+      

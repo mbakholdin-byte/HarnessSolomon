@@ -1,0 +1,1 @@
+{"title":"Body","body":{"required":true,"content":{"application/json":{"schema":{"properties":{"title":{"type":"string","maxLength":200,"minLength":1,"title":"Title"},"model":{"type":"string","maxLength":100,"minLength":1,"title":"Model"}},"type":"object","required":["title","model"],"title":"CreateSessionRequest"}}}}}

@@ -9,14 +9,27 @@ const config: Config = {
   tagline: 'Multi-model · Memory-first · Production-grade',
   favicon: 'img/favicon.ico',
 
-  url: 'https://harness.dev',
-  baseUrl: '/',
+  // For custom domain: url: 'https://harness.dev', baseUrl: '/'
+  // For GitHub Pages fallback: url: 'https://mbakholdin-byte.github.io', baseUrl: '/HarnessSolomon/'
+  url: 'https://mbakholdin-byte.github.io',
+  baseUrl: '/HarnessSolomon/',
 
   organizationName: 'mbakholdin-byte',
   projectName: 'HarnessSolomon',
 
   onBrokenLinks: 'warn',
   onBrokenMarkdownLinks: 'warn',
+  trailingSlash: false,
+
+  headTags: [
+    {
+      tagName: 'meta',
+      attributes: {
+        name: 'description',
+        content: 'Harness — Open-source Agent Shell. Multi-model, memory-first, production-grade agent framework with built-in tier router, 4-layer memory, and observability.',
+      },
+    },
+  ],
 
   i18n: {
     defaultLocale: 'en',
@@ -44,6 +57,7 @@ const config: Config = {
           editUrl: 'https://github.com/mbakholdin-byte/HarnessSolomon/tree/main/docs-site/',
           routeBasePath: '/',
           sidebarPath: './sidebars.ts',
+          docItemComponent: '@theme/ApiItem',
         },
         blog: {
           showReadingTime: true,
@@ -131,14 +145,19 @@ const config: Config = {
     },
   } satisfies Preset.ThemeConfig,
 
+  themes: ['docusaurus-theme-openapi-docs'],
+
   plugins: [
     [
       'docusaurus-plugin-openapi-docs',
       {
         id: 'openapi',
-        docsPluginId: 'default',
+        docsPluginId: 'classic',
         config: {
-          harness: {
+          // Key MUST match `id` above for `docusaurus gen-api-docs openapi` to work.
+          // gen-api-docs <id> uses the config KEY (not plugin id) as argument;
+          // plugin id is only needed via -p when multiple instances exist.
+          openapi: {
             specPath: '../harness/server/openapi.json',
             outputDir: 'docs/api',
           },

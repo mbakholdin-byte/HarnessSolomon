@@ -1,0 +1,83 @@
+---
+id: compact-session-v-1-api-v-1-sessions-session-id-compact-post
+title: "Compact Session V1"
+description: "Force-compact a session's context (Phase 3 v1.4.0)."
+sidebar_label: "Compact Session V1"
+hide_title: true
+hide_table_of_contents: true
+api: eJztVttu2zgQ/ZUBXzZJZfmSpNjqLZtsmyzaxojT9iEOLFoaW2wlUiUpp64hYD9iv3C/ZDGU6EucFLvAPvZJAufMhTOHM7Nils8Ni+6YQWOEkqaz6LP7gKVoEi1KK5RkEXutdIKdRBUlTyxwaMG/GEiUtPjNwsEw4wbhGBb98CTsHYZjOZY3+LUSGg3YDCGOvYvwQQuLcQwmUSXCgcGSa24RZloVYxnHfI7SbmBcphDHBRZKL9eHU0x4ZRC6PiphgI9l66NDcWmVgypRc7qFj8hWWhrg8Mfo+j1MVbqEB2EzF6HhBYLJeInAzVhGSc6NieKMa4nGhO1Vw9ahUDI8b35v0FS5jSOKfTVmSou5kDyfWPUFpRmzCIS0AYxZq4rpI9FYAsCYmaoouF5OSo0LgQ8kNVY7RZ5kOMmEpbOpUvlahS8eW6vjeOeup71jEDN3w9a/0tAFq8V8jpryJpWFB6ExJXVFyLHkZQkHGM5DSHEBhUrRJUpVVH+NPN8YOwzB+xr0eg42luROu7yAkmCqJKEcsoCtK3KVsshnZNLWbbLoT3gp6OPZMlnLRDqZeHypjGUBI+IUaFETh1dM8gJZxDYKLGCCCFxym7GA6YaQKYusrjBgJsmw4CxaMbssnabVQs5ZwKywOR2MGlNwlbK6DtYepsuSGzNxZfE+vlaolztOZjw3T3mhAiKXjJ7ZjFe5XUO929+cfTh39rcd88pmSovvLoPec4Y8Rf1j11wur2cuSbtXJdvtiazynNX3myjOdpzVJNJoSkWvjGwOej367PaKUVPqWZXDTQtmAXOPR1oXSVnmInE2u58N6az2U6SmnzGhCvM0FQTl+VATdawg3035fJzeD7TvEXzVPvbhrBT0aU8MwKaisMYPiU11XdcBOxkM9u/0kecidRHD71or/V8uVG6FTXYtFzn9CYuF2QfkKtmR/ou6CWlxjprV93Xgz7jWfLnF47cqaasYsMLMf0T5d2gMnyNbG3se6pIBtyStiYtl5RLixVfuoA5YYr89VVuPO286KxF9D7Oh9J3LTRN+i9vi6qZETYWeT8VFU4KnnHnI5e3tcM9gw48Cbaaoc607kM1YxLq8FN1Fv+u7Vne1aUK1n1Huvc7UdopGKleFknDZDBn2ePJelyg7RlU6QXBjUSRgMsxz+PvPv+ATTuHdx6Gfvr1DeAGmmnYcEszSWCy8cBD2XgzCPkHeCHtZTWF4A446TTve4AbODM3mzpxbTOFseOWl/fAlSdXUoF7wqciFXXrZSdhvpuzREWksUFMChJxHR0fwFuc8WULsEnUUA+XNgHZzA25en8Ovp69OIL7AUmND1Qjolbfjf1RJgzaCT5gGcNyHC0xg0Bu8hMFxdPoqOn0Fb97dxtB0QhPCe3yAJBe0R8Do8vrD2wugbSH2dTqK4SDhUkmR8PwwhBEipCoxJO9sIg+LFGZKu+FZCJ8pKwrMhUQaZy2WRawfHr8Me0Q8okbBXR9o2/Z+Y3pc6dWmo/xct36uW//butW2OEplt8y5cBOg0m4ENb3rjvFSEJOJk540LGDRzhrlW9h9wDLqfNEdW62m3OAHndc1HTf7D02qVBg+zbfWkC+43F+aFjyvKDS3ciy4FqTztP6zL+Wg5Xx6CM/d1U8Budz26WPauqMbn+0qRVE0gLMkwdJuqe5Newp/PRWG16NbVtf/AJNgnt8=
+sidebar_class_name: "post api-method"
+info_path: api/solomon-harness
+custom_edit_url: null
+---
+
+import MethodEndpoint from "@theme/ApiExplorer/MethodEndpoint";
+import ParamsDetails from "@theme/ParamsDetails";
+import RequestSchema from "@theme/RequestSchema";
+import StatusCodes from "@theme/StatusCodes";
+import OperationTabs from "@theme/OperationTabs";
+import TabItem from "@theme/TabItem";
+import Heading from "@theme/Heading";
+import Translate from "@docusaurus/Translate";
+
+<Heading
+  as={"h1"}
+  className={"openapi__heading"}
+  children={"Compact Session V1"}
+>
+</Heading>
+
+<MethodEndpoint
+  method={"post"}
+  path={"/api/v1/sessions/{session_id}/compact"}
+  context={"endpoint"}
+>
+  
+</MethodEndpoint>
+
+
+
+Force-compact a session's context (Phase 3 v1.4.0).
+
+Requires the ``sessions.write`` scope (separate from
+``agents.write`` and ``memory.write`` because /compact is a
+session-control operation).
+
+Returns a JSON body with the same shape as
+:class:`harness.context.compaction.CompactResult`:
+``\{"original_tokens": int, "compacted_tokens": int,
+   "summary_preview": str, "cache_hit": bool,
+   "saved_tokens": int\}``.
+
+Returns 503 if the compactor / trigger is not wired into the
+app (e.g. dev mode without a real compactor). Returns 200 with
+the result on success.
+
+<Heading
+  id={"request"}
+  as={"h2"}
+  className={"openapi-tabs__heading"}
+>
+  <Translate id="theme.openapi.request.title">Request</Translate>
+</Heading>
+
+<ParamsDetails
+  {...require("./compact-session-v-1-api-v-1-sessions-session-id-compact-post.ParamsDetails.json")}
+>
+  
+</ParamsDetails>
+
+<RequestSchema
+  {...require("./compact-session-v-1-api-v-1-sessions-session-id-compact-post.RequestSchema.json")}
+>
+  
+</RequestSchema>
+
+<StatusCodes
+  {...require("./compact-session-v-1-api-v-1-sessions-session-id-compact-post.StatusCodes.json")}
+>
+  
+</StatusCodes>
+
+
+      

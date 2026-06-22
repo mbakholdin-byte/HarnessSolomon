@@ -1,0 +1,74 @@
+---
+id: admin-webhooks-dlq-list-api-v-1-observability-webhooks-dlq-get
+title: "Admin Webhooks Dlq List"
+description: "List recent outbound webhook DLQ entries (Phase 4.13B Drift 2)."
+sidebar_label: "Admin Webhooks Dlq List"
+hide_title: true
+hide_table_of_contents: true
+api: eJztV21P20gQ/iuj/QTUOC+01dXS6cQ1LSBByUFaPhBENvYk3na9a3bXgVxk6X7E/cL7JadZ2+QNqlY6Vap0n4h3ZmdnnmfeWDDHp5ZF10yPLZoZHwsp3HyfJ5lQLHjy9CZgCdrYiNwJrVjEToV1YDBG5UAXbqwLlcA9jlOtv0Dv9A9A5YxACzv9lFuEl2Hn4HfoGTFx0N0Nh2qoLtAVRlkYjRZDVqsPWQTXYRjeBDBksS6Uo5MP9CVFJvyX/xEM1ZAJFcsiwVuDueRzTEg61lqWo1EI73icei/mICxYNIJLYTGBe+FS6J+cDJV1RuS5UFPYyQ3OBN7DRKBMLBjM9AwTmBidgUsRcj6Xmie7IQxSBOu0waES1susUFOJYHVhYgQ9AWcKl8I/f/1NYoP0vtIg1H6GmTZziHmcYkhQ52g4IXqSsIh5qG9rEO1tIu9upbDulufidta5XeNlXW2KjgUs54Zn6NAQuQumeIYsqnBjARNE212BZs4CZvCuEAYTFk24tBgwG6eYcRYtmJvndE0oh1M0LGAZfxBZkbGo0263A5YJVX9u5sQZf1ij3mkwnuMQejjhhXTQabcDSLlJIOY5fbVDOFdyvryTcgcpnyF8OB/AGFFBwy5wg7VBTGAn59bCb5sp8KszBcJEG8/MpJASeJEIB6kg0ua7BHtSeeMjCpgTTqJPaQKq/EmjKoNHxjdvfz/5VETIFdvE4ipFBQNTYABc2gaIJ8JcD3Fnw9lH4N7T+7CjCascVSLUdJ2g2sGGopMqMrhoItti68d4uAI2L1yqjfjTl3GDdIo88bXzFai5mp9PfKHWoFM3UlNvuz5RhZSsvFnGf7j2WEkigzbXyqIlm912m/6sQ3JZxDFaOykkXNTKLGCxVg6V857kuRSxt9n6bOnOYjsl9PgzxtRHeJIIUuWyb6h/OUFvU4Iu/WzegUNqaXBV9yroyTvwk+MwF/CpA+erLW1d7QgdK8uyDNjLbnc7qE9cisS7DO+M0eZ7IspX/Ca7jgtJv4TDzG4rSB2vSb+BuKZ5ljdl0JxxYzhV32O70XFNY8AyO12Bura3VD1Da/kU2aOx51U9GDAgaUnJmBcekGUB0UEZsNg9PEVuo/eWsHwgBoItnWVOX3tsKvdrvZVkXVJUMfQ8FL2Kgqcea1SOB4P+lsEqPzJ0qab52UxBl7KItXguWrNOa21qtpqp2UrknS/WiV6F51JLnWkFx9wotHar/53nqPbrOc+nqJyIwaYopR/2VziGs0/9ZuVp78ILsMV432uCnVuHWSPshu0X3bBDKkfCHRdj6F+AT5tqIVjqdb2ZWOe4P+UOEzjsnzTSTviapGsxrmxc1Z61t0c3Zmis0EqoabS3B6c45fEcRh6lvREQaLZplhfv38Ivr968hFEPc4NVmka01eAIuEpgdFkoiy6CK0wCOOhAD2PotruvoXsQvXoTvXoDR2eDEVRt0IbwAe8hlgKVs3B5fP7xtAeFxfr5WYc82Im50krEXO6GcIkIiY4tyfeXnodZ8jgEM9Eg5USGUii/UNW6LGKd8OB12Kaky7V1Gfc9oO7Zz3SlTboXy5by/777n+y7dXVTa2nlkgvf/Arju29Vt9eM54KI7Gz+J8IC1lQvESXvqNek2jq6tFiMucWPRpYlHVebDrXoRFg+lisD+FmGf5I97xkQv+B8ZdefcVmQjp9J3w7Bj1rvvhLBE7vrMpgb+jCComHRNc3WetEipqv7h3GM+SoEW6sAWXkcGUfvBqws/wVyODB1
+sidebar_class_name: "get api-method"
+info_path: api/solomon-harness
+custom_edit_url: null
+---
+
+import MethodEndpoint from "@theme/ApiExplorer/MethodEndpoint";
+import ParamsDetails from "@theme/ParamsDetails";
+import RequestSchema from "@theme/RequestSchema";
+import StatusCodes from "@theme/StatusCodes";
+import OperationTabs from "@theme/OperationTabs";
+import TabItem from "@theme/TabItem";
+import Heading from "@theme/Heading";
+import Translate from "@docusaurus/Translate";
+
+<Heading
+  as={"h1"}
+  className={"openapi__heading"}
+  children={"Admin Webhooks Dlq List"}
+>
+</Heading>
+
+<MethodEndpoint
+  method={"get"}
+  path={"/api/v1/observability/webhooks/dlq"}
+  context={"endpoint"}
+>
+  
+</MethodEndpoint>
+
+
+
+List recent outbound webhook DLQ entries (Phase 4.13B Drift 2).
+
+Returns ``\{"entries": [...], "count": N, "limit": limit,
+"include_replayed": bool\}``. Each entry is serialised with PII
+stripping (preview fields removed from the payload). The store
+is the single source of truth — there is no in-memory cache.
+
+<Heading
+  id={"request"}
+  as={"h2"}
+  className={"openapi-tabs__heading"}
+>
+  <Translate id="theme.openapi.request.title">Request</Translate>
+</Heading>
+
+<ParamsDetails
+  {...require("./admin-webhooks-dlq-list-api-v-1-observability-webhooks-dlq-get.ParamsDetails.json")}
+>
+  
+</ParamsDetails>
+
+<RequestSchema
+  {...require("./admin-webhooks-dlq-list-api-v-1-observability-webhooks-dlq-get.RequestSchema.json")}
+>
+  
+</RequestSchema>
+
+<StatusCodes
+  {...require("./admin-webhooks-dlq-list-api-v-1-observability-webhooks-dlq-get.StatusCodes.json")}
+>
+  
+</StatusCodes>
+
+
+      

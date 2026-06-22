@@ -1,0 +1,66 @@
+---
+id: get-capabilities-api-v-1-capabilities-get
+title: "Get Capabilities"
+description: "Return the server's self-description."
+sidebar_label: "Get Capabilities"
+hide_title: true
+hide_table_of_contents: true
+api: eJztVsFy2zYQ/ZUdXBI7NC0psadmTh47tdNJbI3lJAfJI0LgikQCATAWlKvRcKYf0S/sl3RAihalNM2xl+oiDfAWu/t2963WzPOcWDJmgls+k0p6icQeIpYhCSetl0azhN2hL50GXyAQuiW6FwSEan7UgcUTPdHDcqakAKPBls4aQvjrjz/BF5JAUm2fSRJmiW4FqDNrpPYx3Bc40WnKS19MHT6W0mGWpjBXPAePSjWWQknUHp4K9AU6oHJG+Fii9hMteAA9SaVAI2bAwZtvqN/WdmlKwlikKV9yqfhMYZoCd46vJlq2TxvCDAh9J0dwKEyuJSG9hTRtw6U0re1mpVQelFwizJ1Z1Ibc2hcEC1Nqjxk4U3okWEo+0cm81CJJC+40EsWNhzhkHNewqcNcknerWBilUPjp1l/MImYsOh5ofp+xhOXop92KTbmV02V/9yxHzyLmkKzRhMSSNRv0euFrt7ijUggkmpcK7jZgFjFhtEftA5xbq6SovR9/pWCzZiQKXPDwy7oQW9034bxObLpER7JB+pVFljDyTuqcRcxLr8LBqCH58wZZRWyn/h3TmTEKue7Ynpe+gLsWWUVsv8LBWnpc0PcRar7Af4vrJtxXexPwY/hlB1ZVUYszs68oGv7bfMaN692XH7YvTUchifY949j+FN5qBGeeQOqf9HXMtoHUB13aaxs4f2aqithzq+3QxrNMBs9cDTsEelfifpY/9vbu+eWfcbPXOPvd8A8l7sbdpfGiMwSdht7l8rfR7Q1QwS2CmTca0DGDdmpiVoVPxBboC7MZPRYxy33BEnbMrTxe9o931DNiUs9N3TMt50aZhdFw3Uz/94W1qI/IlE4g8By1lwKoQKVq9fyCM/j4eQgvhwUnhN4BvArid1QjgVbkcdFeDuLeq0HcD5Ar6a/LGQzvQGqPeaMeW9ygfiZwepTzoFbnw/ftbT8+DbdmForSJLZq797E/YNa6g8Pg8WmXlLnyeEhfMCcixWkNS+HKQSaApn19rj79QJ+OTl7A+klWoeNoCQQGioFrjNIR6Um9Al8wSyC1324RAGD3uAUBq+Tk7Pk5AyuPt6nUCDP0FEMN/i02QoEo+vbTx8uoSTcuF/2QwQvBddGS8HVQQwjRMiMoHB/tI08XmQwN67ugoVsmfJygUpqDOr7LGesH78+jXuh460hv+B6KynsCj1c7HbCnog8i+r/G/U/36gbMfL4uz+2ist6BZVO1RujHu8x41aG6vfDPtz7g1QY8gGyXs844SenqiocP5boViwZP0RsyZ1sdtH4oYpY07UsGa/ZN1yFJSYE2iAmS67KWjz392z10BGeq3f3rKr+BlWKbvE=
+sidebar_class_name: "get api-method"
+info_path: api/solomon-harness
+custom_edit_url: null
+---
+
+import MethodEndpoint from "@theme/ApiExplorer/MethodEndpoint";
+import ParamsDetails from "@theme/ParamsDetails";
+import RequestSchema from "@theme/RequestSchema";
+import StatusCodes from "@theme/StatusCodes";
+import OperationTabs from "@theme/OperationTabs";
+import TabItem from "@theme/TabItem";
+import Heading from "@theme/Heading";
+import Translate from "@docusaurus/Translate";
+
+<Heading
+  as={"h1"}
+  className={"openapi__heading"}
+  children={"Get Capabilities"}
+>
+</Heading>
+
+<MethodEndpoint
+  method={"get"}
+  path={"/api/v1/capabilities"}
+  context={"endpoint"}
+>
+  
+</MethodEndpoint>
+
+
+
+Return the server's self-description.
+
+Public on purpose — this is the discovery endpoint. The
+``auth_required`` flag tells the client whether subsequent
+calls will need a token; the ``scopes_available`` array
+is the closed set the server recognises; ``endpoints``
+is built live from the app's mounted routes via
+:func:`harness.server.auth.route_registry.collect_endpoints`.
+
+<ParamsDetails>
+  
+</ParamsDetails>
+
+<RequestSchema
+  {...require("./get-capabilities-api-v-1-capabilities-get.RequestSchema.json")}
+>
+  
+</RequestSchema>
+
+<StatusCodes
+  {...require("./get-capabilities-api-v-1-capabilities-get.StatusCodes.json")}
+>
+  
+</StatusCodes>
+
+
+      

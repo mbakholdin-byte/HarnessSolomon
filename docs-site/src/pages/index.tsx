@@ -107,6 +107,9 @@ function ComparisonTable() {
     <section className={styles.comparison}>
       <div className="container">
         <h2 className="text--center">Why Harness?</h2>
+        <p className="text--center" style={{ marginBottom: '2rem', opacity: 0.75 }}>
+          Compared to other agent shells and orchestrators
+        </p>
         <table className={styles.table}>
           <thead>
             <tr>
@@ -114,6 +117,7 @@ function ComparisonTable() {
               <th>Harness</th>
               <th>Claude Code</th>
               <th>OpenCode</th>
+              <th>Mavis</th>
             </tr>
           </thead>
           <tbody>
@@ -122,39 +126,69 @@ function ComparisonTable() {
               <td>✅ Calibrated</td>
               <td>❌</td>
               <td>⚠️ Manual</td>
+              <td>⚠️ Basic</td>
             </tr>
             <tr>
               <td>Plugin marketplace</td>
               <td>✅ v2 manifest + signature</td>
               <td>❌</td>
               <td>⚠️ Beta</td>
+              <td>❌</td>
             </tr>
             <tr>
               <td>Hook framework</td>
               <td>✅ 16 events, 4 transports</td>
               <td>⚠️ Limited</td>
               <td>❌</td>
+              <td>✅ 8 events</td>
             </tr>
             <tr>
               <td>Cost analytics per-task</td>
               <td>✅ Built-in</td>
               <td>❌</td>
               <td>❌</td>
+              <td>⚠️ Session-level</td>
             </tr>
             <tr>
-              <td>RU-first UX</td>
+              <td>Privacy / Local-first</td>
+              <td>✅ 100% local capable</td>
+              <td>❌ Cloud-only</td>
+              <td>⚠️ Partial</td>
+              <td>✅</td>
+            </tr>
+            <tr>
+              <td>RU-first UX + i18n</td>
               <td>✅</td>
               <td>❌</td>
               <td>❌</td>
+              <td>✅</td>
             </tr>
             <tr>
               <td>Open-source (MIT)</td>
               <td>✅</td>
               <td>❌</td>
               <td>✅</td>
+              <td>❌</td>
+            </tr>
+            <tr>
+              <td>Documentation site</td>
+              <td>✅ 144+ pages, i18n</td>
+              <td>✅</td>
+              <td>⚠️ Basic</td>
+              <td>❌</td>
+            </tr>
+            <tr>
+              <td>E2E tests</td>
+              <td>✅ Playwright 13 tests</td>
+              <td>❌</td>
+              <td>⚠️</td>
+              <td>❌</td>
             </tr>
           </tbody>
         </table>
+        <p className="text--center" style={{ marginTop: '1.5rem', fontSize: '0.875rem', opacity: 0.6 }}>
+          Last updated: v1.36.0 (Phase 7.2 Playwright E2E)
+        </p>
       </div>
     </section>
   );

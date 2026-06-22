@@ -1,0 +1,1 @@
+{"parameters":[{"name":"hook_id","in":"path","required":true,"schema":{"type":"string","title":"Hook Id"}},{"name":"authorization","in":"header","required":false,"schema":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Authorization"}}]}

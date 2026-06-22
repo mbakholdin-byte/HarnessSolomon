@@ -1,0 +1,73 @@
+---
+id: list-sessions-v-1-api-v-1-sessions-get
+title: "List Sessions V1"
+description: "List the most recently updated sessions (Phase 1.6)."
+sidebar_label: "List Sessions V1"
+hide_title: true
+hide_table_of_contents: true
+api: eJzdVs1u2zgQfpUBT22qKLbbFFvdgqSbFEi3Qey2hySIaGpssaVIlaTceg0B+xD7hPskiyElW2l+sLvHPQkiZ74hh983Mxvm+dKx7Io5dE4a7fZXY3aTsAKdsLL20miWsXPpPPgSoTLOg0WB2qs1NHXBPRbQ+8Kzi5I7hHH6+nl6ra/19jcDi98aadFBnvfmqUVe5Dk4YWpMYVYiuJLXCNJda4rmeIXAXYiscMnFGvL8gNfyoIfIc7Cm8QjOAAehJGp/rQXX4L7zGlAXtZHaO5ivQZRcL6VegtFqHTBriwv5I2UJMzVaTpd9V7CMKen8bR/idjW+5bWkz3ZpiZ4lrOaWV+jRUgI3TPMKWcZidljCJGXuW4N2zRLWXb9g2YIrhwlzosSKs2zD/LomP6k9LtEyyv2CN8qz7HCUMC+9ou3LCNu2yTYSb3xprPw9HLwPWCIvAsoTEblef1iEM3exnbdSLxlhdyu6UYq1N7v4R3eCtbRl0dVGO3SEORmN6HOXN9NGCHRu0Si47IxZwoTRnu5CJ6lrJUXAPPjiyGdzPzPcWk45lB6rEKu29F5exsiyGNh2N9md+13B2u3f42az8G0TVpkC1VOW74NBmzBhkdh/y/1D5gtjK9phJJF9LyscYBxHVzjyBNTJ6L8AfewUGIEqdI4v8VaYRvsHqbW9RLSE42A5oNyIkmU8V7fefEXtnkSZkSHMouGDIMK44UF0U80fQDgmqzv+BBBdzPwLCn+Hz1ede/9YA5ZOo0LZzwXsiNTv+0IFf/3xJxiNIIxeoXWBf+BLqkfwXfoybAbwdMAe1nMYQj2c9lXv0xiOakmf7dIpklTpGq8mk/u6+MSVLGLUt9Ya+29EcZf8BXouA18fUYcy4s7uP9B+/9Dtze4Zeg32qTg3oqsECavc8knBRK6xLdjjpiEZMKPdlupZ3UT29FoOCyQ9/2MAs6XIVl6Uyx+hWD5JI8pNPH5nN2DS7oniCz2eipP4BA8F603OZrOLe4CRHxX60lDT6XuKL1nGQpNbjbd9LlT3hRkmY2qUqYyGM241OneP8h9q1PvONFYg8CVqLwW4EpUK7P+Mc3j/6aLv2KPn8AJcM98PluDWzmPVb07S0YtJOiaTU+nPmjlcXEIgSeyZO7tJgKF2vr+Mdeni3XAogBdg5g7tis+lkn7d771Kx3Fg2NsjD9KkNFrqZba3B+dd5w852cuBUuTAom+shstfj+GXwzevID/B2mIkZQbeNpgD1wXk00Y79Bl8xiKBl2M4QQGT0eQ1TF5mh2+ywzdw+n6WQ+ybLoXf8Hs3SDiYnn34eH4CjcMu/GpMJ3gmuDZaCq6epzBFhMIIR/v7u5OnVQELY+PUJPtMUflWUiPNHJ0ty9g4ffk6HRHFauN8xYPiuyb/c6n5+Z03u8rx/x/TOn2RuA9qxWUoP40N9S8q54rxWlJyKVFb9dwkrAyd6IptNnPu8KNVbUvLcT6jclhIx+dqMC99xfVwnFtx1VDwMBWtuJVkzbIrKpLd0EUw0etICKyHXvdqOqFstX/6dsba9m/A0O80
+sidebar_class_name: "get api-method"
+info_path: api/solomon-harness
+custom_edit_url: null
+---
+
+import MethodEndpoint from "@theme/ApiExplorer/MethodEndpoint";
+import ParamsDetails from "@theme/ParamsDetails";
+import RequestSchema from "@theme/RequestSchema";
+import StatusCodes from "@theme/StatusCodes";
+import OperationTabs from "@theme/OperationTabs";
+import TabItem from "@theme/TabItem";
+import Heading from "@theme/Heading";
+import Translate from "@docusaurus/Translate";
+
+<Heading
+  as={"h1"}
+  className={"openapi__heading"}
+  children={"List Sessions V1"}
+>
+</Heading>
+
+<MethodEndpoint
+  method={"get"}
+  path={"/api/v1/sessions"}
+  context={"endpoint"}
+>
+  
+</MethodEndpoint>
+
+
+
+List the most recently updated sessions (Phase 1.6).
+
+Phase 1.6: requires ``sessions.read`` scope. The shape is
+the same as the legacy ``/api/sessions`` route so a client
+can swap endpoints by changing only the prefix.
+
+<Heading
+  id={"request"}
+  as={"h2"}
+  className={"openapi-tabs__heading"}
+>
+  <Translate id="theme.openapi.request.title">Request</Translate>
+</Heading>
+
+<ParamsDetails
+  {...require("./list-sessions-v-1-api-v-1-sessions-get.ParamsDetails.json")}
+>
+  
+</ParamsDetails>
+
+<RequestSchema
+  {...require("./list-sessions-v-1-api-v-1-sessions-get.RequestSchema.json")}
+>
+  
+</RequestSchema>
+
+<StatusCodes
+  {...require("./list-sessions-v-1-api-v-1-sessions-get.StatusCodes.json")}
+>
+  
+</StatusCodes>
+
+
+      

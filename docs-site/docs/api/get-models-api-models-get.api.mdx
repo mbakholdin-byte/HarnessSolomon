@@ -1,0 +1,70 @@
+---
+id: get-models-api-models-get
+title: "Get Models"
+description: "Return all catalog models with availability computed from env."
+sidebar_label: "Get Models"
+hide_title: true
+hide_table_of_contents: true
+api: eJztVU1z2zYQ/Ss7e7IVitZH7Na8eepWzkyUaCynOVgeCwJX5KYggAKgYo2qmf6I/sL+kg5IMbIyPfZYXgjhPS4Wb9+udhhE4TF7xMrkpDw+JZiTl45tYKMxw3sKtdMglAIpglCmgJYKXzmUIDaClVix4rAFaSpbB8ph7UwFpDfpQi/0PXlrtCfwpbAEZ5ZcG+I8W2gAgF37Algg5wvMYIFT1jwVL/3pKP1hgcmRYJ3ZcE6upVWsuRIvJ4zAHfowPgGk0YFeQsRGg/i8wg7XUBTR4Gr6Yy2Up5ODWbIunlnbuokxSMeDf8FNHb4RrjrCHhM0lpyIor7LMcOCwnOr47Ow3C0LCpigOwjmMdvhaDCIr9OizGspyft1raBTF5P2gjpEurBWsWyOu/ji4zc79LKkSsQVB6qa4CLPOXKEmrmYX+B4aLx/gmFrCTM0qy8kA+6/bQjnxBYTDBwUNQY5lHdCAaatNW4sd8sJBdzHJ8GKQmkOl8cErQglZnghLF8c3Jcg67WJmXXR50aZymi4E06Tj4xTJT5a0n1vaicJREE6sARfklLw959/wWdawfTXGZzNSuEJBufwBny96jdM8FsfqOrAUTp4M0qHkTLhcFevYHYPrAMVbdmOvFETRhpL/UJEu9/M3nXoML2KqFl5cpuuLw7Y23R43nRErxe/2JDzbDTrIuv14D0VQm5h2cjRW0JUx4Nru+/+l5/gx8vrt7C8JeuoLWxr1CUIncNyXmtPIYPPlCcwHsItSRgNRlcwGmeX19nlNUymD0soSeTkfAof6CtIxaSDh/ndx0/vb6H2dDh+M4wZnEmhjWYp1HkKcyLIjfQR7x8zT6sc1sZBKAkq7pQKXJFiTSkmeOBihsN0fJUOopOs8aESjSm1qGKZj975vsK7o63/n0X/1Sw6tHJM4cIqwTpWpXYqyt225SMKy5i8+lsojQ9xf7dbCU+fnNrv4/bvNbktZo9PCW6E45h3/LVPsPUaZo87/I22mOGNlGRj52+EqptR8v2U2j+9mhKTnx9wv/8HLYomtQ==
+sidebar_class_name: "get api-method"
+info_path: api/solomon-harness
+custom_edit_url: null
+---
+
+import MethodEndpoint from "@theme/ApiExplorer/MethodEndpoint";
+import ParamsDetails from "@theme/ParamsDetails";
+import RequestSchema from "@theme/RequestSchema";
+import StatusCodes from "@theme/StatusCodes";
+import OperationTabs from "@theme/OperationTabs";
+import TabItem from "@theme/TabItem";
+import Heading from "@theme/Heading";
+import Translate from "@docusaurus/Translate";
+
+<Heading
+  as={"h1"}
+  className={"openapi__heading"}
+  children={"Get Models"}
+>
+</Heading>
+
+<MethodEndpoint
+  method={"get"}
+  path={"/api/models"}
+  context={"endpoint"}
+>
+  
+</MethodEndpoint>
+
+
+
+Return all catalog models with availability computed from env.
+
+Response shape (per model):
+    \{
+      "id": "MiniMax-M2.7",
+      "provider": "minimax",
+      "tier": "T3",
+      "context": 200000,
+      "available": true|false,
+      "pricing_input": 0.30,
+      "pricing_output": 0.60,
+    \}
+
+<ParamsDetails>
+  
+</ParamsDetails>
+
+<RequestSchema
+  {...require("./get-models-api-models-get.RequestSchema.json")}
+>
+  
+</RequestSchema>
+
+<StatusCodes
+  {...require("./get-models-api-models-get.StatusCodes.json")}
+>
+  
+</StatusCodes>
+
+
+      

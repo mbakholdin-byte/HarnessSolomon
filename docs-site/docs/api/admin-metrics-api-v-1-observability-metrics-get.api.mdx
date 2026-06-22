@@ -1,0 +1,73 @@
+---
+id: admin-metrics-api-v-1-observability-metrics-get
+title: "Admin Metrics"
+description: "Return a JSON snapshot of all Prometheus counters + gauges."
+sidebar_label: "Admin Metrics"
+hide_title: true
+hide_table_of_contents: true
+api: eJztVttu20YQ/ZXBPtkOTVtKHDR8M+LEThHHguUkD3ZgrcgRuclyl9kZKlYEAv2IfmG/pNglqYsvQAv0pUWfJHDOzsyeOTOzS8EyJ5FcCzsldHM5VVrxYl9mpTIievTrl0hkSKlTFStrRCIukWtnQMKv44sPQEZWVFgGOwOpNYycLZELrAlSWxtGR/AMclnnSPGNuTFjWSJkkiVIgsnk9M0VHJTITqU0mcDOxnnGO4aZdaXk3QimNYOkG2OQGLM2+Mw6QEkKHaTWUF2GHGG6gJA7sLWaYjhTxDZ3siSQDm8M3qW6zjCDHS4QHo8IioALVA5SaaxRqdSAd5V1vBt7pip00gd7l4lEhGi33S1uZaVu54PbLTJXxhxZRKKSTpboyRHJ9VIYWaJIxExpRicioTzP32t0CxEJh99r5TATyUxqwkhQWmApRbIU0iwuZsEDLyrvgdgpk4smWn0xtdaieVDEi/BHanCY4x20kcEaaPMEnxHF8LlAA4QcgTV60RkJfhSWMGCglJwWGLiCSjKjl4ZDcEElmMVwMUfnVIa+2oTMyuQUF9Z+o3sUbbPYpjSZhCJzoQg8EUjs6WfF2t/ubctY85+6nq9epwhZc2Gd+hmk1gujQJkFmfxDyujJPN4K1niTQ6qsISTvc3h46H+2mR7XaYpEs1rDZQcWkUitYTQcMqkqrdLg8+Ar+TPLjTy7XOz0K6a+MWSWqbZ0I+d7jJWPza7GdZ59HDgOTX7eVe24UvBpABebpK+Mp8iiaZomEi+Gw4e3+CS1ykKO8MY56/7OFaqNRL1flkr7f4qxpIcAbdMt61+olDKMuZf5lybqv0nn5GKjE97btKtbJErKN7jt/K2h50gkcxQrZ09DAxlw5a2NV19VB0J687vwoYlEynePVbPHvfZc3vkKRA8waxFfB27a9DvchjrXJWor9DQVJ20JHgvWQ86urkYPHLb68LvA+qHeT2ouRCIOZKUO5oODrZbu91ZozJndZGZstS2tgTPpDJJH3B9QaPbJ1i5FkDkaVilQgVrDH7/9Dp9xCuefRrAzKiQhHO7CM6B6uh+QQAtiLHvjMD58NowHHnKq+KyewugSgmLaBbXGDYOb1Fa4n0u/Q49H73rrIH7prVvX620v4sFuWN17e/7EHB0pa5TJk709eI+5TBcwCQTtTfyQLKgbj3D59jX8cvTqBUxOsHLYKjQB384TkCaDybg2hJzAZ8wieD6AE0xheDh8CcPnydGr5OgVnJ5fTaAdeRTDB/wBqVZomGB8dvHx/QnUhF34+cBnsLNa2LsxjBEhsyl5+/4687jMusGLUKqeKVYlamXQb5gOKxIxiJ+/jA+93ipLXMrQ/t183ppA94u8XM+Q/x9NsVh1oz9wUGmpwrCqXZiWbZ9dC1kpz/7g/mtUhM4MNH+JRGGJPXq5nErCj043jf/cPpn8LM0UyaneWI1PVuZf/VR4gtNvuNh8Ts6lrj0obPu5dMpTI5Jrv066x4TnrD11nKZY8capB9vPe1lNydM3V6Jp/gTZIFOD
+sidebar_class_name: "get api-method"
+info_path: api/solomon-harness
+custom_edit_url: null
+---
+
+import MethodEndpoint from "@theme/ApiExplorer/MethodEndpoint";
+import ParamsDetails from "@theme/ParamsDetails";
+import RequestSchema from "@theme/RequestSchema";
+import StatusCodes from "@theme/StatusCodes";
+import OperationTabs from "@theme/OperationTabs";
+import TabItem from "@theme/TabItem";
+import Heading from "@theme/Heading";
+import Translate from "@docusaurus/Translate";
+
+<Heading
+  as={"h1"}
+  className={"openapi__heading"}
+  children={"Admin Metrics"}
+>
+</Heading>
+
+<MethodEndpoint
+  method={"get"}
+  path={"/api/v1/observability/metrics"}
+  context={"endpoint"}
+>
+  
+</MethodEndpoint>
+
+
+
+Return a JSON snapshot of all Prometheus counters + gauges.
+
+Same data as ``GET /metrics`` (Prometheus text format), but as
+nested JSON for easier consumption by admin tools. Histograms are
+excluded (the Prometheus text format is their canonical export).
+
+<Heading
+  id={"request"}
+  as={"h2"}
+  className={"openapi-tabs__heading"}
+>
+  <Translate id="theme.openapi.request.title">Request</Translate>
+</Heading>
+
+<ParamsDetails
+  {...require("./admin-metrics-api-v-1-observability-metrics-get.ParamsDetails.json")}
+>
+  
+</ParamsDetails>
+
+<RequestSchema
+  {...require("./admin-metrics-api-v-1-observability-metrics-get.RequestSchema.json")}
+>
+  
+</RequestSchema>
+
+<StatusCodes
+  {...require("./admin-metrics-api-v-1-observability-metrics-get.StatusCodes.json")}
+>
+  
+</StatusCodes>
+
+
+      

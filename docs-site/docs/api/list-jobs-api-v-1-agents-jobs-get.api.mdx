@@ -1,0 +1,71 @@
+---
+id: list-jobs-api-v-1-agents-jobs-get
+title: "List Jobs"
+description: "List the ``recent`` most recent jobs (default 20, newest first)."
+sidebar_label: "List Jobs"
+hide_title: true
+hide_table_of_contents: true
+api: eJy9V9tu2zgQ/ZUBn9pUUWy3DTZ6yzZt0iJpDDtpH9LAoqmxzUYiVZJy6xoC9iP2C/dLFkNKviStW2SBfTIszpwZzuXMcMkcn1qW3DA+ReUsu41YhlYYWTqpFUvYubQO3AwhTQ0KVC5NodDWQfgHn/XYwpMMJ7zKHfQ6ESj8itbBRBrrnsaf1CfVn3GL0I0PEzD4pZIGLaRpsBgb5FmaghW6xJhFTJdoOBl/m7GE5dK6EdkY8VKO5t1R0AqfpuhYxEpueIEODd1jyRQvkCUsuMciJukWXyo0CxaxxnzGkgnPLUbMihkWnCVL5hYl6UnlcIqGURz8nVjS60TMSZfT8SDA1nW0ssQrN9NGfvdOtwZnyDOPssMiV4vLife5sW2dkWrKCLv5oqo8Z/Xt2v7xlrGajgzaUiuLljB7nQ79bOdwWAmB1k6qHAaNMIuY0MrRXciTssyl8JgHny3pLB9GhhvDKYbSYeFtlYZy5WSwLLMN2eYma7/fZqyO2Fdt7pxBHO0W/tiIQdCyjrvK7lIYBokgaxxmI+5+IU9ScOxIZyKVtLOV0mPS8qaBaBCFtpv2VVWMfTG04q/ovI4YGqPNY22+9sp1xAqdYb7ruhdeoI4oY0W5MzL9IFFTWZX6sa4NSNfbG1UmfyxK38C1afweNTH8EVTbsr/Aeh8Q6og5bqboRmPDlZg91rsrDwJ/BpDgJGVid3SBcrFJLkxPJo22dVzcNa3xyHgNCWLdNuJuVGorAw38gOI2+kHcQb8V3XCvswKy8jv+BsiQxDYAujX9KVFldqTV6L9n8iSAwaWCraQGL6lq7Tb2iq/uR3Kb2HbZDFcbeOx6rajHn1G4LZK/IR7cJroVgW2x0zbtNJTRMkLb06uO3fBl9E6PByi0yYaBoe9P7HfDy/dgZ7xE0BPgkIicW5ukM24UWhs3c5cmaLzCSmMfkFX/hikBfvq/oxF/XEr40IVjrxw+nSINQorHi17v4dT5wHOZ+ZkCr5tb/fbI2R4tGTouPY38ZPbkWmyd/kb3rErt9n4hrMNwrkUzZyNW2OlOikVr+RTXVfVzUR8MuKLTmraFsgqM3E5K/4GGiPu2AbOqtfUMUQ6/uV/WI8UmuN/IbdTSOkWrYfKTUJyEFPzIWCtydnXVfwAY6qNAN9O0zrUbm5uxhB3wUh7MuwehIA+oIP36NNGb8RjqXBdawVko3wflflmi2re6MgLBI0kBdoZ5Dv/89Td8xDFcfOjDk7CDdp7CM7DVeN9Lgl1Yh0V72Is7z3pxl0ROpTurxtAfgK+TsJCu5XoehjbW/Sn3i0T/bXvajQ/pVI8tmjkfy1y6RXv2Iu6GjXhvjzTmaKzUSqppsrcH5zjlYgGpD8teChQlCwZdZRQM3ryCP14evYD0BEuDoS4TcKbCFLjKIB1WyqJL4CNmETzvwgkK6HV6h9B7nrw8Sl4ewenFVQphMbUxvMevIHLp23l4dnl9fgKVxcb8vEsePBFcaSUFz5/GMESETAtL5/trz+Mig4k2/olQyDZSThaYS+UX+kaWJawbPz+MO37aaesK7pu+2aJXTHM/wcs1a/z/j5Gm1qnRDsqcS08FzUoTqviG8VLSLbssah9REfO1fBuxmV8Eb9hyOeYWr01e1/Q5PEeInzJp+TjfeB7c4WLz9TLneUUe+HE050aSNEtuiLWaNwbBBK1jIbDc1HpAsoSyasbT11esrv8FYz28Bg==
+sidebar_class_name: "get api-method"
+info_path: api/solomon-harness
+custom_edit_url: null
+---
+
+import MethodEndpoint from "@theme/ApiExplorer/MethodEndpoint";
+import ParamsDetails from "@theme/ParamsDetails";
+import RequestSchema from "@theme/RequestSchema";
+import StatusCodes from "@theme/StatusCodes";
+import OperationTabs from "@theme/OperationTabs";
+import TabItem from "@theme/TabItem";
+import Heading from "@theme/Heading";
+import Translate from "@docusaurus/Translate";
+
+<Heading
+  as={"h1"}
+  className={"openapi__heading"}
+  children={"List Jobs"}
+>
+</Heading>
+
+<MethodEndpoint
+  method={"get"}
+  path={"/api/v1/agents/jobs"}
+  context={"endpoint"}
+>
+  
+</MethodEndpoint>
+
+
+
+List the ``recent`` most recent jobs (default 20, newest first).
+
+Phase 1.6: requires ``agents.read`` scope.
+
+<Heading
+  id={"request"}
+  as={"h2"}
+  className={"openapi-tabs__heading"}
+>
+  <Translate id="theme.openapi.request.title">Request</Translate>
+</Heading>
+
+<ParamsDetails
+  {...require("./list-jobs-api-v-1-agents-jobs-get.ParamsDetails.json")}
+>
+  
+</ParamsDetails>
+
+<RequestSchema
+  {...require("./list-jobs-api-v-1-agents-jobs-get.RequestSchema.json")}
+>
+  
+</RequestSchema>
+
+<StatusCodes
+  {...require("./list-jobs-api-v-1-agents-jobs-get.StatusCodes.json")}
+>
+  
+</StatusCodes>
+
+
+      

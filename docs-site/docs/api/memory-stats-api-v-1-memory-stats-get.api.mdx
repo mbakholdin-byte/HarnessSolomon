@@ -1,0 +1,74 @@
+---
+id: memory-stats-api-v-1-memory-stats-get
+title: "Memory Stats"
+description: "Return per-layer entry counts (cheap, best-effort)."
+sidebar_label: "Memory Stats"
+hide_title: true
+hide_table_of_contents: true
+api: eJztVttu2zgQ/ZUBn+JUli+5oNFb0WSTLJLGiN32IQksmhpbbClSJSmnriFgP2K/sF+yGMqO7brdXezzPlnmHM2MzwzP8ZJ5PnMseWAFFsYu2FPEMnTCytJLo1nC7tFXVkOJtq34Ai2g9nYBwlTaOzgQOfIyggk638bp1Fjfih/1ox7lCGl600vTBgrSgUWewdSaAnyOYHQ7k+4z/D68e3cDU6nwUR8YjaCkRqrXVGrFcOdztBCqU5LSWA9pyudcKj5RmIC3Fabpo/7+x5/AobQopAsp2lvNwrOpVAYWv1TSIuHQtnnGS4/2UadpAB200hQK9LnJ4GCQc4dwBFOjlHluV2UrZhEzJVpO5FxnLFnRNnaeezfmpRzPe+Odsxl6FrGSW16gR0tcL5nmBbKE8crnxspvIR2LmCTCc+QZWhaxVacZS6ZcOYyYEzkWnCVLxvXibhoy+UVJmZy3Us9YHb2c6EopVj9FzEuv6ODNTrGaQhZdabRDRzn73S597E5/WAmBzk0rBfcrMIuYMNqj9qGTslRShJydT47eWW71WVpiy8umAp+h9mOZ0fNu31tdEgauM1ZHrJl4eDPLJJXgarCVkcYerTOZyScUfivTTfN2Xe9DNsw+bJp6qbfF2XhIM9z65bvspOnlxQg6vJSdea/TjL0Txp6msCY3ZnVNTRz3+/v8fuBKZoE9uLDW2P9OboaeS0VP0mPh9gHKiJ3ov9ghqT3O0LL6aUMit5Yvtmk2YrVRESvc7O9me4vO8Rmyl2S/hgYyYETRmu5FWQVC1uHrcFBHTPivW2n2duAtcfnV/+MSEDdN+yvc1g5sRtRM6NdUnDcj+FmxNeRqNBrsJWz2o1EdlrC1YvicJexnyxWUYmq2CRkaZQqj4Ypbjc7tbepdibrtTGUFQth4KcDlqBSQZn7ECdx+GKwVr9uCV+CqSTsgwS2cx2Id7MfdV/24R5BL6a+qCQzuISxKo4obXD+kEabE9ox7zODN4Hod7cWnFDUTh3bOJ1JJv1jHjuNe4yGHh/TGHK2TRks9Sw4P4QZnXCwgDbwcpkA0kSkEk7r/7S28Pjk7hvQcyQVCQyt7AK4zSIeVdugT+IhZBEc9OEcB/W7/FPpHyclZcnIGl7ejFBoNdjG8w2cQSiJ53fDq7v3NOVQOV+XnPergQHBttBRctWIYIkJmhKN4e9N5XGQwNTb4XiHXTHlZIJkducoKyxLWi49O4y6tWWmcL3i49SvDuA1bAMPVFuzMeLlRjv9N+0fTXt1HEoNOqbgMclXZoJfNTXtgvJQ0iB4pQfNnKGLNfXuKWG6cJ9ByOeEO31tV13T8pUK7YMnDU8Tm3Er6ZfStjtY2Tvr6GRfkbEJgSTd7zlUV5ONHdSdLflGBy4sRq+u/AO3DThQ=
+sidebar_class_name: "get api-method"
+info_path: api/solomon-harness
+custom_edit_url: null
+---
+
+import MethodEndpoint from "@theme/ApiExplorer/MethodEndpoint";
+import ParamsDetails from "@theme/ParamsDetails";
+import RequestSchema from "@theme/RequestSchema";
+import StatusCodes from "@theme/StatusCodes";
+import OperationTabs from "@theme/OperationTabs";
+import TabItem from "@theme/TabItem";
+import Heading from "@theme/Heading";
+import Translate from "@docusaurus/Translate";
+
+<Heading
+  as={"h1"}
+  className={"openapi__heading"}
+  children={"Memory Stats"}
+>
+</Heading>
+
+<MethodEndpoint
+  method={"get"}
+  path={"/api/v1/memory/stats"}
+  context={"endpoint"}
+>
+  
+</MethodEndpoint>
+
+
+
+Return per-layer entry counts (cheap, best-effort).
+
+The ``L1`` count is read from the on-disk JSONL file
+(one line per entry). Other layers report ``available: true``
+— a precise per-entry count would require a per-adapter
+``count()`` method (Phase 3 follow-up).
+
+<Heading
+  id={"request"}
+  as={"h2"}
+  className={"openapi-tabs__heading"}
+>
+  <Translate id="theme.openapi.request.title">Request</Translate>
+</Heading>
+
+<ParamsDetails
+  {...require("./memory-stats-api-v-1-memory-stats-get.ParamsDetails.json")}
+>
+  
+</ParamsDetails>
+
+<RequestSchema
+  {...require("./memory-stats-api-v-1-memory-stats-get.RequestSchema.json")}
+>
+  
+</RequestSchema>
+
+<StatusCodes
+  {...require("./memory-stats-api-v-1-memory-stats-get.StatusCodes.json")}
+>
+  
+</StatusCodes>
+
+
+      

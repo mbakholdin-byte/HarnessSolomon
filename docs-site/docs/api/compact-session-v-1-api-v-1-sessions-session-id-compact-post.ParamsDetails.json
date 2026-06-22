@@ -1,0 +1,1 @@
+{"parameters":[{"name":"session_id","in":"path","required":true,"schema":{"type":"string","title":"Session Id"}},{"name":"bypass_cache","in":"query","required":false,"schema":{"type":"boolean","default":false,"title":"Bypass Cache"}},{"name":"authorization","in":"header","required":false,"schema":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Authorization"}}]}

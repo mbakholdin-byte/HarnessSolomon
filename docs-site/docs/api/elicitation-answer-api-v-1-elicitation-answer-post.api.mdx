@@ -1,0 +1,78 @@
+---
+id: elicitation-answer-api-v-1-elicitation-answer-post
+title: "Elicitation Answer"
+description: "Submit an answer for a pending question."
+sidebar_label: "Elicitation Answer"
+hide_title: true
+hide_table_of_contents: true
+api: eJztV1FT20YQ/is791IgsrANYRq90UACM6S4GJIHzKCztNgXTnfK3QlQPZ7pj+gv7C/p7EmyZDBtk+fygn27t7v37e636wVzfGZZdM1QikQ47oRWPanVLNdSspuApWgTI3I6ZxEbF9NMOOAKuLKPaOBOG+CQo0qFmsG3Ai1phhM1URfoCqNsNFEAAHG8mDCeJJg7TCcsgktTYAAT1ty5Ff54wsIwnLBlHINWYIskQWu9vbHjrrCQ6BQboz0Y9vtRE0tjPYC7whUGwaDV8gHTsNHe7+9FQK/r0fMgFZZP5Zp8P4JOQFCoe6UfFdArpUGeliujsDU1+h5NWHmvTAAY/2pM4QOXFrdDFjCdo/HAnqYs6gJ9W1295bm4fRjcbpDk2joWsJwbnqFDQ6laMMUzZBHjhZtrI373N1jABGVojjxFwwJm8FshDKYsuqNIAmaTOWacRQvGVXl+5y25MidL1hmhZmwZrE5UISVb3gTMCSfp4HDN2ZJE5AGt+0WnJVltHTpKLUu0cqicd5jnUiT+6u5XS5W06ISTG0LICbT+HK2t0P/RUMeVBThN2fP6PfcfuITaC9hE5whbQt1pk/Fa+Ncff0KVXBAWcqOpBnszqadcbodsGXSLlqJcjy1gGX86QzVzcxYd7AcsE6r5OmjD/K22sSnOyzm+aCqqx1V1TUvYpRr20VTFsjGQ1nO/k8tKf5PTwqL5ydYdFcJxlrsSKnOEBZdSP1LtO4PcYQrcAgeDXNZXCJ5l0MShp18xcWvFeL2G3Sr2TvrOtJqNtJSvREnlBlXxePaJ49H5+BJ2eS52Hwa7nSbarWzHsaePOG4rK47pMTrv5NvNscn5PZZ2hbqFaUmXO1HHMWytFwVcXZ0ewRyftgOweq24KuAmar3CtJJlCKeOoK5Zyz/mcHQKtswydKaER+HmFNdEtZT1rUBTwooPCG3C26DNtbJVBw37ffr3nLk9k94VEi5qZfYdPfo8oTxNRfWWUad7q8ZvEtn4geM2J1BlFQ5zAZ8HmyQjorzqVfvD4cuHfOZSpNWNY2O0+Z5XrDNNio4LSZ+Ew8y+VJA6WZP+BzISyuEMDVvetF3AjeEl6xZ4UrNowDI729S3jeontJbPkK2Mva7qwYBLki5pFuSFB6QRn/qDZcAS97QpoY3ee8Lyyf1rFxM2Vfi1XqeD2xRVGXodiqMqBZucNSonl5ejFwar+sjQzTXN1NWYJKJjr1MBCxgVxUU7uI6feJZLfD54WnjXmL49bii3LQFGHd5FfKylzrSCE24UWrthFqHqWV2YBIHPUDmRgJ2jrPjoC07h0+cRbI3m3CL0t+EN2GLa85pgS+swa4TDsP9mGA5I5aNwJ8UURhfgK7HaO1q9oTdDM6838/xNhFNLB+EBSfXUonngUyGFKxvZfjjY9iy6s0M3HtAQVELNop0dOMMZT0qIPe47MVAabD2q4OLDe/j57bt9iI8wN1hVfgTEFDFwlUI8LpRFF8EX2tz2BnCECQz7wwMY7kVv30Vv38HHT5cxVIuNDeFXfIREClTOwvjk/OrsiKZW7f5hQBFsJVxpJRIa1zBGhFQnluS9NvIwqyiXiD8TDVJOZCiFQtrbal0WsUG4dxD2KclUaRn3tFJvYS8p7HmmFy1B/b9A/8gCXVMD8dJuLrnwzFkYT91Vz18zngtK2YAF3Q17bcGYE0tE12yxmHKLV0Yul3TsRyqLrm8C9sCNoAfRt2XQ7NJE+PdYNuSoXM+zLKnLwrPa86FDA6G6cegh/Ufdmw6R0SrDAjatV+pMp3TH8EdiX/7IIuZ/T/jFxO/cdLZgkqtZQXMiYpVN+vsb+jjF8g==
+sidebar_class_name: "post api-method"
+info_path: api/solomon-harness
+custom_edit_url: null
+---
+
+import MethodEndpoint from "@theme/ApiExplorer/MethodEndpoint";
+import ParamsDetails from "@theme/ParamsDetails";
+import RequestSchema from "@theme/RequestSchema";
+import StatusCodes from "@theme/StatusCodes";
+import OperationTabs from "@theme/OperationTabs";
+import TabItem from "@theme/TabItem";
+import Heading from "@theme/Heading";
+import Translate from "@docusaurus/Translate";
+
+<Heading
+  as={"h1"}
+  className={"openapi__heading"}
+  children={"Elicitation Answer"}
+>
+</Heading>
+
+<MethodEndpoint
+  method={"post"}
+  path={"/api/v1/elicitation/answer"}
+  context={"endpoint"}
+>
+  
+</MethodEndpoint>
+
+
+
+Submit an answer for a pending question.
+
+Returns:
+    ``{"accepted": True, "question_id": "..."}`` on success.
+
+Status codes:
+    - 200: answer accepted, future resolved.
+    - 403: long-poll disabled.
+    - 404: question_id unknown or already resolved (broker.answer
+      returned False).
+
+<Heading
+  id={"request"}
+  as={"h2"}
+  className={"openapi-tabs__heading"}
+>
+  <Translate id="theme.openapi.request.title">Request</Translate>
+</Heading>
+
+<ParamsDetails
+  {...require("./elicitation-answer-api-v-1-elicitation-answer-post.ParamsDetails.json")}
+>
+  
+</ParamsDetails>
+
+<RequestSchema
+  {...require("./elicitation-answer-api-v-1-elicitation-answer-post.RequestSchema.json")}
+>
+  
+</RequestSchema>
+
+<StatusCodes
+  {...require("./elicitation-answer-api-v-1-elicitation-answer-post.StatusCodes.json")}
+>
+  
+</StatusCodes>
+
+
+      

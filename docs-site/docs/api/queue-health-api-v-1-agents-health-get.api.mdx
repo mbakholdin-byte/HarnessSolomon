@@ -1,0 +1,79 @@
+---
+id: queue-health-api-v-1-agents-health-get
+title: "Queue Health"
+description: "Ops health endpoint: per-repo lock stats + recent job count."
+sidebar_label: "Queue Health"
+hide_title: true
+hide_table_of_contents: true
+api: eJztVsFy2zYQ/ZUdXGI7FG0piadmT5k4jZNxYtVSkoPtESFwJcIGAQQA5SgazvQj+oX9ks6ClCXHTtvptT1JxC52F28f3mLFAp97ll0wPkcdPLtKWIFeOGmDNJpl7Mx6KJGrUALqwhqpQwYWXc+hNaCMuAEfePDwFBwK1AGuzRSEqXVIL/WlHpe47cUdgkNewMyZCvKcW5uSBdMK3RwnX2qsMc/htkR9qfmCS8WnCn+GUGKXoHeXAKTfCkYePhiHKYxLvNTh1sR0UhdoURdUmzfAoZLeSz2HmAsKg14/CXAjlaIYl7o7rkNvjfYYjzEsuUfop4cZOPxSS4eeqo+gpVRDnoMXxiLsyPDEA4+FXeo1ZglwXcAtwg2ijaXyOpTgazfjAqHWcmZcBVw4431bxqIPmlfoLTn88dvvYCw6HozzcFsauOU6AIdZrdSyZyzqrk2bnCC4hlIGyPN9buV+a4/gSkHnq7jUHhTOuWhD7KYsYW0aafTbgmUsgjRpt064lZNFf9Iee704x8ASZrnjFQZ0xKYVo8pZxuiQxslvMR5LmCRKlcgLdCxhHZIFy2ZceUyYFyVWnGUrxvXybBYjhaWlSD44qeesSe5WdK0Ua64SFmRQtPDyXrKGTOseeoo5ODign/v8HtVCoPezWsF558wSJowOqEOsxFolRYy5f+1pz2qrTusIriDbDC1YRPf4yYtC0j6uhvfcugNIHXCOjjXJesVMr1EQmusj/RopehoDNgm7NtNJpPjE8lBuherQ2Wx8Z6YwIk8YkmdDUNDlmVCIeHkeKWSz/by9yhTlVXRuHily076Leyd/UOcjybfaNomHPIlkYt/Lz7vR2QfwJbcIZhbvTdSJXnt3vxOmlDUNFfp8MHjY6E9cySK2EV47Z9y/73KBgUtF/2TAyj90UEbcs/4DMt9x4WoDNHeOL7eacmpER+2EVX7+V+1/j97zOW6o9WPXCAaMydrQBbV1S43O/DYuNAkT4etWmAdMfUVYfv17ohA2bfmd3xYTNi1qO/RjKI7bFjyWbO1yMh4PHwRs+VFhKA2J21q66C6xqJGL/n6rbp1aRs2amW1ERkaZymg44U6j9w8oe2ZR97ypnUCIsaQAX6JSUcQ/4xTefxrCTjtRDnbhKfh62oue4Jc+YLU2DtKDp4O0Ty5vZDippzA8h8iUVqA3foMYhuZPb84DFvBy+HZt7aeHZDVTj27Bp1LJsFzbnqf93Tjf9vZoxwKdl0ZLPc/29uA0DgZoh8deDoQTDdxQOw3nv7yCn14cPYf8GK3DlpkZBFdjHmddPqq1x5DBZywSeNaHYxQwOBgcwuBZ9uIoe3EEb96Pc2ingU/hA96CUJLAh9HJ2cfTY6g9dukXfapgR3BttBRc7aYwQhrewpO9t6k8rQqYGddqhVwjFWSFSmqkAdf5soz102eH6QHxzBofKh6vfTe6Wul9XJZWG+n4/4H0n3sgdYpDcrdvFZdRkGsXJ0KrJReMW0lM67Nk/bJOWKcoVwkrjQ/ktVpNucePTjUNLX+p0S1ZdnGVsAV3kvpKX02yfjLRCLnBJb11hEBL4rXgqo4K+f0Ao+fPndC9eT1mTfMny6onyg==
+sidebar_class_name: "get api-method"
+info_path: api/solomon-harness
+custom_edit_url: null
+---
+
+import MethodEndpoint from "@theme/ApiExplorer/MethodEndpoint";
+import ParamsDetails from "@theme/ParamsDetails";
+import RequestSchema from "@theme/RequestSchema";
+import StatusCodes from "@theme/StatusCodes";
+import OperationTabs from "@theme/OperationTabs";
+import TabItem from "@theme/TabItem";
+import Heading from "@theme/Heading";
+import Translate from "@docusaurus/Translate";
+
+<Heading
+  as={"h1"}
+  className={"openapi__heading"}
+  children={"Queue Health"}
+>
+</Heading>
+
+<MethodEndpoint
+  method={"get"}
+  path={"/api/v1/agents/health"}
+  context={"endpoint"}
+>
+  
+</MethodEndpoint>
+
+
+
+Ops health endpoint: per-repo lock stats + recent job count.
+
+The lock stats are read from ``app.state.merge_queue`` when
+available; the recent-job count is read from the store. The
+two are independent so a missing queue doesn't kill the
+health response.
+
+Phase 1.6: requires ``agents.read`` scope (it's a read
+endpoint, and we keep the auth surface uniform across the
+v1 namespace — operators who want a fully-open health
+endpoint can hit ``/api/health`` which remains legacy-open).
+
+<Heading
+  id={"request"}
+  as={"h2"}
+  className={"openapi-tabs__heading"}
+>
+  <Translate id="theme.openapi.request.title">Request</Translate>
+</Heading>
+
+<ParamsDetails
+  {...require("./queue-health-api-v-1-agents-health-get.ParamsDetails.json")}
+>
+  
+</ParamsDetails>
+
+<RequestSchema
+  {...require("./queue-health-api-v-1-agents-health-get.RequestSchema.json")}
+>
+  
+</RequestSchema>
+
+<StatusCodes
+  {...require("./queue-health-api-v-1-agents-health-get.StatusCodes.json")}
+>
+  
+</StatusCodes>
+
+
+      

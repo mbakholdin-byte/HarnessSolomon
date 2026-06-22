@@ -1,0 +1,73 @@
+---
+id: elicitation-history-api-v-1-elicitation-history-get
+title: "Elicitation History"
+description: "Return the persisted Elicitation decision history."
+sidebar_label: "Elicitation History"
+hide_title: true
+hide_table_of_contents: true
+api: eJzlVs1y2zYQfpUdnGyHokklzjTsKROndmbsxrUc52B7LAhckUhAgAFAxRoNZ/oQfcI+SWdB0pIju0l67UkUdvHt7rd/WDHPC8eyK4ZKCum5l0aPSum8sUt2E7EcnbCypmOWsXP0jdXgS4QarZPOYw5v1zchRyEdffQQ8bW+1ufIcwe5tCi8WsLcmipAuJJbzGE65QVqP/pkZi7OZ9MpTP44kR5hLhXC33/+Bdpc65k1n9GC1B4tF2QshosSoT+v+BJmCF+t9FIXIIwWjbWovVr+2uNd65LrXKELxpURn6UuIuA6B9NYsMFLbskvY/1IyQXmMYuYqdGG6N7lLNvk6bYP8pbX8naR3j4mKtCziNXc8go9WqJ6xTSvkGXMoSOuWMQkkfulQbtkEbP4pZEWc5bNuXIYMSdKrDjLVozr5ft5gPDLOkB4K3XB2uj+RDdKsXYrc+/DB1fQG72VOfHr0cIO3nHhoeJelLsUsJdeEdSk96/972DkWB+tkpX0PxFrHw8lvEDLIlbxO1k1FcvSJEmSiFVS9/+/9e+U34E1Xx14A7Yr2Z00jtPkNkmSEGKOc94oH7DWAZ8EF7fC/R4csW3R1UY7dOT6OEno5yHKpBECnZs3Cs57ZRYxYbRH7UNy61pJEcpn/5OjO6ttOri1nIiTHiu3cW5mn1AQvTzPZZedM0uV6yX55G2D7TrQwYEHvXvclSy8riVcpo+KjtCztm3biL0Yj7dDvORK5t2Nt9Ya+zPx1RveEq7nUtHXfaAPFZQRD6Q/0BlDJbU3xMRDOu8rwHQOUhFUrtgguMdbq56ic7xAdg/2tGogAy5I2lID1E0gZBC/CwdtxIS/eyylg94b4vKOMhBt6awb6Spw07nf692sMdYp6jL0NBWHXQoeMzaoHF9cnG0BdvVRoS8NzcthAPqSZWyf13J/ke5vTMr9YdkQMXOzycvEKFNR9XGr0Tm2PYZQj5xprEAIK0QKcCUqFZbGR5zB6eUZ7JyV3CEku/AMXDMbBU1wS+exGoTjOHk2jlNSOZL+uJnB2XlYNUU3+dd64wAjTI2jgtP2e332bpCm8UuSmplDu+AzqaRfDrIXcbobluHeHt1Y0PY0Wuoi29uDEyy4WMI00LM3BWLLDaPm/Lc38MvBqxcwPcTaYlefGVBHT8Pymk4a7dBn8BHzCJ6ncIgCxsn4JYyfZwevsoNXcHR6MYUSeY7WxfA7fgWhJGrvYHL8/sPJITQOe/OLlDzYEVwbLQVXuzFMECE3wpF8tPY8rnKYGxu2aSUHprysUEmNNGV7XZaxNH7+Mk6o2mrjfMVD8/eL4ZFB822qV+s58v98g/QdSO2/Xysuw4BqbJiQXW9dMV5L4jxl0eYjhUVs4zlXGudJd7WacYcfrGpbOu7WMU3PXDo+UxsL+ck8/NSL4jH3P+PywSNowVVDWmFm/7gf31/2/2J9eJSsbd/QHyvJOMuuaFV0fRPY6S69FgLrzVtbm41Q7ifg0dsL1rb/ABhd7Oo=
+sidebar_class_name: "get api-method"
+info_path: api/solomon-harness
+custom_edit_url: null
+---
+
+import MethodEndpoint from "@theme/ApiExplorer/MethodEndpoint";
+import ParamsDetails from "@theme/ParamsDetails";
+import RequestSchema from "@theme/RequestSchema";
+import StatusCodes from "@theme/StatusCodes";
+import OperationTabs from "@theme/OperationTabs";
+import TabItem from "@theme/TabItem";
+import Heading from "@theme/Heading";
+import Translate from "@docusaurus/Translate";
+
+<Heading
+  as={"h1"}
+  className={"openapi__heading"}
+  children={"Elicitation History"}
+>
+</Heading>
+
+<MethodEndpoint
+  method={"get"}
+  path={"/api/v1/elicitation/history"}
+  context={"endpoint"}
+>
+  
+</MethodEndpoint>
+
+
+
+Return the persisted Elicitation decision history.
+
+Reads directly from the shared ``agent-jobs.db`` SQLite file — no
+broker interaction. The broker may be writing concurrently; SQLite
+handles the locking, and our reads are short-lived.
+
+<Heading
+  id={"request"}
+  as={"h2"}
+  className={"openapi-tabs__heading"}
+>
+  <Translate id="theme.openapi.request.title">Request</Translate>
+</Heading>
+
+<ParamsDetails
+  {...require("./elicitation-history-api-v-1-elicitation-history-get.ParamsDetails.json")}
+>
+  
+</ParamsDetails>
+
+<RequestSchema
+  {...require("./elicitation-history-api-v-1-elicitation-history-get.RequestSchema.json")}
+>
+  
+</RequestSchema>
+
+<StatusCodes
+  {...require("./elicitation-history-api-v-1-elicitation-history-get.StatusCodes.json")}
+>
+  
+</StatusCodes>
+
+
+      

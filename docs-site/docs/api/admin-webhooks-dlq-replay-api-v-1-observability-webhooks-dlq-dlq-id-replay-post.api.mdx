@@ -1,0 +1,83 @@
+---
+id: admin-webhooks-dlq-replay-api-v-1-observability-webhooks-dlq-dlq-id-replay-post
+title: "Admin Webhooks Dlq Replay"
+description: "Replay a single DLQ entry (Phase 4.13B Drift 2)."
+sidebar_label: "Admin Webhooks Dlq Replay"
+hide_title: true
+hide_table_of_contents: true
+api: eJztV81uGzcQfpUBT7azliw5CZoFisKJ0tiobamynRwsQ0stRxITilzzx7YqLNCH6BP2SYrh7lqSHQPtpaecJA3n95vhN9SKeT5zLL1mZuLQ3vGJVNIv97lYSM2S70pvEibQ5VYWXhrNUjbEQvElcHBSzxRC7/R3QO3tEnYGc+4QXrc6h++hZ+XUQ3e3NdIjPcR9h1o48HMEY+VMaq6g4EtluABvovxqeAqBnMZfH66Gw4/nlyPt5EyT0GFu0cPO3GgTLEmyrJKN79A6aXSWgdFViOAnJmgx0rnRUzkDa+53W9DX4EKeo3NJVKvSlg4W3H5DAVlmY3Eoxtxn2UhzLeBeKgXaeOBFgdyCrEIInPKgPCjpPOxk2S9S5yoIHDcufh7pKVcOs6yKPOVSBYtPIiucegjam5DPUcBOzL5Ay72xI51zDRa9XTYw3gZp0UGWXeSmwNaXj++P+/3fxke9s5PzLIOdRfCc+pTEjL8G58EiF425D1a7dKQBALJsNWJC3Y6lGLEUpEhgxJrkSTIxRpHMee6DG+dGYFTUvsyyVuOkscgyKufSBoT7OVYYWaSuUwXBahTQfXiAo/MenVXmzhuLDfrRwtxD47FFExmhkEafCJayOJHje5zMjfnmxpR8pTzmhRzfdcZbA7ytOK5KHTcWhXGeJazgli/Qo6VrsWKaL5ClNSwsYZImvuB+zhJmK/QFS70NmDCXz3HBWbpiflmQldQeZ2hZwrz0iiQ9dQsngpVl8uiaBz83Vv4Rq2oizJGLaLiOEWdnMwjXy/40JlmHc55uASPftUQHpVh5s45/tBWspCOLrjDaoSOf3YMD+ti+4BfVFZkGBcNamSUsN9qj9jGTolAyjz7bXx3ZrJ6DYSZfMSeEuRCSVLkaWGqnlxS7grDJs4kDR9Rh+FI3Dgi/mm+OCgmfO9Df7PC2IlRoQ2MxoA6XZVkm7HW3+7zOz1xJEauAj9Ya+1+KLDZKIb+eS0XfpMeFe66gTL51+i962QxTeVMmjYxby5cb43Vq8rqzCVu42Qb6tb+16hk6x2fIHp29rBrBgEs6LWk+ixABaY5PoqBMWO4fvtfvRu8DYflAHUie6azH/DpiU6Vf623M77pFVYdehqJXteB7wRqV48vLwTOH1Xws0M8NMcwjK/g5S1mbF7J912lv0Uq7oZW2ULftVUUVZbuilXihp2YTrwujzMJoOOZWo3Ps6T7tF6j3nQk2R+Az1F7m4OaoFPz951804XD2edDs1oNdeAUuTPajJril87hoDrutg1fdVodUPkl/HCYwGEKco4pD13rd6IZWyP6MexRwNDhpTjutt3S6VfPGaq9Wyd4eWdR7V+pZurcHpzjj+RKyiNpeBgSiq8kfhr9+gJ/evHsNWQ8Li9XcpkA0kAGt2ewiaIc+hS8oEjjsQA9z6B5030L3MH3zLn3zDj6dXWZQUaVrwTneQ64kau/g4rh/ddqD4LAOf9ehDHZyro2WOVe7LbhABGFyR+f768xbCwFTY+P2WcgGKS8XqKRG2kG1LktZp3X4tnVAU0hzsuCRFGpef5G5njZ8tWaZH2+pH2+p/+8tVfMikXK7UFzGtRFs3FsV4V0zXkia+M7TPwMsYQ3t0TyrW5aw9PGVVHPfTcLmxJ/pNVutJtzhlVVlSeLbgHbJ0uubhN1xK/mEmPF6xYR09H393HnxpuzU/RK78FIpzWbQlO0dV4F+sYR9w+X6SRfXaf3cogyqw6M8x8JvmD3b/vR0etwSg/7FJSvLfwCBWZdY
+sidebar_class_name: "post api-method"
+info_path: api/solomon-harness
+custom_edit_url: null
+---
+
+import MethodEndpoint from "@theme/ApiExplorer/MethodEndpoint";
+import ParamsDetails from "@theme/ParamsDetails";
+import RequestSchema from "@theme/RequestSchema";
+import StatusCodes from "@theme/StatusCodes";
+import OperationTabs from "@theme/OperationTabs";
+import TabItem from "@theme/TabItem";
+import Heading from "@theme/Heading";
+import Translate from "@docusaurus/Translate";
+
+<Heading
+  as={"h1"}
+  className={"openapi__heading"}
+  children={"Admin Webhooks Dlq Replay"}
+>
+</Heading>
+
+<MethodEndpoint
+  method={"post"}
+  path={"/api/v1/observability/webhooks/dlq/{dlq_id}/replay"}
+  context={"endpoint"}
+>
+  
+</MethodEndpoint>
+
+
+
+Replay a single DLQ entry (Phase 4.13B Drift 2).
+
+Re-sends the original payload to the URL using the CURRENT
+signing secret (honouring ``secret_version`` on the outbound
+config row). On success, the entry is marked ``replayed_at``
+and will not appear in the default list (``?include_replayed=
+false``). On failure, the entry is left untouched (the operator
+can retry).
+
+Requires ``Scope.WEBHOOK_ADMIN`` (mutation, not just read).
+
+Returns:
+    ``{"dlq_id": id, "replayed": bool, "status_code": int}``.
+    ``replayed`` is True when the resend returned 2xx AND the
+    store marked the row replayed.
+
+<Heading
+  id={"request"}
+  as={"h2"}
+  className={"openapi-tabs__heading"}
+>
+  <Translate id="theme.openapi.request.title">Request</Translate>
+</Heading>
+
+<ParamsDetails
+  {...require("./admin-webhooks-dlq-replay-api-v-1-observability-webhooks-dlq-dlq-id-replay-post.ParamsDetails.json")}
+>
+  
+</ParamsDetails>
+
+<RequestSchema
+  {...require("./admin-webhooks-dlq-replay-api-v-1-observability-webhooks-dlq-dlq-id-replay-post.RequestSchema.json")}
+>
+  
+</RequestSchema>
+
+<StatusCodes
+  {...require("./admin-webhooks-dlq-replay-api-v-1-observability-webhooks-dlq-dlq-id-replay-post.StatusCodes.json")}
+>
+  
+</StatusCodes>
+
+
+      
