@@ -5,6 +5,8 @@ import path from 'path';
 
 export default defineConfig({
   plugins: [react()],
+  // When mounted at /ui in FastAPI, assets must be served from /ui/assets/...
+  base: "/ui/",
   resolve: {
     alias: {
       '@': path.resolve(__dirname, 'src'),

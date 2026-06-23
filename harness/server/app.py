@@ -1110,7 +1110,7 @@ def create_app() -> FastAPI:
             _index_path = _web_dist / "index.html"
             return FileResponse(_index_path)
 
-        print(f"[harness] web_ui: mounted {_prefix} → {_web_dist}")
+        print(f"[harness] web_ui: mounted {_prefix} -> {_web_dist}")
     else:
         if not settings.web_ui_enabled:
             print("[harness] web_ui: not mounted (web_ui_enabled=False)")

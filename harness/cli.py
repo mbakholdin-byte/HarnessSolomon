@@ -430,7 +430,7 @@ def _cmd_context_plan(args: argparse.Namespace) -> int:
         if updated is None:
             print(f"error: no plan_step with id={args.step_id}", file=sys.stderr)
             return 1
-        print(f"marked step {updated.id} → {updated.status.value}")
+        print(f"marked step {updated.id} -> {updated.status.value}")
         return 0
 
     try:
