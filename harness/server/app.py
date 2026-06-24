@@ -177,11 +177,19 @@ async def lifespan(app: FastAPI):
             unified_memory = None
             try:
                 from harness.memory.unified import UnifiedMemory
+                # UnifiedMemory takes per-layer storage dirs, not a
+                # ``settings=`` kwarg. Derive them from
+                # ``settings.db_path.parent / 'memory' / <layer>`` so
+                # the four adapters (hmem / mem0 / hybrid / file)
+                # share a single root but live in distinct subdirs.
+                _mem_root = settings.db_path.parent / "memory"
                 unified_memory = UnifiedMemory(
-                    settings=settings,
-                    db_path=settings.db_path.parent / "memory.db",
+                    hmem_dir=_mem_root / "hmem",
+                    mem0_dir=_mem_root / "mem0",
+                    hybrid_dir=_mem_root / "hybrid",
+                    file_dir=_mem_root / "file",
                 )
-                print(f"[harness] unified_memory: {settings.db_path.parent / 'memory.db'}")
+                print(f"[harness] unified_memory: {_mem_root}")
             except Exception as mem_exc:
                 print(
                     f"[harness] unified_memory disabled (init failed: "

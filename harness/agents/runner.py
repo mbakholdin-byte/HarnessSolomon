@@ -16,6 +16,7 @@ imports in this file to enforce the design constraint
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable
@@ -390,6 +391,9 @@ class AgentRunner:
         # Phase 4.4+ v1.14.0: SubagentStart — fires before any work.
         # ``block`` is respected (returns early with allow-result);
         # ``modify`` is currently logged-only (no payload mutation).
+        # Capture monotonic start time so SubagentStop can report
+        # ``duration_ms`` without re-deriving it.
+        _run_started_at = time.monotonic()
         await safe_fire(
             "SubagentStart",
             session_id=session_id or "",
@@ -397,6 +401,11 @@ class AgentRunner:
             payload={
                 "agent_name": spec.name,
                 "model": model_override or spec.model,
+                # ``SubagentStartPayload`` (harness/hooks/schemas.py)
+                # requires ``prompt`` (the full prompt text). The
+                # shorter ``prompt_preview`` is kept for backward
+                # compatibility with hook consumers that rely on it.
+                "prompt": prompt,
                 "prompt_preview": prompt[:200],
                 "iterations_max": spec.max_iterations,
             },
@@ -527,12 +536,19 @@ class AgentRunner:
         # Phase 4.4+ v1.14.0: SubagentStop. Best-effort — block cannot
         # un-run a subagent, but the result IS observable. We fire
         # AFTER setting ``error`` so the payload reflects final state.
+        # ``SubagentStopPayload`` (harness/hooks/schemas.py) requires
+        # ``agent_name``, ``result`` (the final LLM text, truncated
+        # to 1 KB so the audit log stays bounded), and
+        # ``duration_ms`` (monotonic ms since SubagentStart).
+        _duration_ms = (time.monotonic() - _run_started_at) * 1000.0
         await safe_fire(
             "SubagentStop",
             session_id=session_id or "",
             agent_id=spec.name,
             payload={
                 "agent_name": spec.name,
+                "result": (last_text or "")[:1000],
+                "duration_ms": _duration_ms,
                 "status": "error" if error else "ok",
                 "iterations": iterations,
                 "denied_tool_calls": denied_count,
