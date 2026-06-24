@@ -8,6 +8,7 @@ import AuditPage from './pages/AuditPage';
 import MarketplacePage from './pages/MarketplacePage';
 import SettingsPage from './pages/SettingsPage';
 import LoginPage from './pages/LoginPage';
+import GettingStartedPage from './pages/GettingStartedPage';
 
 function App(): JSX.Element {
   return (
@@ -15,7 +16,8 @@ function App(): JSX.Element {
       <Route path="/login" element={<LoginPage />} />
 
       <Route element={<MainLayout />}>
-        <Route index element={<Navigate to="/privacy-zones" replace />} />
+        <Route index element={<Navigate to="/getting-started" replace />} />
+        <Route path="getting-started" element={<GettingStartedPage />} />
         <Route path="privacy-zones" element={<PrivacyZonesPage />} />
         <Route path="hooks" element={<HooksPage />} />
         <Route path="observability" element={<ObservabilityPage />} />
