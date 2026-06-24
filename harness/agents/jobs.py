@@ -124,6 +124,13 @@ class JobRecord:
     error: str | None
     model: str
     prompt: str               # included for ``list_recent`` UI display
+    # === Phase 2.x: final answer text ===
+    #: The code agent's ``final_text`` (after adversarial verify passes),
+    #: or the review agent's answer if the code stage errored. ``None``
+    # while the job is still in flight or for jobs that did not produce
+    # any text (e.g. all-tool-call runs). Populated by
+    # :class:`MergeQueue` once the job reaches a terminal state.
+    result_text: str | None = None
     # === Phase 2.2: PR integration fields ===
     #: Absolute path of the repo the job ran in (per-job override
     #: or ``settings.project_root`` for the default queue). Used by
@@ -215,6 +222,7 @@ CREATE TABLE IF NOT EXISTS merge_jobs (
     error         TEXT,
     model         TEXT NOT NULL,
     prompt        TEXT NOT NULL,
+    result_text   TEXT,
     repo          TEXT,
     pr_url        TEXT,
     pr_number     INTEGER,
@@ -281,6 +289,9 @@ _PR24_ALTER_COLUMNS: tuple[tuple[str, str], ...] = (
     # Phase 2.5: cross-repo stacks. JSON list of absolute paths
     # (one per slice), NULL for single-repo jobs.
     ("stack_repos", "TEXT"),
+    # Phase 2.x: final answer text from the code agent. NULL until
+    # the job reaches a terminal state (see MergeQueue._run_phase).
+    ("result_text", "TEXT"),
 )
 
 
@@ -316,6 +327,9 @@ def _row_to_record(row: aiosqlite.Row) -> JobRecord:
         error=row["error"],
         model=row["model"],
         prompt=row["prompt"],
+        result_text=(
+            row["result_text"] if "result_text" in row.keys() else None
+        ),
         repo=row["repo"],
         pr_url=row["pr_url"],
         pr_number=row["pr_number"],
@@ -501,15 +515,16 @@ class JobStore:
                 """
                 INSERT INTO merge_jobs
                     (id, worktree_id, status, started_at, cost, model,
-                     prompt, repo, pr_mode, target_branch,
+                     prompt, result_text, repo, pr_mode, target_branch,
                      pr_url, pr_number,
                      pr_stack_id, stack_position, stack_size,
                      depends_on_pr_number, stack_repos)
-                VALUES (?, ?, ?, ?, 0.0, ?, ?, ?, ?, ?,
+                VALUES (?, ?, ?, ?, 0.0, ?, ?, ?, ?, ?, ?,
                         ?, ?,
                         ?, ?, ?, ?, ?)
                 """,
                 (job_id, worktree_id, status, now, model, prompt,
+                 None,  # result_text: NULL at enqueue, set on terminal state
                  repo, pr_mode, target_branch,
                  pr_url, pr_number,
                  pr_stack_id, stack_position, stack_size,
@@ -528,6 +543,7 @@ class JobStore:
         finished: bool = False,
         pr_url: str | None = None,
         pr_number: int | None = None,
+        result_text: str | None = None,
     ) -> None:
         """Update the job's status (and optionally cost / error / finish).
 
@@ -544,6 +560,9 @@ class JobStore:
             pr_url:    Phase 2.2: if supplied, set ``pr_url`` (called
                        after ``gh pr create`` succeeds).
             pr_number: Phase 2.2: if supplied, set ``pr_number``.
+            result_text: Phase 2.x: if supplied, set ``result_text``
+                       (the code agent's final answer). Pass
+                       ``None`` to clear (e.g. on retry).
 
         Note: ``pr_url`` and ``pr_number`` are normally set together.
         We accept them as independent kwargs so the caller can update
@@ -568,6 +587,9 @@ class JobStore:
         if pr_number is not None:
             sets.append("pr_number = ?")
             args.append(int(pr_number))
+        if result_text is not None:
+            sets.append("result_text = ?")
+            args.append(result_text)
         if finished:
             sets.append("finished_at = ?")
             args.append(_utcnow().isoformat())
@@ -613,7 +635,7 @@ class JobStore:
             async with db.execute(
                 """
                 SELECT id, worktree_id, status, started_at, finished_at,
-                       cost, error, model, prompt,
+                       cost, error, model, prompt, result_text,
                        repo, pr_url, pr_number, target_branch, pr_mode,
                        pr_stack_id, stack_position, stack_size,
                        depends_on_pr_number, stack_repos
@@ -649,7 +671,7 @@ class JobStore:
             async with db.execute(
                 """
                 SELECT id, worktree_id, status, started_at, finished_at,
-                       cost, error, model, prompt,
+                       cost, error, model, prompt, result_text,
                        repo, pr_url, pr_number, target_branch, pr_mode,
                        pr_stack_id, stack_position, stack_size,
                        depends_on_pr_number, stack_repos
@@ -688,7 +710,7 @@ class JobStore:
             async with db.execute(
                 """
                 SELECT id, worktree_id, status, started_at, finished_at,
-                       cost, error, model, prompt,
+                       cost, error, model, prompt, result_text,
                        repo, pr_url, pr_number, target_branch, pr_mode,
                        pr_stack_id, stack_position, stack_size,
                        depends_on_pr_number, stack_repos
@@ -787,7 +809,7 @@ class JobStore:
             async with db.execute(
                 """
                 SELECT id, worktree_id, status, started_at, finished_at,
-                       cost, error, model, prompt,
+                       cost, error, model, prompt, result_text,
                        repo, pr_url, pr_number, target_branch, pr_mode,
                        pr_stack_id, stack_position, stack_size,
                        depends_on_pr_number, stack_repos

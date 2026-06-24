@@ -575,3 +575,64 @@ class TestPR24StackSchema:
         for jid in (orch, child):
             rec = await store.load(jid)
             assert rec.status == "cancelled"
+
+    # === Phase 2.x: result_text round-trip ===
+
+    async def test_result_text_defaults_to_none(self, tmp_path: Path) -> None:
+        """A newly-created job has ``result_text is None``."""
+        store = JobStore(tmp_path / "jobs.db")
+        job_id = await store.create(
+            worktree_id="wt", model="m", prompt="p",
+        )
+        rec = await store.load(job_id)
+        assert rec is not None
+        assert rec.result_text is None
+
+    async def test_result_text_persists_via_update_status(
+        self, tmp_path: Path,
+    ) -> None:
+        """Setting ``result_text`` via ``update_status`` persists and reads back."""
+        store = JobStore(tmp_path / "jobs.db")
+        job_id = await store.create(
+            worktree_id="wt", model="m", prompt="p",
+        )
+        await store.update_status(
+            job_id, "merged", finished=True, cost=0.05,
+            result_text="The agent's final answer here.",
+        )
+        rec = await store.load(job_id)
+        assert rec is not None
+        assert rec.status == "merged"
+        assert rec.result_text == "The agent's final answer here."
+
+    async def test_result_text_none_does_not_overwrite(
+        self, tmp_path: Path,
+    ) -> None:
+        """``update_status(..., result_text=None)`` is a no-op (preserves prior)."""
+        store = JobStore(tmp_path / "jobs.db")
+        job_id = await store.create(
+            worktree_id="wt", model="m", prompt="p",
+        )
+        await store.update_status(
+            job_id, "merged", result_text="initial text",
+        )
+        # Calling again without result_text preserves the prior value
+        await store.update_status(job_id, "merged", cost=0.10)
+        rec = await store.load(job_id)
+        assert rec is not None
+        assert rec.result_text == "initial text"
+        assert rec.cost == 0.10  # cost was updated, text was not
+
+    async def test_result_text_visible_in_list_recent(
+        self, tmp_path: Path,
+    ) -> None:
+        """``list_recent`` exposes ``result_text`` (used by /agents/jobs)."""
+        store = JobStore(tmp_path / "jobs.db")
+        j1 = await store.create(worktree_id="wt", model="m", prompt="a")
+        j2 = await store.create(worktree_id="wt", model="m", prompt="b")
+        await store.update_status(j1, "merged", result_text="answer A")
+        await store.update_status(j2, "merged", result_text="answer B")
+        recs = await store.list_recent(10)
+        by_id = {r.id: r for r in recs}
+        assert by_id[j1].result_text == "answer A"
+        assert by_id[j2].result_text == "answer B"

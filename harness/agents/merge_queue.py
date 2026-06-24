@@ -595,6 +595,7 @@ class MergeQueue:
                         job_id, "merged", finished=True,
                         cost=code_result.total_cost + review_result.total_cost,
                         pr_url=pr_url, pr_number=pr_number,
+                        result_text=code_result.final_text,
                     )
                     await self._emit(
                         job_id, "merged",
@@ -626,6 +627,7 @@ class MergeQueue:
                 await self.store.update_status(
                     job_id, "merged", finished=True,
                     cost=code_result.total_cost + review_result.total_cost,
+                    result_text=code_result.final_text,
                 )
                 await self._emit(job_id, "merged")
             except _Timeout:

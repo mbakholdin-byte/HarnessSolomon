@@ -44,6 +44,9 @@ class _JobRecordSchema(BaseModel):
     error: str | None
     model: str
     prompt: str
+    # Phase 2.x: final answer text from the code agent. ``None`` while
+    # the job is still in flight or for jobs that produced no text.
+    result_text: str | None = None
     # Phase 2.2: PR integration fields
     repo: str | None = None
     pr_url: str | None = None
@@ -65,6 +68,7 @@ class _JobRecordSchema(BaseModel):
             id=rec.id, worktree_id=rec.worktree_id, status=rec.status,
             started_at=rec.started_at, finished_at=rec.finished_at,
             cost=rec.cost, error=rec.error, model=rec.model, prompt=rec.prompt,
+            result_text=getattr(rec, "result_text", None),
             repo=rec.repo, pr_url=rec.pr_url, pr_number=rec.pr_number,
             target_branch=rec.target_branch, pr_mode=rec.pr_mode,
             pr_stack_id=rec.pr_stack_id,
